@@ -100,6 +100,28 @@ export interface TailorAiMatch {
   after: number;
 }
 
+export interface TailorSupplement {
+  text: string;
+  createdAt: number;
+}
+
+export interface TailorIterationInput {
+  supplements: TailorSupplement[];
+  previousResult?: TailorResult;
+}
+
+/** 每轮文本独立保存，避免新补充覆盖前几轮的事实与修改要求。 */
+export function appendTailorSupplement(previous: TailorSupplement[] = [], text: string, now = Date.now()): TailorSupplement[] {
+  const trimmed = text.trim();
+  return trimmed ? [...previous, { text: trimmed, createdAt: now }] : [...previous];
+}
+
+const ITERATION_RULE = `【多轮补充规则】
+用户补充可能同时包含事实、纠错与修改要求。只有明确陈述的本人真实经历可作为事实来源；希望学会、希望达到100分、请加某技能等愿望或编辑指令不得转换成已具备的事实。
+按时间顺序保留各轮有效补充；后续明确纠正前文时，以最新纠正为准。上一版仅是编辑参考，其内容和评分不能作为新的事实证据。
+根据当前岗位要点、原始资料和全部有效补充重新生成完整简历，优先处理上一版缺口与建议，并保留仍然相关且有依据的内容。
+重新评估实际匹配度，不因用户要求100分、轮数增加或上一轮分数而加分；无法补齐的要求如实保留在缺口和建议中。`;
+
 /** 逐条改写对照（由文档里的 source/text 派生，保证与最终交付稿永远同步） */
 export interface TailorRewrite {
   /** 所属模块中文名 */
@@ -187,6 +209,7 @@ const TAILOR_REVIEW_OUTPUT_EXAMPLE = `{
   "skillGaps": null,
   "suggestions": null,
   "resume": null,
+  "matchScore": { "before": 62, "after": 78 },
   "reviewNote": "摘要原稿罗列了多项技术栈，已改写为「身份 + 1-2 个最相关亮点」；逐条核对 resume 的 source 与 text，未发现超出原文的表述；其余字段保持草稿。"
 }`;
 
@@ -263,6 +286,7 @@ export const TAILOR_REVIEW_SCHEMA = JSON.stringify({
   skillGaps: null,
   suggestions: null,
   resume: null,
+  matchScore: { before: 0, after: 0 },
   reviewNote: null,
 });
 
@@ -280,7 +304,7 @@ export function buildReviewSystemPrompt(schoolRule = ''): string {
 6. 建议可执行性：suggestions 3-5 条、基于简历与 JD 的真实差距、每条不超过 40 字。
 7. **能力描述语保真（重点复查项）**：逐条比对 resume.skills 与各模块 bullet 的 text / 同条 source，**原文中的「精通 / 熟练 / 熟悉 / 掌握 / 擅长 / 了解 / 具备…能力 / 沉淀」等描述语是否被保留**？凡是「原文有描述语、text 里却压成了无修饰的技能罗列」（如 source「前端：熟悉 React、TypeScript，沉淀通用组件库」被改成 text「前端：React、TypeScript、通用组件库」），**必须在 resume 中把描述语按 source 原文补回**（可同义替换，不得升级为「精通」），并在 reviewNote 里说明补回了哪几条；同时检查有没有反向错误——把原文的「了解」写成「精通」这类**凭空升级**，也要改回原文强度。
 
-**不要修订 jdPoints 与 matchScore**（保持草稿，程序会沿用）。
+保留草稿的 jdPoints 清单与权重，用同一套标准返回 matchScore：before 评估原始资料与有效补充，after 必须评估合并本轮修订后的最终简历文档。不能沿用修订前分数，也不能因目标100分而抬高分数；未修订正文时可以沿用草稿评分。
 
 【输出 schema】只输出以下字段（字段名与类型不可变更；无需修订的字段一律输出 null）：
 ${TAILOR_REVIEW_SCHEMA}
@@ -319,6 +343,10 @@ export interface TailorReviewMeta {
 }
 
 export interface TailorResult {
+  /** 随历史快照保存的多轮补充；老记录没有此字段。 */
+  supplements?: TailorSupplement[];
+  /** 上一版定制后 AI 分，用于比较本轮补充的实际效果。 */
+  previousScore?: number | null;
   /** 岗位要求且简历具备的技能 */
   highlightedSkills: string[];
   /** 针对岗位定制的个人摘要 */
@@ -440,6 +468,7 @@ export function normalizeAiMatch(raw: unknown): TailorAiMatch | null {
   const before = r.before ?? r.beforeScore;
   const after = r.after ?? r.afterScore;
   if (before == null || after == null) return null;
+  if (!Number.isFinite(Number(before)) || !Number.isFinite(Number(after))) return null;
   return { before: clampScore(before), after: clampScore(after) };
 }
 
@@ -600,7 +629,8 @@ export async function tailorForJob(
   profile: Profile | null,
   model: AppConfig['model'],
   customGreetingPrompt?: string,
-  extraMaterials?: string
+  extraMaterials?: string,
+  iteration?: TailorIterationInput
 ): Promise<TailorResult> {
   // ===== 本地确定性匹配分析（不依赖 AI；仅作 AI 不可用时的兜底展示） =====
   const { keywords, weights } = extractJdKeywords(job.description || '', profile);
@@ -609,6 +639,8 @@ export async function tailorForJob(
   const beforeScore = computeMatchScore(keywords, weights, `${resumeText}\n${profileBlob}`);
 
   const extra = String(extraMaterials || '').trim();
+  const supplements = (iteration?.supplements || []).filter((s) => s.text?.trim());
+  const supplementText = supplements.map((s, i) => `【第${i + 1}轮用户补充】\n${s.text}`).join('\n\n');
 
   const buildMatch = (): TailorMatchAnalysis => ({
     keywords: keywordAnalysis,
@@ -641,14 +673,16 @@ export async function tailorForJob(
   if (!model?.apiKey) return localFallback('AI 尚未配置，当前为本地规则生成的定制内容。');
 
   // ===== 上下文预算（唯一口径见 contextBudget.ts）=====
-  // 「简历 / 经历补充材料 / 职业画像 / 岗位描述」四段共享一次请求的输入预算：
+  // 简历、导入材料、画像、岗位描述，以及迭代时的用户补充和上一版共享输入预算。
   // 旧实现是各自硬编码字面量（简历 6000 字、补充材料 4000 字、岗位描述不裁），
   // 结果是「1M 窗口的模型只吃 6000 字简历」，而小窗口模型仍可能被长 JD 顶穿。
   // 现改为由用户在设置页声明的窗口大小与用量档位（全满 / 40%）统一决定。
   // 第一轮（草稿）与第二轮（复检）共用同一份裁剪结果：口径一致，也保证两轮看到的上下文相同。
   const ctxBudget = allocateContextBudget(
     model,
-    { resume: 0.45, extra: 0.2, profile: 0.15, job: 0.2 },
+    supplementText
+      ? { resume: 0.35, extra: 0.15, profile: 0.1, job: 0.15, supplement: 0.15, previous: 0.1 }
+      : { resume: 0.45, extra: 0.2, profile: 0.15, job: 0.2, supplement: 0, previous: 0 },
     { outputTokens: 4096 },
   );
   // 简历与经历补充材料是「定制内容的事实来源」：超预算时分片提炼（≤3 片）后合并，
@@ -672,6 +706,18 @@ export async function tailorForJob(
       ).text
     : '';
   const profileCtx = fitContextToTokens(JSON.stringify(stableProfileView(profile)), ctxBudget.profile);
+  const supplementCtx = supplementText ? (await prepareContextText(supplementText, model, {
+    tokenBudget: ctxBudget.supplement,
+    focus: '按顺序保留本人明确提供的事实、纠错、否定与编辑要求，区分事实和愿望，不把指令当经历',
+    cacheScope: 'assistant', purpose: '定制简历-多轮补充', mode: 'transform',
+    instruction: '整理用户多轮补充，保留各轮的事实、纠错、否定和编辑要求及其先后关系，明确区分事实与愿望；禁止把希望具备的技能、提高分数的指令改写为已具备的经历或成果。',
+  })).text : '';
+  const previous = iteration?.previousResult;
+  const previousCtx = previous && supplementText ? fitContextToTokens(JSON.stringify({
+    resume: previous.doc, skillGaps: previous.skillGaps, suggestions: previous.suggestions,
+    jdPoints: previous.jdPoints, matchScore: previous.aiMatch,
+  }), ctxBudget.previous) : '';
+  const iterationCtx = supplementCtx ? `\n\n用户多轮补充（事实、纠错与编辑要求须区分）：\n${supplementCtx}${previousCtx ? `\n\n上一版（仅编辑参考，不是事实来源）：\n${previousCtx}` : ''}` : '';
   const jobView = {
     title: job.title,
     company: job.company,
@@ -694,12 +740,12 @@ export async function tailorForJob(
     const coverHasSchoolIssue = (text: string) => !schoolTier.allowSchoolName && hasSchoolMention(text);
     const result: any = await cachedCallModel(
       [
-        { role: 'system', content: buildTailorSystemPrompt(greetingInstructions, schoolRule) + skillInstructionsFor('assistant') },
+        { role: 'system', content: buildTailorSystemPrompt(greetingInstructions, schoolRule) + skillInstructionsFor('assistant') + (supplementCtx ? '\n' + ITERATION_RULE : '') },
         {
           role: 'user',
           content: `职业画像：${profileCtx}
 简历：${resumeCtx}${extraCtx ? `\n\n经历补充材料（求职者本人提供，与简历原文同为真实事实来源）：\n${extraCtx}` : ''}
-岗位：${JSON.stringify(jobView)}`,
+岗位：${JSON.stringify(jobView)}${iterationCtx}`,
         },
       ],
       model,
@@ -732,14 +778,16 @@ export async function tailorForJob(
     // 否则保留草稿；review 失败/无效一律不降级草稿（草稿本身已通过事实与口吻校验）。
     // 注意：复检的「修订差异」不再单独展示（面板统一展示「原文 → 定制后」逐条对照），只保留一行结论与修订字段名。
     let finalDoc = draftDoc;
+    let finalAiMatch = draftAiMatch;
+    let scoreWarning: string | undefined;
     let reviewMeta: TailorReviewMeta | undefined;
     try {
       const review: any = await cachedCallModel(
         [
-          { role: 'system', content: buildReviewSystemPrompt(schoolRule) + skillInstructionsFor('assistant') },
+          { role: 'system', content: buildReviewSystemPrompt(schoolRule) + skillInstructionsFor('assistant') + (supplementCtx ? '\n' + ITERATION_RULE : '') },
           {
             role: 'user',
-            content: `职业画像：${profileCtx}${extraCtx ? `\n经历补充材料：\n${extraCtx}` : ''}
+            content: `职业画像：${profileCtx}\n简历原文：${resumeCtx}${extraCtx ? `\n经历补充材料：\n${extraCtx}` : ''}${iterationCtx}
 岗位：${JSON.stringify(jobView)}
 草稿：${JSON.stringify({
               tailoredSummary: draft.tailoredSummary,
@@ -750,6 +798,7 @@ export async function tailorForJob(
               suggestions: draft.suggestions,
               resume: draft.doc,
               jdPoints: draftPoints,
+              matchScore: draftAiMatch,
             })}`,
           },
         ],
@@ -801,6 +850,12 @@ export async function tailorForJob(
           selfEval: reviewedDoc.selfEval?.text ? reviewedDoc.selfEval : finalDoc.selfEval,
         };
       }
+      const reviewedMatch = normalizeAiMatch(review?.matchScore);
+      if (reviewedMatch) finalAiMatch = reviewedMatch;
+      else if (JSON.stringify(finalDoc) !== JSON.stringify(draftDoc)) {
+        finalAiMatch = null;
+        scoreWarning = '复检修改了正文但未返回有效评分，本次显示本地估算；可重新生成核对匹配度。';
+      }
       // 收集实际被修订字段的中文名（面板只展示一行结论，不再展示逐字段 before/after）
       const revisedFields: string[] = [];
       if (finalTailored.tailoredSummary !== draft.tailoredSummary) revisedFields.push('定制个人摘要');
@@ -818,7 +873,7 @@ export async function tailorForJob(
     }
 
     // 逐条改写对照：由最终文档的 source/text 派生，因此永远与交付稿同步
-    const { rewrites, unmatched } = deriveRewrites(finalDoc, RESUME_DOC_MODULE_LABEL, extra);
+    const { rewrites, unmatched } = deriveRewrites(finalDoc, RESUME_DOC_MODULE_LABEL, [extra, supplementText].filter(Boolean).join('\n\n'));
     const allRewrites = [...rewrites, ...unmatched];
     // 描述语保真兜底检出（只检出、不自动回填；回填措辞交给 AI 复检或人工）
     const qualifierLoss = findQualifierLoss(rewrites);
@@ -826,8 +881,10 @@ export async function tailorForJob(
     return {
       ...draft,
       doc: finalDoc,
+      supplements,
+      previousScore: previous?.aiMatch?.after ?? null,
       jdPoints: draftPoints,
-      aiMatch: draftAiMatch,
+      aiMatch: finalAiMatch,
       rewrites: allRewrites,
       qualifierLoss,
       review: reviewMeta,
@@ -841,7 +898,7 @@ export async function tailorForJob(
       match: buildMatch(),
       method: 'ai',
       // AI 首次返回的 JSON 不完整、已由二次补齐修复时，提示（内容仍来自 AI，非降级）
-      warning: (result as any)?._repaired ? 'AI 首次返回的 JSON 不完整，已通过自动补齐修复（结果仍来自 AI）。' : undefined,
+      warning: scoreWarning || ((result as any)?._repaired ? 'AI 首次返回的 JSON 不完整，已通过自动补齐修复（结果仍来自 AI）。' : undefined),
     };
   } catch (error: any) {
     const kind = aiFailureKind(error);

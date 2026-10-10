@@ -19,7 +19,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useDataStore } from '@/store/useDataStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useAppStore } from '@/store/useAppStore';
-import { tailorForJob, type TailorResult } from '@/lib/bossclaw/jobAssistant';
+import { appendTailorSupplement, tailorForJob, type TailorResult } from '@/lib/bossclaw/jobAssistant';
 import { computeMatchScore, extractJdKeywords } from '@/lib/bossclaw/resumeMatch';
 import { stableProfileView } from '@/lib/bossclaw/matching';
 import { cleanJobDescription, jdLooksNoisy } from '@/lib/bossclaw/jdCleaner';
@@ -141,6 +141,9 @@ export default function JobAssistant() {
   const [importedScore, setImportedScore] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [tailor, setTailor] = useState<TailorResult | null>(null);
+  const [supplementDraft, setSupplementDraft] = useState('');
+  const [batchResultId, setBatchResultId] = useState<string | undefined>();
+  const [historyJobId, setHistoryJobId] = useState<string | undefined>();
   const [history, setHistory] = useState<TailorHistoryItem[]>(() => loadHistory());
   const historyRef = useRef(history);
   const generationLock = useRef(false);
@@ -150,7 +153,7 @@ export default function JobAssistant() {
   const [batchStopping, setBatchStopping] = useState(false);
   useEffect(() => { setTailorBusy(generating); return () => setTailorBusy(false); }, [generating, setTailorBusy]);
 
-  const recordHistory = (job: { jobId?: string; company?: string; jobTitle: string; jobDesc: string }, result: TailorResult) => {
+  const recordHistory = (job: { jobId?: string; company?: string; job?: JobMeta; jobTitle: string; jobDesc: string }, result: TailorResult) => {
     const item: TailorHistoryItem = { ...job, result, id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`, createdAt: Date.now() };
     const next = upsertTailorHistory(historyRef.current, item);
     historyRef.current = next;
@@ -167,6 +170,9 @@ export default function JobAssistant() {
     setJobTitle(input.jobTitle);
     setJobDesc(input.jobDesc);
     setTailor(null);
+    setSupplementDraft('');
+    setBatchResultId(undefined);
+    setHistoryJobId(undefined);
   }, []);
 
   // 首次进入及再次从工作台选择岗位都消费请求；生成中先完成当前岗位，避免混入另一份结果。
@@ -490,6 +496,9 @@ export default function JobAssistant() {
       setJobTitle('');
       setJobDesc('');
       setTailor(null);
+      setSupplementDraft('');
+      setBatchResultId(undefined);
+      setHistoryJobId(undefined);
       return;
     }
     const p = pending.find((x) => x.id === id);
@@ -509,10 +518,14 @@ export default function JobAssistant() {
     // 修改要求后不能继续把原岗位的分析分当作当前分数，也不能展示上一次定制结果。
     setImportedScore(null);
     setTailor(null);
+    setSupplementDraft('');
+    setBatchResultId(undefined);
+    setHistoryJobId(undefined);
   };
 
-  const onGenerate = async () => {
-    if (generationLock.current) return;
+  const onGenerate = async (supplement?: string) => {
+    if (generationLock.current || exporting) return;
+    if (supplement !== undefined && !supplement.trim()) return message.warning('请先填写要补充的内容');
     if (importId) {
       const current = useDataStore.getState().pending.find((p) => p.id === importId);
       if (!current || !isWorkbenchJobIncluded(current.job, useAppStore.getState().workbenchFilters)) return message.warning('该岗位已被工作台筛选排除，请重新选择');
@@ -527,16 +540,27 @@ export default function JobAssistant() {
       const job: JobMeta = { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim() };
       // 经历补充材料每次调用前现读磁盘（不缓存内容），随定制与要点判定一并送入 AI
       const extraText = await resolveMaterialsText();
+      const supplements = appendTailorSupplement(tailor?.supplements, supplement || '');
       const r = await tailorForJob(
         job,
         resumeText,
         profile,
         config.model,
         useDataStore.getState().greetingPrompt || undefined,
-        extraText || undefined
+        extraText || undefined,
+        { supplements, previousResult: tailor || undefined }
       );
+      // 迭代失败保留上一版和待提交文本，用户可以直接重试。
+      if (tailor && r.method === 'local') {
+        message.warning(`${r.warning || 'AI 未能完成重新生成'} 上一版与本轮补充已保留，请重试。`);
+        return;
+      }
       setTailor(r);
-      recordHistory({ jobId: importId, company: job.company, jobTitle: jobTitle.trim(), jobDesc: jobDesc.trim() }, r);
+      if (supplement !== undefined) setSupplementDraft('');
+      if (batchResultId) setBatchItems((items) => items.map((item) => item.id === batchResultId
+        ? { ...item, result: r, status: r.method === 'ai' ? 'done' : 'local', error: undefined } : item));
+      recordHistory({ jobId: importId || historyJobId, company: job.company, job, jobTitle: jobTitle.trim(), jobDesc: jobDesc.trim() }, r);
+      if (supplement !== undefined) message.success('已结合全部补充重新生成，可继续补充或导出 PDF');
       if (r.method === 'local' && r.warning) message.info(r.warning);
     } catch (e: any) {
       message.error('定制失败：' + getErrorMessage(e));
@@ -563,7 +587,7 @@ export default function JobAssistant() {
         shouldStop: () => batchStop.current,
         shouldSkip: (item) => batchJobIncluded(item) ? undefined : '已被工作台筛选排除或移除',
         onUpdate: (next) => setBatchItems((previous) => previous.map((item) => item.id === next.id ? next : item)),
-        onResult: (item) => recordHistory({ jobId: item.id, company: item.job.company, jobTitle: item.jobTitle, jobDesc: item.jobDesc }, item.result),
+        onResult: (item) => recordHistory({ jobId: item.id, company: item.job.company, job: item.job, jobTitle: item.jobTitle, jobDesc: item.jobDesc }, item.result),
       });
     } catch (error) { message.error('批量定制失败：' + getErrorMessage(error)); }
     finally {
@@ -582,17 +606,23 @@ export default function JobAssistant() {
     setJobTitle(item.jobTitle);
     setJobDesc(item.jobDesc);
     setTailor(item.result);
+    setSupplementDraft('');
+    setBatchResultId(item.id);
+    setHistoryJobId(undefined);
   };
 
   const onLoadHistory = (h: TailorHistoryItem) => {
     if (generating) return;
     setImportId(undefined);
-    setImportedJob(null);
+    setImportedJob(h.job || { title: h.jobTitle, description: h.jobDesc, company: h.company });
     setImportedSource(null);
     setImportedScore(null);
     setJobTitle(h.jobTitle);
     setJobDesc(h.jobDesc);
     setTailor(h.result);
+    setSupplementDraft('');
+    setBatchResultId(batchItems.find((item) => item.id === h.jobId && item.jobTitle === h.jobTitle && item.jobDesc === h.jobDesc)?.id);
+    setHistoryJobId(h.jobId);
     message.success('已载入历史定制结果');
   };
 
@@ -734,7 +764,7 @@ export default function JobAssistant() {
               type="primary"
               className="btn-uniform"
               icon={generating ? <LoadingOutlined /> : <RobotOutlined />}
-              onClick={onGenerate}
+              onClick={() => void onGenerate()}
               loading={generating}
               disabled={!canGenerate}
             >
@@ -832,6 +862,11 @@ export default function JobAssistant() {
           onExportPdf={() => openExport(tailor, jobTitle.trim() || '定制简历')}
           onSaveCoverLetter={onSaveCoverLetter}
           onImportMaterials={onPickMaterial}
+          supplementText={supplementDraft}
+          onSupplementChange={setSupplementDraft}
+          onRegenerate={() => void onGenerate(supplementDraft)}
+          regenerating={generating}
+          regenerateDisabled={exporting}
         />
       )}
 

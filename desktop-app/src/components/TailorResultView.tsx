@@ -3,6 +3,8 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
+  Input,
   Modal,
   Progress,
   Space,
@@ -42,6 +44,11 @@ interface TailorResultViewProps {
   onSaveCoverLetter: () => void;
   /** 打开「经历信息导入」（用于补齐简历未体现的经历） */
   onImportMaterials?: () => void;
+  supplementText?: string;
+  onSupplementChange?: (text: string) => void;
+  onRegenerate?: () => void;
+  regenerating?: boolean;
+  regenerateDisabled?: boolean;
 }
 
 const scoreColor = (s: number) => (s >= 80 ? STATUS_COLORS.success : s >= 60 ? STATUS_COLORS.warning : STATUS_COLORS.danger);
@@ -60,6 +67,11 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
   onExportPdf,
   onSaveCoverLetter,
   onImportMaterials,
+  supplementText = '',
+  onSupplementChange,
+  onRegenerate,
+  regenerating = false,
+  regenerateDisabled = false,
 }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   /** 「已复制」提示的复位定时器（单一实例，卸载时清理） */
@@ -88,7 +100,7 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
       `# 岗位定制简历 —— ${jobTitle || '目标岗位'}`,
       tailor.aiMatch
         ? `> 匹配度：定制前 ${tailor.aiMatch.before} 分 -> 定制后 ${tailor.aiMatch.after} 分（AI 同口径判定）`
-        : `> 匹配度：本地估算 ${tailor.match?.before?.score ?? '-'} 分（AI 不可用，未做前后对比）`,
+        : `> 匹配度：本地估算 ${tailor.match?.before?.score ?? '-'} 分（未取得有效 AI 评分，未做前后对比）`,
       '',
       '## 定制个人摘要',
       tailor.tailoredSummary || '（暂无）',
@@ -218,12 +230,12 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
                   <span className="tailor-block-title">匹配度（本地估算）</span>
                 </Space>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  AI 不可用 · 不做前后对比
+                  未取得有效 AI 评分 · 不做前后对比
                 </Text>
               </div>
               <div className="tailor-score-compare tailor-score-compare--single">
                 <div className="tailor-score-pane">
-                  <div className="tailor-score-label">原简历（含补充材料与画像）</div>
+                  <div className="tailor-score-label">原简历 + 画像（未评估补充内容）</div>
                   <div className="tailor-score-value-row">
                     <span className="tailor-score-num" style={{ color: scoreColor(match.before.score) }}>
                       {match.before.score}
@@ -243,6 +255,49 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
               </div>
             </div>
           )
+        )}
+
+        {onRegenerate && (
+          <div className="tailor-block" data-testid="tailor-supplement">
+            <div className="tailor-block-head">
+              <Space size={6}><EditOutlined /><span className="tailor-block-title">补充内容，继续优化</span></Space>
+              {Boolean(tailor.supplements?.length) && <Tag>已补充 {tailor.supplements!.length} 轮</Tag>}
+            </div>
+            <Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 8 }}>
+              根据下方岗位要点和优化建议，补充漏写的项目细节、职责、成果，或说明要修改的表达。每轮补充都会保留，并用于下一次生成。
+              匹配分按实际经历评估，补充后仍有缺口时会如实显示。
+            </Paragraph>
+            {tailor.previousScore != null && aiMatch && (
+              <div style={{ marginBottom: 8 }} data-testid="tailor-iteration-score">
+                上一版 {tailor.previousScore} 分 → 本轮 {aiMatch.after} 分
+                <Tag style={{ marginLeft: 8 }} color={aiMatch.after > tailor.previousScore ? 'green' : aiMatch.after < tailor.previousScore ? 'red' : undefined}>
+                  {aiMatch.after > tailor.previousScore ? `提升 +${aiMatch.after - tailor.previousScore}` : aiMatch.after < tailor.previousScore ? `下降 ${aiMatch.after - tailor.previousScore}` : '持平'}
+                </Tag>
+              </div>
+            )}
+            <Input.TextArea
+              id="tailor-supplement-text"
+              aria-label="补充内容"
+              value={supplementText}
+              onChange={(e) => onSupplementChange?.(e.target.value)}
+              disabled={regenerating || regenerateDisabled}
+              autoSize={{ minRows: 4, maxRows: 12 }}
+              placeholder="例如：我在知识库项目中还负责文档切分和检索效果评估，测试使用了30条问题；请把这项职责写入项目经历。"
+              style={{ fontSize: 15 }}
+            />
+            <Space wrap style={{ marginTop: 10 }}>
+              <Button type="primary" onClick={onRegenerate} loading={regenerating} disabled={regenerating || regenerateDisabled || !supplementText.trim()}>
+                补充并重新生成
+              </Button>
+              <Text type="secondary" style={{ fontSize: 12 }}>失败时保留上一版和本轮输入，可直接重试。</Text>
+            </Space>
+            {Boolean(tailor.supplements?.length) && <Collapse size="small" style={{ marginTop: 12 }} items={[{
+              key: 'supplements', label: `查看已采用的 ${tailor.supplements!.length} 轮补充`,
+              children: tailor.supplements!.map((s, i) => <div key={`${s.createdAt}-${i}`} style={{ marginBottom: 12 }}>
+                <Text strong>第 {i + 1} 轮</Text><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{s.text}</div>
+              </div>),
+            }]} />}
+          </div>
         )}
 
         {/* 2. 改写对照（原文摘录 → 定制后条目） */}
