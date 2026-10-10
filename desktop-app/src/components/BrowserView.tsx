@@ -130,13 +130,14 @@ export interface WebviewApi {
   findTabByPlatform: (platform: JobPlatform) => string;
   /** 在指定标签页面上下文执行 BOSS 官方 API，返回原始响应（{code, zpData, ...} 或 {error}） */
   bossApi: (action: string, params?: Record<string, any>, tabId?: string) => Promise<any>;
+  fetchJobOfficeAddress: (job: { url?: string; jobId?: string; platform?: JobPlatform }, tabId?: string) => Promise<{ address?: string; companySize?: string; error?: string; stop?: boolean }>;
   /**
    * 非 BOSS 平台「一键投递」：为该平台新建 detail 标签打开岗位详情，等 preload 就绪后下发
    * platform-apply，终态经 platform-apply-result 回传 resolve。返回 {ok, stage, external?, code?, message?, error?, tabId}。
    * stage: success | external | skip | stop | risk | failed。
    */
   platformApply: (url: string, platform: JobPlatform, job: any) => Promise<{
-    ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string;
+    ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean;
   }>;
   /**
    * 只读探测页面自身的就绪事实（readyState / 岗位卡片命中数 / 选择器计数 / 骨架屏启发式）。
@@ -513,6 +514,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           break;
         }
         case 'page-read-result':
+        case 'job-office-address-result':
         case 'page-status-result':
         case 'prefill-greeting-result':
         // ui-eval-result：通用 UI 接管（query/click/type/scroll）的回执。此前 preload 侧
@@ -923,6 +925,8 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   const readPage = useCallback((tabId?: string) => cmdOnce('page-read', {}, 15000, tabId), [cmdOnce]);
   // 页面就绪事实探测：短超时（6s）——探测失败本身也是有效信息（preload 未就绪）
   const pageStatus = useCallback((tabId?: string) => cmdOnce('page-status', {}, 6000, tabId), [cmdOnce]);
+  const fetchJobOfficeAddress = useCallback((job: { url?: string; jobId?: string; platform?: JobPlatform }, tabId?: string) =>
+    cmdOnce('job-office-address', { job }, 45000, tabId), [cmdOnce]);
 
   // ===== 非 BOSS 平台「一键投递」：新标签页 DOM 投递（promise 通道，终态经 platform-apply-result）=====
   // 为该平台新建 detail 标签打开岗位详情 → 等页面可用 → 下发 platform-apply；
@@ -933,7 +937,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   // 一旦该标记因任何原因未置位（详见 handleRegister 上方「身份稳定 ref 回调」的根因说明），
   // 就会把「页面 2s 内早已可用」误判成「详情页加载超时」——本次报告的智联投递失败即此。
   const platformApply = useCallback(
-    (url: string, platform: JobPlatform, job: any): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string }> =>
+    (url: string, platform: JobPlatform, job: any): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean }> =>
       new Promise((resolve) => {
         const tabId = openInNewTab(url, PLATFORM_META[platform]?.label || '岗位投递', 'detail');
         if (!tabId) {
@@ -1012,6 +1016,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       getMainTabId,
       getDetailTabIds,
       bossApi,
+      fetchJobOfficeAddress,
       platformApply,
       pageStatus,
       getActiveTabId: () => activeIdRef.current || '',
@@ -1023,7 +1028,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
         return (main || list.find((t) => resolvePlatform(t.url) === platform))?.id || '';
       },
     };
-  }, [apiRef, send, loadURL, closeTabById, openInNewTab, openEngineTab, loadURLInTab, sendInTab, hasTab, isPreloadReady, isLoading, getMainTabId, getDetailTabIds, bossApi, platformApply, pageStatus]);
+  }, [apiRef, send, loadURL, closeTabById, openInNewTab, openEngineTab, loadURLInTab, sendInTab, hasTab, isPreloadReady, isLoading, getMainTabId, getDetailTabIds, bossApi, fetchJobOfficeAddress, platformApply, pageStatus]);
   const prefillGreeting = useCallback((greeting: string) => cmdOnce('prefill-greeting', { greeting }, 20000), [cmdOnce]);
   const runDomDump = useCallback((tabId?: string) => {
     sendInTab(tabId || '', 'webview-command', { action: 'dom-dump' });

@@ -2734,6 +2734,8 @@ html[data-theme='dark'] .direction-tag {
   row-gap: 6px;
   /* 按钮组铺满整行，每个按钮均分剩余宽度（与卡片宽度对齐） */
 }
+.wb-tailor-selection { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:8px 0 2px; font-size:12px; }
+.job-tailor-checkbox { flex-shrink:0; display:flex; align-items:center; }
 .wb-filter-toolbar__right .ant-btn {
   flex: 1 1 0;
   min-width: 0;
@@ -2743,6 +2745,7 @@ html[data-theme='dark'] .direction-tag {
   font-size: 14px !important;
   font-weight: 500 !important;
 }
+.wb-filter-toolbar__right .wb-tailor-batch-button { flex-basis:100%; }
 
 .wb-sort-hint {
   display: flex;
@@ -3057,6 +3060,7 @@ html[data-theme='dark'] .job-fit-tag {
 /* 底部操作工具栏 */
 .job-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
@@ -3067,6 +3071,7 @@ html[data-theme='dark'] .job-fit-tag {
 
 .job-actions-left, .job-actions-right {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
@@ -6380,4 +6385,13 @@ html[data-theme='dark'] .skill-chip-gap:hover {
   border-top: 1px solid var(--border);
   margin: 16px 0;
 }
-
+.wb-job-criteria { display:flex; flex-direction:column; gap:9px; padding:12px; margin-bottom:12px; border:1px solid var(--border-color, #e0e6ed); border-radius:8px; background:var(--bg-elevated, #fafcff); }
+.wb-salary-criteria { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.wb-salary-criteria .ant-select { width:112px; }
+.wb-salary-criteria .ant-input-number { width:98px; }
+.job-office-address { display:flex; flex-wrap:wrap; gap:4px; margin:5px 0; font-size:12px; color:var(--text-secondary, #68758a); overflow-wrap:anywhere; }
+.resume-personal-mini { display:grid; grid-template-columns:3fr 2fr; grid-template-rows:12px 22px 19px; gap:3px; width:65px; padding:4px; background:#fff; border:1px solid #cdd8ec; flex-shrink:0; }
+.resume-personal-mini i { grid-column:1/-1; background:#201c4c; }
+.resume-personal-mini b { background:repeating-linear-gradient(#f8faff 0 3px,#cdd8ec 3px 4px); }
+.resume-personal-mini em { background:repeating-linear-gradient(#2949bb 0 2px,#fff 2px 4px,#7547bc 4px 6px,#fff 6px 8px,#287946 8px 10px,#fff 10px 12px); }
+.resume-personal-mini > span { grid-column:1/-1; border:1px solid #cdd8ec; background:#f8faff; }

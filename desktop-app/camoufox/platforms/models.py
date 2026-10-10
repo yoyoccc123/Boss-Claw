@@ -94,6 +94,7 @@ class JobCandidate:
     company: str = ''
     salary: str = ''
     location: str = ''
+    address: str = ''
     experience: str = ''
     degree: str = ''
     labels: list = field(default_factory=list)
@@ -136,6 +137,7 @@ class JobCandidate:
             'company': self.company,
             'salary': self.salary,
             'location': self.location,
+            'address': self.address,
             'experience': self.experience,
             'degree': self.degree,
             'labels': list(self.labels or []),

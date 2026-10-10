@@ -1423,6 +1423,25 @@ function withTimeout(promise, ms, label) {
 // 保存定制简历 PDF：渲染进程传 A4 打印 HTML → 隐藏窗口 printToPDF → 系统保存对话框 → 写盘。
 // 排版完全由 HTML/CSS 控制（resumePdf.ts 的 moderncv 风格模板），@page 控制页边距，
 // printToPDF 传 margins:'none' 避免与 CSS 边距叠加。零额外依赖、中文由系统字体渲染。
+const { validatePdfItem, writeUniquePdf } = require('./resume-pdf-batch.cjs');
+async function renderResumePdf(htmlText) {
+  const printWin = new BrowserWindow({
+    show: false, width: 842, height: 1191,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  try {
+    await withTimeout(printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlText)), 15_000, '打印页加载');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const pdf = await withTimeout(printWin.webContents.printToPDF({
+      pageSize: 'A4', printBackground: true, margins: { marginType: 'none' },
+    }), 30_000, 'PDF 生成');
+    if (!pdf || !pdf.length) throw new Error('PDF 生成结果为空');
+    return pdf;
+  } finally {
+    try { printWin.destroy(); } catch {}
+  }
+}
+
 safeHandle('jc:save-pdf', async (_event, defaultName, html) => {
   const name = String(defaultName || '').trim();
   if (!/^[\w\u4e00-\u9fa5()（）\-· ]{1,120}\.pdf$/i.test(name)) {
@@ -1442,30 +1461,60 @@ safeHandle('jc:save-pdf', async (_event, defaultName, html) => {
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
 
-  // 隐藏打印窗口：不启用 Node 能力，纯渲染 HTML（无脚本），保证安全
-  const printWin = new BrowserWindow({
-    show: false,
-    width: 842,
-    height: 1191,
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
-  });
   try {
-    await withTimeout(printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlText)), 15_000, '打印页加载');
-    // 等待字体与样式渲染稳定（系统字体加载 + 布局）
-    await new Promise((r) => setTimeout(r, 400));
-    const pdf = await withTimeout(printWin.webContents.printToPDF({
-      pageSize: 'A4',
-      printBackground: true,
-      margins: { marginType: 'none' },
-    }), 30_000, 'PDF 生成');
-    if (!pdf || !pdf.length) return { ok: false, error: 'PDF 生成结果为空' };
+    const pdf = await renderResumePdf(htmlText);
     await fs.promises.writeFile(filePath, pdf);
     return { ok: true, filePath };
   } catch (e) {
     dlog('error', 'printToPDF failed', { message: (e && e.message) || String(e) });
     return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+const pdfBatchSessions = new Map();
+safeHandle('jc:save-pdf-batch-cancel', async (event, requestId) => {
+  const batch = pdfBatchSessions.get(String(requestId));
+  if (!batch || batch.senderId !== event.sender.id) return { ok: false };
+  batch.stopped = true;
+  return { ok: true };
+});
+
+safeHandle('jc:save-pdf-batch', async (event, input, requestId) => {
+  if (!Array.isArray(input) || !input.length || input.length > 1000) return { ok: false, error: '请选择 1–1000 份简历', results: [] };
+  let items;
+  try { items = input.map(validatePdfItem); }
+  catch (error) { return { ok: false, error: error.message, results: [] }; }
+  const id = String(requestId || `${event.sender.id}_${Date.now()}`).slice(0, 120);
+  if (pdfBatchSessions.has(id)) return { ok: false, error: '这批简历正在导出', results: [] };
+  const batch = { senderId: event.sender.id, stopped: false };
+  pdfBatchSessions.set(id, batch);
+  const results = [];
+  let directory;
+  try {
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: '选择批量简历保存目录', properties: ['openDirectory', 'createDirectory'],
+    });
+    if (picked.canceled || !picked.filePaths?.[0]) return { ok: false, canceled: true, results, total: items.length };
+    directory = picked.filePaths[0];
+    for (const item of items) {
+      if (batch.stopped || event.sender.isDestroyed()) break;
+      try {
+        const pdf = await renderResumePdf(item.html);
+        const filePath = await writeUniquePdf(directory, item.fileName, pdf);
+        results.push({ fileName: item.fileName, ok: true, filePath });
+      } catch (error) {
+        results.push({ fileName: item.fileName, ok: false, error: String(error?.message || error) });
+      }
+      if (!event.sender.isDestroyed()) event.sender.send('jc:save-pdf-batch-progress', {
+        requestId: id, completed: results.length, total: items.length, fileName: item.fileName,
+      });
+    }
+    return { ok: !batch.stopped && results.length === items.length && results.every((r) => r.ok),
+      canceled: batch.stopped, directory, results, total: items.length };
+  } catch (error) {
+    return { ok: false, directory, results, error: String(error?.message || error), total: items.length };
   } finally {
-    try { printWin.destroy(); } catch {}
+    pdfBatchSessions.delete(id);
   }
 });
 

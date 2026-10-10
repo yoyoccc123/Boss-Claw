@@ -244,13 +244,13 @@ export default function App() {
               </Suspense>
             </ErrorBoundary>
           </div>
-          {!isWorkbench && (
-            /* 非工作台页「首进常驻」：已访问页保持挂载，仅切换 .is-show 显隐（display 控制），
-               避免来回切换时整页卸载/重挂载的卡顿；未访问页展示 Suspense 骨架（lazy 分块已预取）。
-               每个页面使用稳定 key（路由名），ErrorBoundary/key 不再随 activeRoute 变化，
-               保证已挂载的页面 DOM 不被重建。页面内自行管理的数据（投递/采集/沟通后台）照常存活。 */
+          {(
+            /* 已访问的非工作台页在彼此切换时保持挂载，仅切换 .is-show 显隐。
+               定制简历在进入工作台后也保留，避免正在生成的任务和岗位草稿随页面卸载丢失；
+               其它页面进入工作台时沿用原有卸载行为。未访问页不挂载，首次进入用 Suspense。
+               各页面使用稳定路由 key，后台定制完成后可继续消费工作台选中的岗位请求。 */
             NAV_PAGES.map((key) => {
-              if (!visibleSet[key]) return null;
+              if (!visibleSet[key] || (isWorkbench && key !== 'assistant')) return null;
               return (
                 <div key={key} className={'page page-route' + (activeRoute === key ? ' is-show' : '')}>
                   <ErrorBoundary label={key}>

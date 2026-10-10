@@ -1,6 +1,6 @@
 // 定制简历 PDF 渲染（HTML → Electron printToPDF，零额外依赖，多模板 + 可选照片）
 // 模板参考 GitHub 优秀项目 mmmlllnnn/ResumeCollection（全网简历模板合集，
-// 200+ 中文简历样式）：按其中最具代表性的风格落地为 5 套：
+// 200+ 中文简历样式）：保留五套通用样式，增加用户提供 PDF 的深蓝重点样式。
 //   - classic 蓝白经典   （蓝白商务双线，照片右上角，通用岗）
 //   - column  左右分栏   （左 38% 浅蓝信息栏 + 右内容区，照片在左栏）
 //   - dark    深色侧栏   （左 30% 深色栏 + 圆形照片，资深/展示型）
@@ -46,12 +46,17 @@ export interface ResumeTemplateMeta {
 }
 
 export const RESUME_TEMPLATES: ResumeTemplateMeta[] = [
+  { id: 'personal', name: '我的简历模板', desc: '你的 PDF 大字版 · 深蓝页眉、双色简介技能、项目卡片', color: '#201c4c' },
+  { id: 'focus', name: '深蓝重点', desc: '参考版：深蓝页眉、简介与技能、项目卡片', color: '#201c4c' },
   { id: 'classic', name: '蓝白经典', desc: '蓝白商务风，通用/技术岗首选', color: '#2b5a9e' },
   { id: 'column', name: '左右分栏', desc: '左浅蓝信息栏 + 右内容区，应届/通用', color: '#5b8fc9', split: true },
   { id: 'dark', name: '深色侧栏', desc: '深色侧栏 + 圆形照片，资深/展示型', color: '#263445', split: true },
   { id: 'simple', name: '极简单栏', desc: '黑白灰大留白，金融/管理/保守行业', color: '#3a3f45' },
   { id: 'fresh', name: '清新绿', desc: '绿色调清爽，成长型/设计向', color: '#1f7a5c' },
 ];
+
+/** 参考版的推荐顺序；用户仍可在导出弹窗调整。 */
+export const FOCUS_MODULE_ORDER = ['selfEval', 'skills', 'internships', 'works', 'projects', 'education', 'honors'];
 
 export function isKnownTemplate(id: string): boolean {
   return RESUME_TEMPLATES.some((t) => t.id === id);
@@ -108,6 +113,33 @@ ul.bullets li::marker { color: var(--accent, #2b5a9e); }
 
 // ===== 各模板样式（CSS 变量覆盖 + 布局差异） =====
 const TEMPLATE_CSS: Record<string, string> = {
+  // 参考 PDF：深蓝页眉 + 简介/技能并排 + 项目卡片；正文保留可检索文本。
+  focus: `
+@page { size: A4; margin: 10mm 12mm; }
+.tpl-focus { --accent:#2949bb; --heading:#263b94; --text:#26303e; --text-2:#53627b; --line:#cdd8ec; font-size:12pt; line-height:1.35; }
+.focus-header { display:flex; align-items:center; gap:5mm; padding:4mm; margin-bottom:3mm; background:#201c4c; color:#fff; break-inside:avoid; }
+.focus-header .resume-name { color:#fff; font-size:27pt; margin:0; }
+.focus-contact { font-size:11pt; text-align:right; color:#e1e8fa; flex-shrink:0; max-width:43%; overflow-wrap:anywhere; }
+.focus-contact div + div { margin-top:1mm; }
+.focus-header .photo-box { width:22mm; height:29mm; border:1px solid #b7c7e4; border-radius:2px; }
+.tpl-focus .resume-section { margin-bottom:2mm; break-inside:auto; }
+.tpl-focus .resume-section-title { font-size:14pt; padding:0 0 0 2mm; margin:0 0 1mm; border-left:4px solid #2949bb; break-after:avoid; }
+.tpl-focus .resume-section-body { padding-left:0; overflow-wrap:anywhere; }
+.tpl-focus .exp-block { break-inside:avoid; }
+.tpl-focus .exp-heading, .tpl-focus .exp-meta { break-after:avoid; }
+.tpl-focus .exp-heading { font-size:12.5pt; }
+.tpl-focus .exp-meta { font-size:11pt; }
+.tpl-focus ul.bullets { margin:1mm 0 0; padding-left:4mm; }
+.tpl-focus ul.bullets li { margin-bottom:0.7mm; text-align:left; }
+.tpl-focus .para-block p { text-align:left; }
+.tpl-focus .resume-section[data-section="projects"] .exp-block { border:1px solid #cdd8ec; padding:1.5mm 3mm; margin-bottom:1.5mm; }
+.focus-overview { display:flex; margin-bottom:2.5mm; background:#f8faff; border:1px solid #cdd8ec; break-inside:avoid; }
+.focus-overview .resume-section { flex:1; min-width:0; padding:2mm; margin:0; }
+.focus-overview .resume-section[data-section="selfEval"] { flex:0.82; }
+.focus-overview .resume-section + .resume-section { border-left:1px solid #cdd8ec; }
+.focus-overview .resume-section[data-section="skills"] { font-size:11.5pt; color:#2949bb; }
+.focus-overview .resume-line { margin:0 0 1mm; }
+`,
   // 蓝白经典：证件照 3:4 圆角，右上角
   classic: `
 .tpl-classic .photo-box { width: 25mm; height: 33mm; border: 1px solid #d5e0ee; border-radius: 3px; }
@@ -225,13 +257,39 @@ function renderModules(modules: ResumeDocModule[]): string {
       const body = renderModuleBody(mod);
       if (!body) return '';
       return (
-        `<section class="resume-section">` +
+        `<section class="resume-section" data-section="${htmlEscape(mod.id)}">` +
         `<h2 class="resume-section-title">${htmlEscape(mod.title)}</h2>` +
         `<div class="resume-section-body">${body}</div>` +
         `</section>`
       );
     })
     .join('');
+}
+
+/** 深蓝参考版仅把相邻的简介/技能并排；勾选和用户模块顺序始终生效。 */
+function renderFocus(data: ResumeDocData): string {
+  const { contact } = data;
+  const details = [contact.phone, contact.email].filter((s) => s.trim());
+  const header = contact.name || details.length || data.photo
+    ? `<header class="focus-header"><div class="resume-header-main">` +
+      (contact.name ? `<h1 class="resume-name">${htmlEscape(contact.name)}</h1>` : '') +
+      `</div>` +
+      (details.length ? `<div class="focus-contact">${details.map((s) => `<div>${htmlEscape(s)}</div>`).join('')}</div>` : '') +
+      renderPhotoBox(data.photo) + `</header>`
+    : '';
+  const titles: Record<string, string> = { selfEval: '个人简介', skills: '高匹配技能', projects: '重点项目经历' };
+  const modules = data.modules.map((mod) => ({ ...mod, title: titles[mod.id] || mod.title }));
+  const parts: string[] = [];
+  for (let i = 0; i < modules.length; i++) {
+    const pair = modules.slice(i, i + 2);
+    if (pair.length === 2 && pair.some((m) => m.id === 'selfEval') && pair.some((m) => m.id === 'skills')) {
+      parts.push(`<div class="focus-overview">${renderModules(pair)}</div>`);
+      i++;
+    } else {
+      parts.push(renderModules([modules[i]]));
+    }
+  }
+  return `<div class="resume">${header}${parts.join('')}</div>`;
 }
 
 /** 分栏模板（column/dark）：侧栏只放 照片 + 姓名 + 联系方式，七个模块统一走主栏 */
@@ -272,11 +330,17 @@ function renderStandard(data: ResumeDocData, photoFirst = false): string {
 }
 
 /** 把结构化定制简历渲染为指定模板的 A4 打印 HTML（由主进程 printToPDF 输出 PDF） */
-export function buildResumeHtml(data: ResumeDocData, templateId = 'classic'): string {
-  const tplId = isKnownTemplate(templateId) ? templateId : 'classic';
-  const tplCss = TEMPLATE_CSS[tplId] || '';
+export function buildResumeHtml(data: ResumeDocData, templateId = 'personal'): string {
+  const tplId = isKnownTemplate(templateId) ? templateId : 'personal';
+  const tplCss = tplId === 'personal' ? TEMPLATE_CSS.focus.replace(/\.tpl-focus/g, '.tpl-personal') + `
+.tpl-personal .focus-overview .resume-section[data-section="selfEval"] { flex:1.5; }
+.tpl-personal .resume-section[data-section="skills"] .resume-line:nth-child(4n+2) { color:#7547bc; }
+.tpl-personal .resume-section[data-section="skills"] .resume-line:nth-child(4n+3) { color:#287946; }
+.tpl-personal .resume-section[data-section="skills"] .resume-line:nth-child(4n) { color:#b46b13; }
+` : TEMPLATE_CSS[tplId] || '';
   let body: string;
-  if (tplId === 'column' || tplId === 'dark') body = renderSplit(data);
+  if (tplId === 'focus' || tplId === 'personal') body = renderFocus(data);
+  else if (tplId === 'column' || tplId === 'dark') body = renderSplit(data);
   else if (tplId === 'simple') body = renderStandard(data, true);
   else body = renderStandard(data, false);
   return (

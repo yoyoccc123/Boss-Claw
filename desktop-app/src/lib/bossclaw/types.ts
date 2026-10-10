@@ -390,6 +390,11 @@ export interface JobMeta {
   company?: string;
   salary?: string;
   location?: string;
+  /** 平台明确给出的办公/工作地址；与城市、区域 location 分开保存。存量缺失时可补齐。 */
+  address?: string;
+  /** 平台公开的公司人数区间，未知时留空。 */
+  companySize?: string;
+  scaleName?: string;
   publishTime?: string;
   applicationMode?: string;
   cardText?: string;

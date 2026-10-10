@@ -22,6 +22,8 @@
 //   三类平台的字段抓取一律「选择器 → 文本正则兜底」，避免单一通道失效导致整链路空采。
 
 const ALL_PLATFORMS = Object.freeze(['boss', 'liepin', 'zhaopin', 'job51']);
+const OFFICE = require('./office-address.cjs');
+const COMPANY_SIZE = require('./company-size.cjs');
 
 /**
  * hostname → 平台 id（与 `platforms.ts::resolvePlatform` 同口径：子域后缀匹配；未知回退 boss）。
@@ -433,6 +435,8 @@ function parseZhaopinJobDetail(payload) {
   const staff = (dp.staff && typeof dp.staff === 'object') ? dp.staff : {};
   return {
     description: jdHtmlToText(dp.jobDesc || dp.jobDescPC || dp.description || ''),
+    address: OFFICE.officeAddressFromPayload(payload),
+    companySize: COMPANY_SIZE.companySizeFromPayload(payload),
     skills: toStringTags(dp.skillLabel),
     welfare: toStringTags(dp.welfareLabel),
     recruiterName: String(staff.staffName || '').trim(),

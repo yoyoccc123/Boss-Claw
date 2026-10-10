@@ -200,7 +200,7 @@ export function buildResumeDocData(
   };
 
   // 输出顺序 = 用户给定顺序（勾选且排序后）；未给定则用默认顺序
-  const order = selectedIds && selectedIds.length ? selectedIds : RESUME_SECTION_META.map((m) => m.id);
+  const order = selectedIds ?? RESUME_SECTION_META.map((m) => m.id);
   const modules: ResumeDocModule[] = [];
   for (const id of order) {
     const mod = buildModule(id);
