@@ -1,4 +1,4 @@
-import type { PendingItem } from './types';
+import type { JobMeta, PendingItem } from './types';
 import type { TailorResult } from './jobAssistant';
 import { buildTailorJobInput } from './tailorJob';
 import { getErrorMessage } from './helpers';
@@ -55,6 +55,8 @@ export interface TailorHistoryItem {
   id: string;
   jobId?: string;
   company?: string;
+  /** 完整生成输入；旧历史仅有标题与描述。 */
+  job?: JobMeta;
   jobTitle: string;
   jobDesc: string;
   createdAt: number;
@@ -67,7 +69,7 @@ export const TAILOR_HISTORY_MAX = 200;
 export function upsertTailorHistory(history: TailorHistoryItem[], item: TailorHistoryItem): TailorHistoryItem[] {
   return [item, ...history.filter((h) => {
     if (item.jobId && h.jobId) return item.jobId !== h.jobId;
-    return item.jobTitle !== h.jobTitle || item.jobDesc !== h.jobDesc;
+    return item.jobTitle !== h.jobTitle || item.jobDesc !== h.jobDesc || (item.company || '') !== (h.company || '');
   })].slice(0, TAILOR_HISTORY_MAX);
 }
 
