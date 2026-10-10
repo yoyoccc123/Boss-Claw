@@ -92,6 +92,8 @@ export interface TailorJdPoint {
   verdict: JdPointVerdict;
   /** 一句依据（≤30 字，必须是可核对的简历事实） */
   evidence: string;
+  /** 判定是否对应最终交付正文；缺失表示旧历史尚未复核。 */
+  statusVerified?: boolean;
 }
 
 /** AI 同口径匹配度：before=原简历+补充材料+画像；after=定制后简历文档 */
@@ -108,6 +110,47 @@ export interface TailorSupplement {
 export interface TailorIterationInput {
   supplements: TailorSupplement[];
   previousResult?: TailorResult;
+}
+
+export interface TailorPointDraft {
+  text: string;
+  missingDetails: string[];
+}
+
+/** 为单个岗位要点整理用户补充，草稿须由用户确认后才参与重新生成。 */
+export async function writeTailorPointSupplement(input: {
+  point: TailorJdPoint; text: string; job: JobMeta; resumeText: string; profile: Profile | null;
+  model: AppConfig['model']; extraMaterials?: string; supplements?: TailorSupplement[];
+}): Promise<TailorPointDraft> {
+  if (!input.text.trim()) throw new Error('请先写几句实际技能或经历，再让 AI 整理');
+  if (!input.model?.apiKey) throw new Error('请先配置 AI 模型');
+  const budget = allocateContextBudget(input.model, { resume: 0.4, extra: 0.25, profile: 0.1, text: 0.15, point: 0.1 }, { outputTokens: 1200 });
+  const resume = (await prepareContextText(input.resumeText, input.model, {
+    tokenBudget: budget.resume, focus: '与当前岗位要点相关的真实技能和经历，保留能力水平、项目职责与数字',
+    cacheScope: 'assistant', purpose: '要点续写-简历事实',
+  })).text;
+  const extra = [input.extraMaterials, ...(input.supplements || []).map((s, i) => `第${i + 1}轮补充（区分事实与修改要求）：${s.text}`)].filter(Boolean).join('\n\n');
+  const extraCtx = extra ? (await prepareContextText(extra, input.model, {
+    tokenBudget: budget.extra, focus: '保留本人明确提供的事实、否定和修改要求，不把愿望变成事实',
+    cacheScope: 'assistant', purpose: '要点续写-已有补充', mode: 'transform',
+    instruction: '保留补充资料的事实、否定、纠错和修改要求，明确区分事实与愿望；禁止把希望具备的技能写成已具备。',
+  })).text : '';
+  const response: any = await cachedCallModel([
+    { role: 'system', content: `你是求职者的简历编辑，针对指定岗位要点整理或续写本人输入的补充草稿，供本人确认。
+只使用简历、画像、既有补充与本轮输入里明确陈述的事实。岗位要求只是目标，不是求职者已经具备的事实；当前判定依据也仅供编辑参考。
+保留“了解/熟悉/参与/负责”等原有水平和职责，不能把了解升级成熟练/精通，不能把参与改成独立负责。
+不得编造项目、框架名称、职责、数字、成果、工作时长、到岗或面试承诺。本人明确说“没有做过”或“希望学习”的内容，必须保留否定或计划性质。
+本轮资料足以说明“了解”某技能时，可直接整理成技能表述，不强求项目细节。资料不足时，只整理能确认的部分，并在 missingDetails 提出最多3个具体问题；不要用占位符补造未知事实。
+text 用求职者口吻写成可直接提交的补充文字，保留用户输入中的有效事实；只输出 JSON：{"text":"整理或续写的草稿","missingDetails":["尚需本人确认的问题"]}。` },
+    { role: 'user', content: `目标：${fitContextToTokens(JSON.stringify({ jobTitle: input.job.title, company: input.job.company, point: input.point.point, layer: input.point.layer }), budget.point)}
+简历事实：${resume}
+职业画像：${fitContextToTokens(JSON.stringify(input.profile ? stableProfileView(input.profile) : {}), budget.profile)}
+既有资料与补充：${extraCtx}
+本人本轮输入：${fitContextToTokens(input.text, budget.text)}` },
+  ], input.model, { maxTokens: 1200, temperature: 0.2 }, { scope: 'assistant' });
+  const text = typeof response?.text === 'string' ? response.text.trim() : '';
+  if (!text) throw new Error('AI 未返回有效草稿，原输入已保留，可重试');
+  return { text, missingDetails: normalizeStringList(response?.missingDetails, 3) };
 }
 
 /** 每轮文本独立保存，避免新补充覆盖前几轮的事实与修改要求。 */
@@ -209,6 +252,7 @@ const TAILOR_REVIEW_OUTPUT_EXAMPLE = `{
   "skillGaps": null,
   "suggestions": null,
   "resume": null,
+  "jdPoints": [{ "point": "React 开发经验", "layer": "duty", "verdict": "covered", "evidence": "最终项目经历已写明 React 订单模块" }],
   "matchScore": { "before": 62, "after": 78 },
   "reviewNote": "摘要原稿罗列了多项技术栈，已改写为「身份 + 1-2 个最相关亮点」；逐条核对 resume 的 source 与 text，未发现超出原文的表述；其余字段保持草稿。"
 }`;
@@ -255,7 +299,8 @@ ${greetingInstructions}${schoolRule}
 【jdPoints：JD 要点对照清单】
 - 把 JD 拆成四层要点：must 硬门槛（学历/年限/语言/行业背景/远程出差）、prefer 优先条件（「优先/加分/更佳」）、duty 职责信号（每天到底要做什么）、team 团队信号（公司阶段/协作方式）。
 - 同类合并、总数不超过 20 条，每条 point 不超过 12 字，不要罗列 JD 里的每个词。
-- 每条给 verdict：covered = 简历正文已体现；addable = 职业画像或经历补充材料中真实具备、但简历正文没写；missing = 与候选人真实背景毫无交集、无法合理外推。
+- 每条给 verdict，必须以本次生成的 resume 正文为准，不能仍按原始简历或上一版判定：covered = 最终正文已明确体现且能力水平符合该要点；addable = 本人资料/补充中具备，但最终正文尚未体现；missing = 所有有效资料均未提供可支撑该能力的依据。
+- 用户明确补充「了解数据库表设计」「了解 SQL 语法」「了解主流 Web 框架」等技能事实，可以如实写入 resume.skills 并保留「了解」水平，不需要先补充项目细节才允许写技能。写入后对应的「了解」要点应为 covered，依据引用最终技能正文；不得仍引用旧的「项目未写明」结论。用户只说了解时，不得写成熟悉/精通，也不得编造成某项目中负责设计或使用过某框架。
 - evidence 一句话（不超过 30 字）说明依据，必须是可核对的简历事实；**不得把「优先/加分」写成硬性不满足**。
 - 不要把职位名、公司名、招聘流程词（HR/面试/简历筛选）当作要点。
 
@@ -286,6 +331,7 @@ export const TAILOR_REVIEW_SCHEMA = JSON.stringify({
   skillGaps: null,
   suggestions: null,
   resume: null,
+  jdPoints: [{ point: '', layer: 'must|prefer|duty|team', verdict: 'covered|addable|missing', evidence: '' }],
   matchScore: { before: 0, after: 0 },
   reviewNote: null,
 });
@@ -304,7 +350,8 @@ export function buildReviewSystemPrompt(schoolRule = ''): string {
 6. 建议可执行性：suggestions 3-5 条、基于简历与 JD 的真实差距、每条不超过 40 字。
 7. **能力描述语保真（重点复查项）**：逐条比对 resume.skills 与各模块 bullet 的 text / 同条 source，**原文中的「精通 / 熟练 / 熟悉 / 掌握 / 擅长 / 了解 / 具备…能力 / 沉淀」等描述语是否被保留**？凡是「原文有描述语、text 里却压成了无修饰的技能罗列」（如 source「前端：熟悉 React、TypeScript，沉淀通用组件库」被改成 text「前端：React、TypeScript、通用组件库」），**必须在 resume 中把描述语按 source 原文补回**（可同义替换，不得升级为「精通」），并在 reviewNote 里说明补回了哪几条；同时检查有没有反向错误——把原文的「了解」写成「精通」这类**凭空升级**，也要改回原文强度。
 
-保留草稿的 jdPoints 清单与权重，用同一套标准返回 matchScore：before 评估原始资料与有效补充，after 必须评估合并本轮修订后的最终简历文档。不能沿用修订前分数，也不能因目标100分而抬高分数；未修订正文时可以沿用草稿评分。
+保留草稿 jdPoints 的要点名称、层级、顺序和权重，不增删要点；必须逐项重新核对合并本轮修订后的最终 resume，并返回完整 jdPoints（只更新 verdict/evidence）。已在最终正文写明的能力标为 covered，依据引用最终正文；仅在补充里存在而未写入正文才是 addable。用户明确提供的「了解」技能可如实写入 skills，不强求项目细节；不得升级水平或编造项目经历。纯愿望、否定或到岗/工作时间意向未经本人明确确认时，不能视为具备。
+用同一套标准返回 matchScore：before 评估原始资料与有效补充，after 必须评估合并本轮修订后的最终简历文档。不能沿用修订前分数，也不能因目标100分而抬高分数；未修订正文时可以沿用草稿评分。
 
 【输出 schema】只输出以下字段（字段名与类型不可变更；无需修订的字段一律输出 null）：
 ${TAILOR_REVIEW_SCHEMA}
@@ -478,6 +525,48 @@ const normForCompare = (s: string): string =>
     .replace(/[\s\u3000]+/g, '')
     .replace(/[，。；：、,.;:!?！？"'“”‘’（）()【】\[\]·\-—~～]/g, '')
     .toLowerCase();
+
+/** 清单身份与顺序保持不变，复检只更新同一要点的结论；正文改变后不静默沿用旧结论。 */
+export function finalizeJdPoints(
+  draft: TailorJdPoint[], reviewed: unknown, doc: TailorResumeDoc, docChanged: boolean,
+): TailorJdPoint[] {
+  const key = (p: TailorJdPoint) => `${p.layer}:${normForCompare(p.point)}`;
+  const updates = new Map<string, TailorJdPoint>();
+  const duplicates = new Set<string>();
+  if (Array.isArray(reviewed)) for (const raw of reviewed) {
+    if (!raw || !JD_LAYERS.includes(raw.layer) || !JD_VERDICTS.includes(raw.verdict)
+      || typeof raw.point !== 'string' || typeof raw.evidence !== 'string' || !raw.evidence.trim()) continue;
+    const point = normalizeJdPoints([raw])[0];
+    if (!point) continue;
+    const id = key(point);
+    if (updates.has(id)) duplicates.add(id);
+    updates.set(id, point);
+  }
+  const bodyLines = [
+    ...doc.skills.map((line) => line.text), doc.selfEval.text,
+    ...[...doc.education, ...doc.internships, ...doc.works, ...doc.projects]
+      .flatMap((block) => [block.heading, block.meta, ...block.bullets.map((line) => line.text)]),
+    ...doc.honors,
+  ];
+  return draft.map((point) => {
+    const id = key(point);
+    const update = duplicates.has(id) ? undefined : updates.get(id);
+    // 明确的技能表述已出现在最终正文时，即使模型仍返回旧 addable，也可直接核对纠正。
+    // 只处理有能力水平前缀的完整字面匹配，不把 SQL/MySQL 提及外推为表设计或复合硬条件。
+    const normalizedPoint = normForCompare(point.point);
+    const direct = /^(了解|熟悉|熟练|掌握|精通|擅长)/.test(normalizedPoint)
+      ? bodyLines.flatMap((line) => line.split(/[，。；;、\n]/)).find((line) => {
+        const normalized = normForCompare(line);
+        const index = normalized.indexOf(normalizedPoint);
+        if (index < 0) return false;
+        return !/(不|未|没有|缺乏|希望|计划|准备|目标|待学习)/.test(normalized);
+      }) : undefined;
+    if (direct) return { ...point, verdict: 'covered', evidence: `最终正文：${direct.trim()}`.slice(0, 60), statusVerified: true };
+    if (update) return { ...point, verdict: update.verdict, evidence: update.evidence, statusVerified: true };
+    if (!docChanged) return { ...point, statusVerified: true };
+    return { ...point, evidence: '最终正文已修改，该要点未获得有效复核，请重新生成核对。', statusVerified: false };
+  });
+}
 
 export interface TailorRewriteResult {
   rewrites: TailorRewrite[];
@@ -778,6 +867,7 @@ export async function tailorForJob(
     // 否则保留草稿；review 失败/无效一律不降级草稿（草稿本身已通过事实与口吻校验）。
     // 注意：复检的「修订差异」不再单独展示（面板统一展示「原文 → 定制后」逐条对照），只保留一行结论与修订字段名。
     let finalDoc = draftDoc;
+    let reviewedPoints: unknown;
     let finalAiMatch = draftAiMatch;
     let scoreWarning: string | undefined;
     let reviewMeta: TailorReviewMeta | undefined;
@@ -807,6 +897,7 @@ export async function tailorForJob(
         { scope: 'assistant' }
       );
       const reviewerText = (v: unknown) => String(v ?? '').trim();
+      reviewedPoints = review?.jdPoints;
       const merged = {
         tailoredSummary: reviewerText(review?.tailoredSummary) || draft.tailoredSummary,
         tailoredExperiences:
@@ -883,7 +974,7 @@ export async function tailorForJob(
       doc: finalDoc,
       supplements,
       previousScore: previous?.aiMatch?.after ?? null,
-      jdPoints: draftPoints,
+      jdPoints: finalizeJdPoints(draftPoints, reviewedPoints, finalDoc, JSON.stringify(finalDoc) !== JSON.stringify(draftDoc)),
       aiMatch: finalAiMatch,
       rewrites: allRewrites,
       qualifierLoss,
