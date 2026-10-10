@@ -31,7 +31,7 @@ import {
   UploadOutlined,
   EyeOutlined,
 } from '@ant-design/icons';
-import type { JdPointLayer, JdPointVerdict, TailorJdPoint, TailorResult } from '@/lib/bossclaw/jobAssistant';
+import type { JdPointLayer, JdPointVerdict, TailorJdPoint, TailorPointDraft, TailorResult } from '@/lib/bossclaw/jobAssistant';
 import { JD_LAYER_LABEL } from '@/lib/bossclaw/jobAssistant';
 import { STATUS_COLORS } from '@/theme';
 
@@ -47,6 +47,8 @@ interface TailorResultViewProps {
   supplementText?: string;
   onSupplementChange?: (text: string) => void;
   onRegenerate?: () => void;
+  onHelpWritePoint?: (point: TailorJdPoint, text: string) => Promise<TailorPointDraft>;
+  onSupplementPoint?: (point: TailorJdPoint, text: string) => Promise<boolean>;
   regenerating?: boolean;
   regenerateDisabled?: boolean;
 }
@@ -60,6 +62,9 @@ const VERDICT_META: Record<JdPointVerdict, { label: string; color: string; icon:
   addable: { label: '可补充', color: 'gold', icon: <ExclamationCircleOutlined style={{ color: '#faad14' }} /> },
   missing: { label: '不具备', color: 'red', icon: <CloseCircleOutlined style={{ color: '#f5222d' }} /> },
 };
+const pointMeta = (p: TailorJdPoint) => p.statusVerified === true
+  ? VERDICT_META[p.verdict]
+  : { label: '待复核', color: 'default', icon: <ExclamationCircleOutlined /> };
 
 export const TailorResultView: React.FC<TailorResultViewProps> = ({
   tailor,
@@ -70,6 +75,8 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
   supplementText = '',
   onSupplementChange,
   onRegenerate,
+  onHelpWritePoint,
+  onSupplementPoint,
   regenerating = false,
   regenerateDisabled = false,
 }) => {
@@ -80,7 +87,42 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
   }, []);
   /** 岗位要点详情弹窗当前查看的要点（null = 关闭） */
-  const [detailPoint, setDetailPoint] = useState<TailorJdPoint | null>(null);
+  const [selectedPoint, setDetailPoint] = useState<Pick<TailorJdPoint, 'point' | 'layer'> | null>(null);
+  const detailPoint = selectedPoint
+    ? tailor.jdPoints.find((p) => p.point === selectedPoint.point && p.layer === selectedPoint.layer) || null : null;
+  const [pointDrafts, setPointDrafts] = useState<Record<string, TailorPointDraft>>({});
+  const [pointBusy, setPointBusy] = useState<'write' | 'submit' | null>(null);
+  const pointLock = useRef(false);
+  const pointKey = detailPoint ? `${detailPoint.layer}:${detailPoint.point}` : '';
+  const pointDraft = pointDrafts[pointKey] || { text: '', missingDetails: [] };
+  const pointDisabled = !!pointBusy || regenerating || regenerateDisabled;
+  const helpWritePoint = async () => {
+    if (!detailPoint || !pointDraft.text.trim() || pointLock.current || pointDisabled || !onHelpWritePoint) return;
+    const key = pointKey;
+    pointLock.current = true;
+    setPointBusy('write');
+    try {
+      const draft = await onHelpWritePoint(detailPoint, pointDraft.text);
+      setPointDrafts((prev) => ({ ...prev, [key]: draft }));
+      message.success('已整理草稿，请核对后提交');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'AI 整理失败，原输入已保留');
+    } finally { pointLock.current = false; setPointBusy(null); }
+  };
+  const submitPoint = async () => {
+    if (!detailPoint || !pointDraft.text.trim() || pointLock.current || pointDisabled || !onSupplementPoint) return;
+    const key = pointKey;
+    pointLock.current = true;
+    setPointBusy('submit');
+    try {
+      if (await onSupplementPoint(detailPoint, pointDraft.text)) {
+        setPointDrafts((prev) => ({ ...prev, [key]: { text: '', missingDetails: [] } }));
+        setDetailPoint(null);
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '重新生成失败，原输入已保留');
+    } finally { pointLock.current = false; setPointBusy(null); }
+  };
 
   const copyToClipboard = (text: string, label: string, key: string) => {
     if (!text) return;
@@ -115,7 +157,7 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
     if (tailor.jdPoints?.length) {
       lines.push('', '## 岗位要点对照');
       for (const p of tailor.jdPoints) {
-        lines.push(`- [${JD_LAYER_LABEL[p.layer]}/${VERDICT_META[p.verdict].label}] ${p.point}${p.evidence ? ` —— ${p.evidence}` : ''}`);
+        lines.push(`- [${JD_LAYER_LABEL[p.layer]}/${pointMeta(p).label}] ${p.point}${p.evidence ? ` —— ${p.evidence}` : ''}`);
       }
     }
 
@@ -133,10 +175,11 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
   const unmatched = (tailor.rewrites || []).filter((r) => !r.before);
   const points = tailor.jdPoints || [];
   const verdictCount: Record<JdPointVerdict, number> = {
-    covered: points.filter((p) => p.verdict === 'covered').length,
-    addable: points.filter((p) => p.verdict === 'addable').length,
-    missing: points.filter((p) => p.verdict === 'missing').length,
+    covered: points.filter((p) => p.statusVerified && p.verdict === 'covered').length,
+    addable: points.filter((p) => p.statusVerified && p.verdict === 'addable').length,
+    missing: points.filter((p) => p.statusVerified && p.verdict === 'missing').length,
   };
+  const pendingPointCount = points.filter((p) => !p.statusVerified).length;
 
   return (
     <div className="tailor-view">
@@ -412,6 +455,7 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
                 <Tag color="green">已体现 {verdictCount.covered}</Tag>
                 {verdictCount.addable > 0 && <Tag color="gold">可补充 {verdictCount.addable}</Tag>}
                 {verdictCount.missing > 0 && <Tag color="red">不具备 {verdictCount.missing}</Tag>}
+                {pendingPointCount > 0 && <Tag>待复核 {pendingPointCount}</Tag>}
                 {onImportMaterials && (
                   <Tooltip title="导入简历里没写的真实经历素材（实习/项目/获奖等），AI 会据此补齐简历">
                     <Button size="small" icon={<UploadOutlined />} onClick={onImportMaterials}>
@@ -421,6 +465,9 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
                 )}
               </Space>
             </div>
+
+            {pendingPointCount > 0 && <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message="部分要点尚未按最终正文复核，重新生成可更新判定；原补充内容会保留。" />}
 
             <div className="tailor-point-layers">
               {LAYER_ORDER.map((layer) => {
@@ -436,14 +483,14 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
                       {items.map((p, i) => (
                         <button
                           type="button"
-                          className={`tailor-point-row tailor-point-row--${p.verdict}`}
+                          className={`tailor-point-row tailor-point-row--${p.statusVerified ? p.verdict : 'pending'}`}
                           key={`${layer}_${i}`}
                           onClick={() => setDetailPoint(p)}
                           title="点击查看该条要点的完整判定依据"
                         >
                           <span className="tailor-point-name">{p.point}</span>
-                          <Tag color={VERDICT_META[p.verdict].color} className="tailor-point-verdict">
-                            {VERDICT_META[p.verdict].label}
+                          <Tag color={pointMeta(p).color} className="tailor-point-verdict">
+                            {pointMeta(p).label}
                           </Tag>
                           <EyeOutlined className="tailor-point-more" />
                         </button>
@@ -592,9 +639,12 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
       {/* 要点详情弹窗：点要点行查看单条全部信息（列表里只留要点与判定，保证页面更短） */}
       <Modal
         open={!!detailPoint}
-        onCancel={() => setDetailPoint(null)}
+        onCancel={() => { if (!pointLock.current) setDetailPoint(null); }}
+        closable={!pointBusy}
+        maskClosable={!pointBusy}
+        keyboard={!pointBusy}
         footer={null}
-        width={520}
+        width={620}
         centered
         title="岗位要点详情"
         className="tailor-point-detail-modal"
@@ -603,7 +653,7 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
           <div className="tailor-point-detail">
             <div className="tailor-point-detail-head">
               <span className="tailor-point-detail-name">{detailPoint.point}</span>
-              <Tag color={VERDICT_META[detailPoint.verdict].color}>{VERDICT_META[detailPoint.verdict].label}</Tag>
+              <Tag color={pointMeta(detailPoint).color}>{pointMeta(detailPoint).label}</Tag>
             </div>
             <div className="tailor-point-detail-row">
               <span className="tailor-point-detail-label">JD 层级</span>
@@ -611,15 +661,43 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
             </div>
             <div className="tailor-point-detail-row">
               <span className="tailor-point-detail-label">判定依据</span>
-              <span>{detailPoint.evidence || '（AI 未给出依据，请人工核对）'}</span>
+              <span>{detailPoint.statusVerified ? detailPoint.evidence || '（AI 未给出依据，请人工核对）' : '本条尚未按最终简历正文复核，请重新生成更新判定。'}</span>
             </div>
-            {detailPoint.verdict === 'addable' && onImportMaterials && (
+            {onSupplementPoint && (
+              <div style={{ marginTop: 20 }} data-testid="tailor-point-editor">
+                <Text strong>补充这项技能或经历</Text>
+                <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 10 }}>
+                  填写你实际掌握的技能或做过的工作。AI 可帮你整理和续写，核对后再用于简历。
+                </Paragraph>
+                <Input.TextArea
+                  id="tailor-point-supplement-text"
+                  value={pointDraft.text}
+                  disabled={pointDisabled}
+                  autoSize={{ minRows: 4, maxRows: 10 }}
+                  style={{ fontSize: 15 }}
+                  placeholder="例如：我做过 Web 接口模块，使用 Python；没有做过插件开发。请帮我整理这部分经历。"
+                  onChange={(e) => setPointDrafts((prev) => ({ ...prev, [pointKey]: { text: e.target.value, missingDetails: [] } }))}
+                />
+                {pointDraft.missingDetails.length > 0 && <Alert
+                  type="info" style={{ marginTop: 10 }} message="还可以补充以下细节"
+                  description={<ul style={{ marginBottom: 0, paddingLeft: 20 }}>{pointDraft.missingDetails.map((q, i) => <li key={i}>{q}</li>)}</ul>}
+                />}
+                <Space wrap style={{ marginTop: 12 }}>
+                  {onHelpWritePoint && <Button icon={<RobotOutlined />} onClick={() => void helpWritePoint()}
+                    loading={pointBusy === 'write'} disabled={pointDisabled || !pointDraft.text.trim()}>AI 帮我整理／续写</Button>}
+                  <Button type="primary" onClick={() => void submitPoint()} loading={pointBusy === 'submit'}
+                    disabled={pointDisabled || !pointDraft.text.trim()}>补充这一项并重新生成</Button>
+                </Space>
+              </div>
+            )}
+            {detailPoint.statusVerified && detailPoint.verdict === 'addable' && onImportMaterials && (
               <div className="tailor-point-detail-tip">
-                <span>该要点你已具备、但简历未体现，可导入对应经历素材补齐。</span>
+                <span>本人资料中已有依据，但最终简历尚未写明。可补充说明要写入的技能或经历，也可导入素材。</span>
                 <Button
                   size="small"
                   type="primary"
                   icon={<UploadOutlined />}
+                  disabled={pointDisabled}
                   onClick={() => {
                     setDetailPoint(null);
                     onImportMaterials();

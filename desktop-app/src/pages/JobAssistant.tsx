@@ -19,7 +19,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useDataStore } from '@/store/useDataStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useAppStore } from '@/store/useAppStore';
-import { appendTailorSupplement, tailorForJob, type TailorResult } from '@/lib/bossclaw/jobAssistant';
+import { appendTailorSupplement, tailorForJob, writeTailorPointSupplement, type TailorJdPoint, type TailorResult } from '@/lib/bossclaw/jobAssistant';
 import { computeMatchScore, extractJdKeywords } from '@/lib/bossclaw/resumeMatch';
 import { stableProfileView } from '@/lib/bossclaw/matching';
 import { cleanJobDescription, jdLooksNoisy } from '@/lib/bossclaw/jdCleaner';
@@ -523,16 +523,16 @@ export default function JobAssistant() {
     setHistoryJobId(undefined);
   };
 
-  const onGenerate = async (supplement?: string) => {
-    if (generationLock.current || exporting) return;
-    if (supplement !== undefined && !supplement.trim()) return message.warning('请先填写要补充的内容');
+  const onGenerate = async (supplement?: string, clearMainDraft = true): Promise<boolean> => {
+    if (generationLock.current || exporting) return false;
+    if (supplement !== undefined && !supplement.trim()) { message.warning('请先填写要补充的内容'); return false; }
     if (importId) {
       const current = useDataStore.getState().pending.find((p) => p.id === importId);
-      if (!current || !isWorkbenchJobIncluded(current.job, useAppStore.getState().workbenchFilters)) return message.warning('该岗位已被工作台筛选排除，请重新选择');
+      if (!current || !isWorkbenchJobIncluded(current.job, useAppStore.getState().workbenchFilters)) { message.warning('该岗位已被工作台筛选排除，请重新选择'); return false; }
     }
     if (!canGenerate) {
-      if (!hasResume) return message.warning('请先在「简历中心」上传/粘贴简历并生成职业画像');
-      return message.warning('请填写岗位名称与岗位要求');
+      message.warning(!hasResume ? '请先在「简历中心」上传/粘贴简历并生成职业画像' : '请填写岗位名称与岗位要求');
+      return false;
     }
     generationLock.current = true;
     setGenerating(true);
@@ -553,17 +553,35 @@ export default function JobAssistant() {
       // 迭代失败保留上一版和待提交文本，用户可以直接重试。
       if (tailor && r.method === 'local') {
         message.warning(`${r.warning || 'AI 未能完成重新生成'} 上一版与本轮补充已保留，请重试。`);
-        return;
+        return false;
       }
       setTailor(r);
-      if (supplement !== undefined) setSupplementDraft('');
+      if (supplement !== undefined && clearMainDraft) setSupplementDraft('');
       if (batchResultId) setBatchItems((items) => items.map((item) => item.id === batchResultId
         ? { ...item, result: r, status: r.method === 'ai' ? 'done' : 'local', error: undefined } : item));
       recordHistory({ jobId: importId || historyJobId, company: job.company, job, jobTitle: jobTitle.trim(), jobDesc: jobDesc.trim() }, r);
       if (supplement !== undefined) message.success('已结合全部补充重新生成，可继续补充或导出 PDF');
       if (r.method === 'local' && r.warning) message.info(r.warning);
+      return true;
     } catch (e: any) {
       message.error('定制失败：' + getErrorMessage(e));
+      return false;
+    } finally {
+      generationLock.current = false;
+      setGenerating(false);
+    }
+  };
+
+  const onHelpWritePoint = async (point: TailorJdPoint, text: string) => {
+    if (generationLock.current || exporting) throw new Error('请等待当前操作完成');
+    generationLock.current = true;
+    setGenerating(true);
+    try {
+      const extraMaterials = await resolveMaterialsText();
+      return await writeTailorPointSupplement({
+        point, text, job: { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim() },
+        resumeText, profile, model: config.model, extraMaterials, supplements: tailor?.supplements,
+      });
     } finally {
       generationLock.current = false;
       setGenerating(false);
@@ -857,6 +875,7 @@ export default function JobAssistant() {
 
       {tailor && (
         <TailorResultView
+          key={importId || historyJobId || `${jobTitle}\n${jobDesc}\n${importedJob?.company || ''}`}
           tailor={tailor}
           jobTitle={jobTitle.trim() || '定制简历'}
           onExportPdf={() => openExport(tailor, jobTitle.trim() || '定制简历')}
@@ -865,6 +884,8 @@ export default function JobAssistant() {
           supplementText={supplementDraft}
           onSupplementChange={setSupplementDraft}
           onRegenerate={() => void onGenerate(supplementDraft)}
+          onHelpWritePoint={onHelpWritePoint}
+          onSupplementPoint={(point, text) => onGenerate(`【岗位要点：${point.point}】\n${text}`, false)}
           regenerating={generating}
           regenerateDisabled={exporting}
         />
