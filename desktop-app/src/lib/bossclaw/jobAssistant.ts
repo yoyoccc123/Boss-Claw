@@ -207,9 +207,9 @@ export function buildTailorSystemPrompt(greetingInstructions: string, schoolRule
    - ✓ 正确：「前端：熟悉 React、TypeScript，沉淀通用组件库」
    按 JD 补充新技能时，须为该技能给出**与原文同组、同强度**的描述语，不得凭空升级为「精通」。
 4. **硬性事实红线（绝不逾越）**：不得虚构公司/职位/在职时长、学校/学历/专业、证书/奖项、具体数字/比例/金额/用户量/时长；不得承诺薪资、到岗时间、面试时间；与岗位能力域毫无交集、无法从真实背景合理外推的，绝不写进 tailoredSummary、highlightedSkills、resume 或 coverLetter 当作自己具备。触犯任一条即输出失败，交由本地规则兜底。
-5. tailoredSummary 为 120-150 字求职者个人摘要：开头点明身份（学历/年级/专业），突出与目标岗位最相关的真实技能与项目。
+5. tailoredSummary 为 60-90 字求职者个人摘要：开头点明身份（学历/年级/专业），用 2-3 句突出岗位最相关的真实贡献，不罗列全部项目或重复整段技能栈。
 6. tailoredExperiences 为 2-4 条经历要点：从真实经历中挑选与岗位最相关者，按 **STAR（情境/任务 → 行动 → 结果）** 精简为一句亮点重排（每条不超过 80 字）。[量化改写规则]：若简历事实本身含数字（如"服务 3 年""日活 5 万""耗时从 2 小时降到 30 分钟"），允许提炼为「行动动词 + 可量化成果」句式；若简历没有数字，必须保持事实描述，**严禁编造或推算任何百分比、金额、人数、用户量、时长**。
-7. highlightedSkills 为 3-8 个「岗位适配技能」：按 JD 规范名编写与岗位匹配的能力（含简历已具备与可合理外推的相近能力）；与岗位无关或与候选人背景毫无交集的一律不列。
+7. highlightedSkills 为 3-6 个不重复的「岗位适配技能」：按 JD 规范名编写与岗位匹配的真实能力，同义项合并；与岗位无关或与候选人背景毫无交集的一律不列。
 8. skillGaps 为 1-4 个「岗位明确要求、但候选人背景与该能力域毫无交集、无法合理编写」的能力提示，没有则返回空数组。
 9. coverLetter 为第一人称求职打招呼语（求职信），必须遵守以下工作台打招呼语提示词（本软件打招呼语统一口径，含开头格式、口吻、长度、安全红线）：
 ${greetingInstructions}${schoolRule}
@@ -221,9 +221,12 @@ ${greetingInstructions}${schoolRule}
 - education / internships / works / projects 每项 = { heading, meta, bullets }：heading 是首行（学校 + 专业 | 学历 / 公司 + 岗位 / 项目名 + 一句话定位 | 角色），meta 是第二行元信息（时间 / 「技术栈：…」），bullets 是要点。
 - **每条 bullet 必须带 source**：source 是**原简历或经历补充材料里对应那一条的原文摘录，照抄不改写**。若该条与原文完全一致，source 照抄同样文本；若原文中确实找不到对应内容，source 填空字符串 ""（这类条会在界面上标为「需人工核对」，禁止用来塞进编造内容）。
 - **改写只允许「重新表达」，不允许「新增事实」**：bullet 的 text 超出 source 能支撑的范围即为违规。
-- 按岗位相关性从高到低排列 bullets；每个项目/经历 1-4 条要点，每条不超过 80 字。**bullet 同样受「保留能力描述语」约束**：原文写「负责」「参与」「配合」等动词或「熟练/熟悉」等描述语时，不得改写成无修饰的名词堆叠。
+- projects 按 JD 相关性从高到低，仅选择最相关的 2-3 个项目，最多 3 个；实际不足时保留实际数量。课程实验与小型复现只在岗位明确相关时入选，不罗列全部开发经历。
+- 每个项目优先保留 2-3 条要点，最多 3 条；实习/工作经历 1-3 条，每条建议 40-70 字、不得超过 80 字。事实不足时只写有依据的条数，不为凑数扩写。同一事实不要跨条重复，技术栈集中放 meta，bullet 写具体职责、实现方式或可验证成果。**bullet 同样受「保留能力描述语」约束**：原文写「负责」「参与」「配合」等动词或「熟练/熟悉」等描述语时，不得改写成无修饰的名词堆叠。
+- 删除空泛的效果词：没有明确测试口径或用户/业务数据支持时，不写「毫秒级响应」「显著提升使用粘性」「大幅提升效率」等性能或业务成效；即使原文有这些笼统表述，也只保留可核对的功能、操作和技术实现，不推算指标。
 - skills 为「按类别分组的专业技能」：每项 { text, source }，一组一行，与 JD 相关性高的组排在前面；source 填原简历技能区的原文摘录。**text 必须保留原简历的描述语结构，形如「后端：精通 Java（Spring Boot），熟悉 MyBatis，擅长接口设计」「前端：熟悉 React、TypeScript，沉淀通用组件库」**，即「类别：<描述语><技能>、<描述语><技能>，<描述语><能力/成果>」；**严禁输出成「后端：Java、Spring Boot、MyBatis」这类无描述语的裸技能列表**。按 JD 补充新技能时沿用该组的描述语强度，不得凭空升级为「精通」。组名与分组由你按 JD 与本人真实技能归纳，不得把简历中不存在的技能写进来。
-- honors 为个人荣誉/证书纯文本条目数组；selfEval 为自我评价 { text, source }。
+- skills 最多 4 个岗位相关分组，同一技能只在一组出现，合并同义词；保留原文的熟悉/了解等水平，不在简介和技能区重复整套清单。
+- honors 为个人荣誉/证书纯文本条目数组；selfEval 为自我评价 { text, source }，用与 tailoredSummary 相同的精简简介（60-90 字），source 摘录支撑身份与贡献的原文，不写「学习能力强」「热爱技术」等无事例评价。
 - **禁止输出空标题、占位符（如「（暂无）」「待补充」）或说明性文字**。
 
 【jdPoints：JD 要点对照清单】
@@ -271,8 +274,8 @@ export function buildReviewSystemPrompt(schoolRule = ''): string {
 任务：逐字段审阅草稿，仅对「需要改进」的字段输出修订值；某字段无需修改就输出 null（缺省代表保留草稿）。审阅维度：
 1. **诚实性红线（最优先，逐条核对 source）**：resume 里每条 bullet 的 text 是否超出了同一条 source 能支撑的范围？education/internships/works/projects 的 heading、meta 是否与原文一致（公司/职位/在职时长、学校/学历/专业、时间不得改动或美化）？是否存在 source 为空、却写了具体事实的条目？是否存在虚构证书/奖项/数字/比例/金额/用户量/时长、或承诺薪资/到岗/面试时间？**触犯任一条必须在 resume 中修订或删除该条**，绝不保留。
 2. ATS 关键词覆盖：JD 高权重关键词（技能/工具/领域术语）是否被真实覆盖？候选人在相关领域确有真实背景时，允许把其真实掌握或相近的泛化能力按 JD 规范名编写为「适配技能」并前置入摘要/经历/技能；与候选人背景毫无交集的关键词不得硬塞，应归入 skillGaps 或在 jdPoints 中记为 missing。
-3. 结构与可排版性：resume 模块齐全且**没有编造出来的空壳模块**（没内容的模块必须是空数组/空对象，不得出现「暂无」「待补充」等占位文字）；bullets 是否按岗位相关性从高到低、每条不超过 80 字。
-4. STAR 与一页适配：tailoredSummary 120-150 字、开头点明身份；tailoredExperiences 2-4 条、一条不超过 80 字；量化只提炼简历已有数字，严禁编造或推算。
+3. 结构与可排版性：resume 模块齐全且**没有编造出来的空壳模块**（没内容的模块必须是空数组/空对象，不得出现「暂无」「待补充」等占位文字）；projects 只保留按 JD 相关性排序的最多 3 个项目，每项最多 3 条要点，事实不足时不凑数；bullets 每条建议 40-70 字、不得超过 80 字。skills 合并同义项，最多 4 组，同一技能不跨组重复；技术栈放 meta，经历要点写具体贡献。
+4. 精简与证据：tailoredSummary 与 resume.selfEval.text 为同一段 60-90 字简介，开头点明身份，删除重复技能清单和无事例自评；tailoredExperiences 2-4 条、一条不超过 80 字。没有明确测试口径或用户/业务数据时，删除「毫秒级响应」「显著提升使用粘性」「大幅提升效率」等效果词，即使原文有这些笼统说法也只保留具体功能与实现。量化只提炼有证据的原始数字，严禁编造或推算。
 5. 求职信口吻：coverLetter 必须求职者第一人称（以「您好，我想应聘贵公司的{岗位名}」开头），全文 120-250 字（含标点，建议约 150 字，与 greetings.ts::GREETING_LENGTH_RULE 同口径）、单行不换行；项目亮点必须精炼（只挑 1-2 个与岗位最相关的真实项目/技能、禁止罗列技术栈清单）；严禁招聘方口吻（「看到你的简历」「你的经历很匹配我们」「欢迎进一步沟通」「我们团队」「候选人」等），不得承诺薪资、到岗时间、面试时间。**校名披露（只约束 coverLetter，简历正文 resume 中的学校名照抄原文不受此限）**：${schoolRule ? schoolRule.trim() : '院校名称只有简历院校属于 985/211 时才允许写出，其余院校一律不出现任何院校名称或层级字样，只写学历/专业/年级。'}
 6. 建议可执行性：suggestions 3-5 条、基于简历与 JD 的真实差距、每条不超过 40 字。
 7. **能力描述语保真（重点复查项）**：逐条比对 resume.skills 与各模块 bullet 的 text / 同条 source，**原文中的「精通 / 熟练 / 熟悉 / 掌握 / 擅长 / 了解 / 具备…能力 / 沉淀」等描述语是否被保留**？凡是「原文有描述语、text 里却压成了无修饰的技能罗列」（如 source「前端：熟悉 React、TypeScript，沉淀通用组件库」被改成 text「前端：React、TypeScript、通用组件库」），**必须在 resume 中把描述语按 source 原文补回**（可同义替换，不得升级为「精通」），并在 reviewNote 里说明补回了哪几条；同时检查有没有反向错误——把原文的「了解」写成「精通」这类**凭空升级**，也要改回原文强度。
@@ -354,7 +357,7 @@ export interface TailorResult {
 const lineText = (v: unknown): string => String(v ?? '').trim();
 
 /** 规范化一个块（教育/实习/工作/项目）：heading/meta/bullets(含 source) */
-function normalizeBlocks(raw: unknown, maxBlocks: number): TailorDocBlock[] {
+function normalizeBlocks(raw: unknown, maxBlocks: number, maxBullets = 6): TailorDocBlock[] {
   if (!Array.isArray(raw)) return [];
   const out: TailorDocBlock[] = [];
   for (const item of raw.slice(0, maxBlocks)) {
@@ -362,7 +365,7 @@ function normalizeBlocks(raw: unknown, maxBlocks: number): TailorDocBlock[] {
     const meta = lineText((item as any)?.meta);
     const bullets: TailorDocLine[] = [];
     const rawBullets = Array.isArray((item as any)?.bullets) ? (item as any).bullets : [];
-    for (const b of rawBullets.slice(0, 6)) {
+    for (const b of rawBullets.slice(0, maxBullets)) {
       const text = lineText(typeof b === 'string' ? b : b?.text);
       if (!text) continue;
       // 字符串形式的 bullet（模型偶尔返回纯文本）视为无 source，界面会标为需人工核对
@@ -379,11 +382,16 @@ function normalizeBlocks(raw: unknown, maxBlocks: number): TailorDocBlock[] {
 function normalizeLines(raw: unknown, max: number): TailorDocLine[] {
   if (!Array.isArray(raw)) return [];
   const out: TailorDocLine[] = [];
-  for (const item of raw.slice(0, max)) {
+  const seen = new Set<string>();
+  for (const item of raw) {
     const text = lineText(typeof item === 'string' ? item : item?.text);
     if (!text) continue;
+    const key = text.replace(/\s+/g, '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     const source = lineText(typeof item === 'string' ? '' : item?.source);
     out.push({ text: text.slice(0, 120), source: source.slice(0, 300) });
+    if (out.length >= max) break;
   }
   return out;
 }
@@ -393,10 +401,10 @@ export function normalizeTailorDoc(raw: unknown): TailorResumeDoc {
   const r: any = raw || {};
   return {
     education: normalizeBlocks(r.education, 3),
-    internships: normalizeBlocks(r.internships, 4),
-    works: normalizeBlocks(r.works, 4),
-    projects: normalizeBlocks(r.projects, 4),
-    skills: normalizeLines(r.skills, 8),
+    internships: normalizeBlocks(r.internships, 4, 3),
+    works: normalizeBlocks(r.works, 4, 3),
+    projects: normalizeBlocks(r.projects, 3, 3),
+    skills: normalizeLines(r.skills, 4),
     honors: normalizeStringList(r.honors, 8).map((h) => String(h).slice(0, 120)),
     selfEval: {
       text: lineText(r.selfEval?.text ?? (typeof r.selfEval === 'string' ? r.selfEval : '')).slice(0, 400),

@@ -83,6 +83,13 @@ const api = {
 
   // 保存定制简历 PDF：渲染进程传 A4 打印 HTML，主进程 printToPDF 后弹出保存对话框写盘
   savePdf: (defaultName, html) => ipcRenderer.invoke('jc:save-pdf', defaultName, html),
+  savePdfBatch: (items, requestId) => ipcRenderer.invoke('jc:save-pdf-batch', items, requestId),
+  cancelPdfBatch: (requestId) => ipcRenderer.invoke('jc:save-pdf-batch-cancel', requestId),
+  onPdfBatchProgress: (callback) => {
+    const handler = (_event, progress) => callback(progress);
+    ipcRenderer.on('jc:save-pdf-batch-progress', handler);
+    return () => ipcRenderer.removeListener('jc:save-pdf-batch-progress', handler);
+  },
   // 通用文本导出（CSV）：主进程弹系统保存对话框由用户选位置后写盘（extWhitelist 默认 ['csv']）
   saveFile: (defaultName, content, extWhitelist) =>
     ipcRenderer.invoke('jc:save-file', defaultName, content, extWhitelist),

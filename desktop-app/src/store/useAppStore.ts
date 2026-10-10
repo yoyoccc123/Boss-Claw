@@ -5,6 +5,7 @@ import type { ThemeMode } from '../theme';
 import type { JobPlatform } from '@/lib/bossclaw/platforms';
 import { PLATFORM_IDS } from '@/lib/bossclaw/platforms';
 import type { PlatformLogins } from '@/lib/bossLogin';
+import type { WorkbenchFilters } from '@/lib/bossclaw/workbenchFilters';
 
 export type RouteKey =
   | 'home'
@@ -119,6 +120,17 @@ interface AppState {
   browserLoginRequest: { platform: JobPlatform; loginUrl: string } | null;
   requestBrowserLogin: (platform: JobPlatform, loginUrl: string) => void;
   clearBrowserLogin: () => void;
+  /** 工作台选中的定制岗位 ID：跨页面消费一次，不持久化。 */
+  tailorJobRequest: string | null;
+  openJobAssistant: (id: string) => void;
+  clearTailorJobRequest: () => void;
+  tailorBatchRequest: string[] | null;
+  openJobAssistantBatch: (ids: string[]) => void;
+  clearTailorBatchRequest: () => void;
+  tailorBusy: boolean;
+  setTailorBusy: (busy: boolean) => void;
+  workbenchFilters: WorkbenchFilters;
+  setWorkbenchFilters: (patch: Partial<WorkbenchFilters>) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -141,6 +153,16 @@ export const useAppStore = create<AppState>()(
         browserLoginRequest: null,
         requestBrowserLogin: (platform, loginUrl) => set({ browserLoginRequest: { platform, loginUrl } }),
         clearBrowserLogin: () => set({ browserLoginRequest: null }),
+        tailorJobRequest: null,
+        openJobAssistant: (id) => set({ tailorJobRequest: id, tailorBatchRequest: null, activeRoute: 'assistant' }),
+        clearTailorJobRequest: () => set({ tailorJobRequest: null }),
+        tailorBatchRequest: null,
+        openJobAssistantBatch: (ids) => set({ tailorBatchRequest: [...new Set(ids)], tailorJobRequest: null, activeRoute: 'assistant' }),
+        clearTailorBatchRequest: () => set({ tailorBatchRequest: null }),
+        tailorBusy: false,
+        setTailorBusy: (busy) => set({ tailorBusy: busy }),
+        workbenchFilters: { hideResidential: false, salaryUnit: 'monthly', salaryMin: null, salaryMax: null, keepUnknownSalary: true, companyMin: null, companyMax: null, keepUnknownCompanySize: true },
+        setWorkbenchFilters: (patch) => set((s) => ({ workbenchFilters: { ...s.workbenchFilters, ...patch } })),
         setTheme: (t) => set({ theme: t }),
         toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
         setRoute: (r) => set({ activeRoute: r }),
@@ -181,7 +203,7 @@ export const useAppStore = create<AppState>()(
       // bridgeStatus / bossLoggedIn / platformLogins / currentAction 是运行时探测结果，不能持久化：
       // 否则上次「已连接 / 正在投递」会被带到下次启动，导致未运行时仍显示旧状态
       partialize: (s) => {
-        const { bridgeStatus: _bridge, bossLoggedIn: _login, platformLogins: _pl, currentAction: _action, browserLoginRequest: _blr, ...rest } = s;
+        const { bridgeStatus: _bridge, bossLoggedIn: _login, platformLogins: _pl, currentAction: _action, browserLoginRequest: _blr, tailorJobRequest: _tjr, tailorBatchRequest: _tbr, tailorBusy: _tb, ...rest } = s;
         return rest;
       },
     }

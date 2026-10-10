@@ -23,6 +23,10 @@ const { ipcRenderer } = require('electron');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
+const { readLiepinImState, hasNewLiepinConversation } = require('./liepin-im.cjs');
+const OFFICE = require('./office-address.cjs');
+const COMPANY = require('./company-size.cjs');
+const { readOfficeAddress } = require('./office-address-reader.cjs');
 // 人类化输入计划（纯函数，零 DOM 依赖 → 单测见 desktop-app/scripts/humanize-regression.mjs）。
 // 只负责「怎么动」，不发事件；真实点击/输入仍走 jc:webview-input 主进程通道。
 const humanize = require('./humanize.cjs');
@@ -199,6 +203,8 @@ function platformExtractJob() {
     company,
     salary,
     location,
+    address: OFFICE.officeAddressFromDocument(document),
+    companySize: COMPANY.companySizeFromDocument(document),
     description,
     jobId,
     ...platformListPage(),
@@ -511,6 +517,8 @@ function applyEmbeddedOverlay(job) {
   const basics = metaJobBasics();
   const kwTitle = titleFromMetaKeywords();
   const out = { ...job };
+  if (!out.address) out.address = OFFICE.officeAddressFromDocument(document);
+  if (!out.companySize) out.companySize = COMPANY.companySizeFromDocument(document);
   if (embedded.company) out.company = embedded.company;
   else { const ct = companyFromTitle(); if (ct) out.company = ct; }
   if (embedded.title || kwTitle) out.title = embedded.title || kwTitle;
@@ -731,7 +739,7 @@ function extractJobFromDom() {
     || '';
   const description = cleanJobDescription(scopeText).slice(0, 1500);
   // 内嵌 _jobInfo 为权威：覆盖 title/company/salary，meta「地点：」覆盖 location，保证与网页一致
-  const job = applyEmbeddedOverlay({ url: location.href, title, company, salary, location, description, welfare: extractWelfareTags(banner || document), publishTime: extractPublishTime('', scopeText) });
+  const job = applyEmbeddedOverlay({ url: window.location.href, title, company, salary, location, address: OFFICE.officeAddressFromDocument(document), description, welfare: extractWelfareTags(banner || document), publishTime: extractPublishTime('', scopeText) });
   // 诊断证据：关键字段全缺时带回「页面里到底有没有数据」，用于区分空壳页（未登录/被拦截）还是选择器不匹配
   if (!job.company && !job.salary && !job.location) {
     job.parseDiag = 'dom|' +
@@ -772,6 +780,8 @@ async function extractJob() {
         company: cleanCompanyName(d.brandName || d.companyName || companyFromTitle() || ''),
         salary: decodeSalaryDigits(method(d.salaryDesc)),
         location: method(d.cityName || d.areaDistrict),
+        address: OFFICE.officeAddressFromPayload(card) || OFFICE.officeAddressFromDocument(document),
+        companySize: COMPANY.companySizeFromPayload(card) || COMPANY.companySizeFromDocument(document),
         description: method(d.jobDesc || d.postDescription),
         jobId: jid,
         encryptUserId: method(d.encryptUserId),
@@ -2621,6 +2631,8 @@ function extractJobFromCardOnly(card) {
     // 随后由 enrichJobDetail() 按平台详情通道覆盖为真实 JD
     // （智联 → JSON 详情接口；猎聘 → 同源详情页 HTML）。
     description: textOf(card).slice(0, 800),
+    address: OFFICE.officeAddressFromText(textOf(card)),
+    companySize: COMPANY.companySizeLabel(textOf(card)),
     // 列表级采集拿不到真实详情 URL 时（智联无 jobdetail 锚点变体且主进程注解未命中），
     // 落空字符串、不回退搜索页 URL：搜索页 URL 会让同批不同岗位折叠成同一链接
     // （入库 dedupe 抽稀 + 队列链接指向错误页面，即「队列卡片的链接不是单个岗位详情」）。
@@ -2779,6 +2791,9 @@ async function enrichJobDetail(job) {
   if (parsed.recruiterTitle) job.recruiterTitle = parsed.recruiterTitle;
   if (parsed.salary) job.salary = parsed.salary;
   if (parsed.location) job.location = parsed.location;
+  if (parsed.address) job.address = parsed.address;
+  if (parsed.companySize) job.companySize = parsed.companySize;
+  if (!job.address) job.address = OFFICE.officeAddressFromText(parsed.description);
   if (parsed.company) job.company = parsed.company;
   if (!jd) { jdFillState.skipped += 1; return false; } // 该岗位本身没写 JD → 保留卡片文本兜底
   jdFillState.filled += 1;
@@ -2916,6 +2931,15 @@ async function visualCollectListOnly(opts = {}) {
 
 
 // ===== IPC 通道注册 =====
+ipcRenderer.on('job-office-address', async (_event, arg) => {
+  const seq = arg?.seq;
+  try {
+    const result = await readOfficeAddress(arg?.job, { platform: PLATFORM,
+      fetchJson: (url) => zpFetch(url, { timeoutMs: 8000 }), fetchSource: fetchDetailSource,
+      parseHtml: (html) => new DOMParser().parseFromString(html, 'text/html') });
+    notify('job-office-address-result', { seq, ...result });
+  } catch (error) { notify('job-office-address-result', { seq, error: String(error?.message || error) }); }
+});
 // BOSS 专属通道（boss-api / start-apply / open-chat）仅在 BOSS 页面注册；
 // 其余平台注册轻量提取（多平台适配）。visual-collect / collect-control 已改为**全平台注册**（见下）。
 if (PLATFORM === 'boss') {
@@ -3109,10 +3133,9 @@ async function platformApply(args = {}) {
         '.job-apply-operate a[data-selector="chat-chat"]',
         '.chat-btn-box button',
       ];
-      const appliedLabels = ['已沟通', '已投递', '聊过了', '已招满', '继续沟通'];
+      const appliedLabels = ['已沟通', '已投递', '聊过了', '已招满', '继续沟通', '继续聊'];
       const readAppliedState = () =>
-        findPlatformAction(appliedSelectors, appliedLabels)
-        || all('a.btn-main, .chat-btn-box button').find((el) => visible(el) && ADAPTERS.labelExactHit(textOf(el), appliedLabels))
+        all(appliedSelectors.join(', ')).find((el) => visible(el) && ADAPTERS.labelExactHit(textOf(el), appliedLabels))
         || null;
       if (readAppliedState()) {
         return fail('skip', { message: '该岗位已沟通/已投递过，跳过（不重复打扰同一 HR）' });
@@ -3153,12 +3176,13 @@ async function platformApply(args = {}) {
         return fail('failed', { error: '未找到「聊一聊」入口（岗位可能已下架/非招聘中/详情页未加载完成）' });
       }
 
+      const imBefore = readLiepinImState(document);
       notify('apply-stage', { stage: 'send_message', label: '平台自动打招呼', platform });
       await clickElement(btn);
 
       // 成功 = IM 会话打开（猎聘用 App 预设招呼语自动发送，无需本机输入）。
-      // 就绪信号以**页面自身事实**为准（真机：`#im-c-entry` 容器 / `.im-ui-chat-modal-container` 弹层 /
-      // `.im-ui-basic-entry` 侧栏入口），旧 `.__im_basic__*` 命名在本站恒不命中，已移除。
+      // #im-c-entry 可能只是无尺寸挂载点；im-ui-basic-entry 是「我的沟通」入口。
+      // 检查可见会话/输入区的点击前后变化，避免漏掉后面的窗口，也不把侧栏入口算成功。
       // 风控容器范围收窄：只在弹层/提示/校验类容器内查风控文案，不扫岗位描述正文。
       const RISK_SCOPE = [
         '[class*="im-ui-chat-modal"]', '[class*="im-ui-basic"]',
@@ -3179,21 +3203,20 @@ async function platformApply(args = {}) {
       };
       const imReady = await waitFor(() => {
         if (riskHit()) return 'risk';
-        // IM 会话真机信号（任一命中即视为已打开）：
-        const modal = $('.im-ui-chat-modal-container');
-        if (modal && visible(modal) && PLATFORM_NORM(textOf(modal)).length > 0) return 'ok';
-        const entry = $('.im-ui-basic-entry, .im-ui-basic-entry-title');
-        if (entry && visible(entry)) return 'ok';
-        // SPA 场景也可能整页跳到 /im/ 路由
-        if (/\/im\b/i.test(location.pathname)) return 'ok';
+        const applied = readAppliedState();
+        if (applied && ADAPTERS.labelExactHit(textOf(applied), ['继续聊', '继续沟通', '已沟通', '已投递', '聊过了'])) return 'ok';
+        if (hasNewLiepinConversation(imBefore, readLiepinImState(document))) return 'ok';
         return null;
       }, 15000, '猎聘 IM 会话窗口');
       if (imReady === 'risk') {
         return fail('risk', { code: 35, message: '点击「聊一聊」后检测到安全验证/风控提示，已暂停，请人工完成' });
       }
       if (!imReady) {
+        const state = readLiepinImState(document);
         return fail('failed', {
-          error: '点击「聊一聊」后 IM 会话未打开（未检测到 im-ui-chat-modal/im-ui-basic-entry，请人工核对页面）',
+          needsReview: true,
+          imDiagnostic: { roots: state.rootsSeen, conversations: state.widgets.length, inaccessibleFrames: state.inaccessibleFrames },
+          error: '点击「聊一聊」后未能确认目标会话，已保留页面并暂停投递，请人工核对聊天窗口及按钮状态',
         });
       }
       return ok({ method: 'dom' });

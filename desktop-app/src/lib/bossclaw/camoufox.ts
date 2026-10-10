@@ -46,6 +46,7 @@ export interface CamoufoxJob {
   company: string;
   salary: string;
   location: string;
+  address?: string;
   experience: string;
   degree: string;
   labels: string[];

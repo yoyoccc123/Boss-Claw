@@ -8,11 +8,11 @@
  * 右栏子模块：内置浏览器（BrowserView 多平台标签 webview，含 BOSS 等平台登录态与岗位详情页）
  */
 import { useEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
-import { Button, Card, Empty, Progress, Tag, Typography, message, Segmented, Tooltip, Space, Select, Alert } from 'antd';
+import { Button, Card, Checkbox, Empty, Progress, Tag, Typography, message, Segmented, Tooltip, Space, Select, Alert, InputNumber } from 'antd';
 import {
   CheckOutlined, ReloadOutlined, EyeOutlined, SearchOutlined,
   StopOutlined, UndoOutlined, ThunderboltOutlined,
-  PauseOutlined, CaretRightOutlined, InfoCircleOutlined,
+  PauseOutlined, CaretRightOutlined, InfoCircleOutlined, FileTextOutlined,
 } from '@ant-design/icons';
 import { useDataStore } from '@/store/useDataStore';
 import { useRuntimeLogsStore, type LogLevel } from '@/store/useRuntimeLogsStore';
@@ -57,6 +57,9 @@ import { claimDelivery, isDeliveryClaimed, releaseDelivery } from '@/lib/bosscla
 import type { JobMeta, PendingItem, TaskRun, TaskStage } from '@/lib/bossclaw/types';
 import { useAutoChatStore } from '@/store/useAutoChatStore';
 import { createAnalysisQueue, type AnalysisQueueStats } from '@/lib/bossclaw/analysisQueue';
+import { assessJobAddress } from '@/lib/bossclaw/addressRisk';
+import { companySizeOfJob } from '@/lib/bossclaw/companySize';
+import { DEFAULT_WORKBENCH_FILTERS, normalizeWorkbenchFilters, filterWorkbenchJobs, invalidSalaryFilter } from '@/lib/bossclaw/workbenchFilters';
 
 const { Text } = Typography;
 
@@ -261,6 +264,15 @@ export default function Workbench() {
   const browserLoginRequest = useAppStore((s) => s.browserLoginRequest);
   const clearBrowserLogin = useAppStore((s) => s.clearBrowserLogin);
   const setRoute = useAppStore((s) => s.setRoute);
+  const openJobAssistant = useAppStore((s) => s.openJobAssistant);
+  const openJobAssistantBatch = useAppStore((s) => s.openJobAssistantBatch);
+  const tailorBusy = useAppStore((s) => s.tailorBusy);
+  const savedWorkbenchFilters = useAppStore((s) => s.workbenchFilters);
+  const setWorkbenchFilters = useAppStore((s) => s.setWorkbenchFilters);
+  const workbenchFilters = useMemo(() => normalizeWorkbenchFilters(savedWorkbenchFilters), [savedWorkbenchFilters]);
+  const [addressScan, setAddressScan] = useState({ running: false, checked: 0, total: 0, found: 0, note: '' });
+  const addressStop = useRef(false);
+  const addressLock = useRef(false);
   const directionPlan = useDataStore((s) => s.directionPlan);
   // 定时任务「采集」请求（调度器置位，常驻本组件消费后清除；携带目标平台）
   const collectRequest = useScheduleStore((s) => s.collectRequest);
@@ -271,6 +283,11 @@ export default function Workbench() {
   const [showIgnored, setShowIgnored] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [jobsExpanded, setJobsExpanded] = useState(false);
+  const [tailorSelection, setTailorSelection] = useState<string[]>([]);
+  useEffect(() => {
+    const known = new Set(filterWorkbenchJobs(pending, workbenchFilters).map((p) => p.id));
+    setTailorSelection((previous) => previous.filter((id) => known.has(id)));
+  }, [pending, workbenchFilters]);
   const webviewApi = useRef<WebviewApi | null>(null);
   // P02：岗位解析请求的去重占位。extractLock 拒绝并发点击；seq token 让超时兜底不会串到新请求。
   const pendingExtract = useRef<{ resolve: (job: JobMeta) => void; seq: number } | null>(null);
@@ -602,6 +619,8 @@ export default function Workbench() {
         && job.title && job.company && job.location && job.salary
         && oldF.title === job.title && oldF.company === job.company && oldF.salary === job.salary && oldF.location === job.location
       ) {
+        if (job.address || job.companySize) updatePending(dup.id, { job: { ...dup.job,
+          address: job.address || dup.job.address, companySize: job.companySize || dup.job.companySize } });
         message.info('该岗位已在队列中');
         addLog('info', '该岗位已在队列中，信息一致，跳过重复加入');
         recomputeStats();
@@ -650,7 +669,7 @@ export default function Workbench() {
         }
         if (oldIncomplete) {
           // 旧卡不全 + 本次解析完整：原地自愈补齐
-          setPending(useDataStore.getState().pending.map((p) => (p.id === dup.id ? { ...p, job, analysis, deliveryGreeting: String(analysis.greeting || p.deliveryGreeting || '').trim() } : p)));
+          setPending(useDataStore.getState().pending.map((p) => (p.id === dup.id ? { ...p, job: { ...job, address: job.address || old.address, companySize: job.companySize || old.companySize, scaleName: job.scaleName || old.scaleName }, analysis, deliveryGreeting: String(analysis.greeting || p.deliveryGreeting || '').trim() } : p)));
           message.success('该岗位已在队列中，已补齐公司/地点/薪资信息');
           addLog('info', `已补齐同链接旧卡信息：${job.title || ''}（原：${old.title || old.company || '未知'}）`);
           recomputeStats();
@@ -658,7 +677,7 @@ export default function Workbench() {
         }
         if (!fieldsSame) {
           // 新旧都完整但字段不一致：以本次详情页权威解析刷新
-          setPending(useDataStore.getState().pending.map((p) => (p.id === dup.id ? { ...p, job, analysis, deliveryGreeting: String(analysis.greeting || p.deliveryGreeting || '').trim() } : p)));
+          setPending(useDataStore.getState().pending.map((p) => (p.id === dup.id ? { ...p, job: { ...job, address: job.address || old.address, companySize: job.companySize || old.companySize, scaleName: job.scaleName || old.scaleName }, analysis, deliveryGreeting: String(analysis.greeting || p.deliveryGreeting || '').trim() } : p)));
           message.info('该岗位已在队列中，已刷新为最新信息');
           addLog('info', `已刷新同链接旧卡为网页权威信息：${job.title || ''}（原：${old.title || old.company || '未知'}）`);
           recomputeStats();
@@ -712,7 +731,7 @@ export default function Workbench() {
   };
 
   const onApproveAll = () => {
-    const waiting = pending.filter((p) => p.status === 'pending');
+    const waiting = ranked.filter((p) => p.status === 'pending');
     if (!waiting.length) { message.info('没有待确认的岗位'); return; }
     // 批量确认走同一口径：直接入队。逐个校验招呼语——无招呼语者**不入队**（保持待确认），
     // 与单个「批准」的「无招呼语则拒绝批准」一致，不做静默兜底。
@@ -745,9 +764,10 @@ export default function Workbench() {
   };
 
   const onRejectAll = () => {
-    const waiting = pending.filter((p) => p.status === 'pending');
+    const waiting = ranked.filter((p) => p.status === 'pending');
     if (!waiting.length) { message.info('没有待确认的岗位'); return; }
-    setPending(pending.map((p) => (p.status === 'pending' ? { ...p, status: 'ignored' as const } : p)));
+    const ids = new Set(waiting.map((p) => p.id));
+    setPending(pending.map((p) => (ids.has(p.id) ? { ...p, status: 'ignored' as const } : p)));
     addLog('info', `已忽略 ${waiting.length} 个岗位`);
     recomputeStats();
   };
@@ -925,17 +945,19 @@ export default function Workbench() {
     // 同岗位判定键：归一化 URL（去 query/hash、小写）与 jobId（平台稳定标识）任一命中即视为同一岗位。
     // 与 store addPendingItem 的去重口径统一，避免同一岗位因 url 带参数/大小写差异而重复入队或重复分析。
     const normUrl = jobUrlKey({ url });
-    if (
-      data.pending.some(
+    const existing = data.pending.find(
         (p) =>
           (normUrl && jobUrlKey(p.job) === normUrl) ||
           (jobId && String(p.job?.jobId || '').trim().toLowerCase() === jobId.toLowerCase()) ||
           // 弱身份软匹配兜底：同一岗位一次采到真实链接、一次落到哈希兜底身份时，精确键不同，
           // 必须按「平台+标题+薪资+公司不冲突」再比一次，否则跨形态重复入队（见 store sameJobSoft）。
           sameJobSoft(job, p.job)
-      )
-    )
+      );
+    if (existing) {
+      if (job.address || job.companySize) data.updatePending(existing.id, { job: { ...existing.job,
+        address: job.address || existing.job.address, companySize: job.companySize || existing.job.companySize } });
       return false;
+    }
     // 本次会话去重：同一岗位无论入库还是被过滤跳过，都不重复 analyze/打日志（采集滚动常重复扫到同一卡片）
     const seenKey = normUrl || jobId.toLowerCase();
     if (seenKey && ingestedSeenRef.current.has(seenKey)) return false;
@@ -1761,6 +1783,8 @@ export default function Workbench() {
     company: j.company,
     salary: decodeSalaryDigits(j.salary),
     location: j.location,
+    address: j.address || '',
+    companySize: j.companySize || '',
     description: j.description,
     url: j.url,
     jobId: j.jobId,
@@ -1984,6 +2008,11 @@ export default function Workbench() {
     const errMsg = res.error || res.message || '投递失败';
     updatePending(candidate.id, { status: 'failed', error: errMsg });
     addLog('error', `投递失败：${nTitle}（${errMsg}）`);
+    if (res.needsReview) {
+      setApplyStage(null); recomputeStats();
+      pauseAssist(errMsg);
+      return; // 保留会话标签，不自动重试或继续下一条。
+    }
     if (res.tabId) webviewApi.current?.closeTab(res.tabId);
     setApplyStage(null); recomputeStats();
     if (useAppStore.getState().autoAssist) {
@@ -2489,24 +2518,73 @@ export default function Workbench() {
 
   const isHiddenStatus = (status: string) => status === 'ignored' || status === 'skipped';
   const rankedAll = useMemo(() => rerankPending(pending, config), [pending, config]);
+  const eligibleRanked = useMemo(() => filterWorkbenchJobs(rankedAll, workbenchFilters), [rankedAll, workbenchFilters]);
   // 「全部」只展示**尚未投递**的岗位：已投递（sent）不混入总览，避免队列越用越长。
   // 已投递数据完整保留在 pending 中，仍可通过「已投递」标签单独查看（见下方 ranked 分支）。
-  const activeAll = useMemo(() => rankedAll.filter((p) => p.status !== 'sent'), [rankedAll]);
+  const activeAll = useMemo(() => eligibleRanked.filter((p) => p.status !== 'sent'), [eligibleRanked]);
   // 「全部」走 activeAll（排除 sent）；选具体标签时走全量 rankedAll，保证「已投递」标签能正常筛出内容。
   const ranked = useMemo(() => {
-    const base = filter === 'all' ? activeAll : rankedAll.filter((p) => p.status === filter);
+    const base = filter === 'all' ? activeAll : eligibleRanked.filter((p) => p.status === filter);
     return showIgnored ? base : base.filter((p) => !isHiddenStatus(p.status));
-  }, [activeAll, rankedAll, filter, showIgnored]);
+  }, [activeAll, eligibleRanked, filter, showIgnored]);
+
+  const selectedTailorJobs = useMemo(() => {
+    const selected = new Set(tailorSelection);
+    return eligibleRanked.filter((p) => selected.has(p.id));
+  }, [eligibleRanked, tailorSelection]);
+  const selectedInFilter = ranked.filter((p) => tailorSelection.includes(p.id)).length;
+  const selectTailorFilter = (checked: boolean) => {
+    const current = new Set(ranked.map((p) => p.id));
+    setTailorSelection((previous) => checked
+      ? [...new Set([...previous, ...current])]
+      : previous.filter((id) => !current.has(id)));
+  };
 
   // 标签数字与各自列表同源：全部 = 未投递总数；其余 = 对应状态总数（含已投递）
   const visibleAllCount = showIgnored ? activeAll.length : activeAll.filter((p) => !isHiddenStatus(p.status)).length;
+  const suspiciousAddressCount = rankedAll.filter((p) => assessJobAddress(p.job).suspicious).length;
+  // 隐藏未知人数后仍可补齐，让新读到的公司重新参与筛选。
+  const missingAddressJobs = rankedAll.filter((p) => (filter === 'all' ? p.status !== 'sent' : p.status === filter) &&
+    (showIgnored || !isHiddenStatus(p.status)) && (!assessJobAddress(p.job).address || !companySizeOfJob(p.job)));
+  const fillOfficeAddresses = async () => {
+    if (addressLock.current || tailorBusy || running) return;
+    const api = webviewApi.current;
+    const ids = missingAddressJobs.map((p) => p.id);
+    if (!api || !ids.length) return;
+    addressLock.current = true; addressStop.current = false;
+    let checked = 0, found = 0, streak = 0, note = '';
+    setAddressScan({ running: true, checked, found, total: ids.length, note });
+    try {
+      for (const id of ids) {
+        if (addressStop.current) { note = '已停止'; break; }
+        const item = useDataStore.getState().pending.find((p) => p.id === id);
+        if (!item) continue;
+        const platform = item.job.platform || 'boss';
+        const tab = api.findTabByPlatform(platform);
+        if (!tab || !api.isPreloadReady(tab)) { checked++; note = `请先在右侧打开并登录${platformLabel(platform)}，再补齐地址`; continue; }
+        const result = await api.fetchJobOfficeAddress(item.job, tab);
+        checked++;
+        if (result.address || result.companySize) {
+          const fresh = useDataStore.getState().pending.find((p) => p.id === id);
+          if (fresh) { updatePending(id, { job: { ...fresh.job, ...(result.address ? { address: result.address } : {}), ...(result.companySize ? { companySize: result.companySize } : {}) } }); found++; }
+        }
+        streak = result.error ? streak + 1 : 0;
+        if (result.stop || streak >= 3) { note = result.error || '连续请求失败，请稍后再试'; break; }
+        setAddressScan({ running: true, checked, found, total: ids.length, note });
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      }
+      if (addressStop.current) note = '已停止';
+      if (!note) note = `补齐 ${found} 个，其余 ${checked - found} 个未提供可读取的地址或人数`;
+    } catch (error) { note = String(error); }
+    finally { addressLock.current = false; setAddressScan({ running: false, checked, found, total: ids.length, note }); }
+  };
   const WB_FILTERS = [
     { key: 'all', label: `全部 ${visibleAllCount}` },
-    { key: 'pending', label: `待确认 ${pending.filter((p) => p.status === 'pending').length}` },
-    { key: 'approved', label: `待投递 ${pending.filter((p) => p.status === 'approved').length}` },
-    { key: 'approved_queue', label: `投递中 ${pending.filter((p) => p.status === 'approved_queue').length}` },
-    { key: 'sent', label: `已投递 ${pending.filter((p) => p.status === 'sent').length}` },
-    { key: 'failed', label: `失败 ${pending.filter((p) => p.status === 'failed').length}` },
+    { key: 'pending', label: `待确认 ${eligibleRanked.filter((p) => p.status === 'pending').length}` },
+    { key: 'approved', label: `待投递 ${eligibleRanked.filter((p) => p.status === 'approved').length}` },
+    { key: 'approved_queue', label: `投递中 ${eligibleRanked.filter((p) => p.status === 'approved_queue').length}` },
+    { key: 'sent', label: `已投递 ${eligibleRanked.filter((p) => p.status === 'sent').length}` },
+    { key: 'failed', label: `失败 ${eligibleRanked.filter((p) => p.status === 'failed').length}` },
   ];
 
   // ===== 岗位福利标签（welfareTag）=====
@@ -2835,6 +2913,43 @@ export default function Workbench() {
 
         {/* 子模块：岗位筛选区（Segmented 过滤器 + 显示已忽略/跳过） */}
         <div className="wb-filter-section">
+          <div className="wb-job-criteria">
+            <Checkbox checked={workbenchFilters.hideResidential} disabled={tailorBusy || addressScan.running}
+              onChange={(e) => setWorkbenchFilters({ hideResidential: e.target.checked })}>隐藏疑似城中村 / 住宅地址（{suspiciousAddressCount}）</Checkbox>
+            <div className="wb-salary-criteria">
+              <Select aria-label="薪水单位" size="small" value={workbenchFilters.salaryUnit} disabled={tailorBusy || addressScan.running}
+                options={[{ value: 'monthly', label: '月薪（元）' }, { value: 'daily', label: '日薪（元）' }]}
+                onChange={(salaryUnit) => setWorkbenchFilters({ salaryUnit })} />
+              <InputNumber aria-label="最低薪水" size="small" min={0} placeholder="最低" value={workbenchFilters.salaryMin}
+                disabled={tailorBusy || addressScan.running} onChange={(salaryMin) => setWorkbenchFilters({ salaryMin })} />
+              <span>至</span>
+              <InputNumber aria-label="最高薪水" size="small" min={0} placeholder="最高" value={workbenchFilters.salaryMax}
+                disabled={tailorBusy || addressScan.running} onChange={(salaryMax) => setWorkbenchFilters({ salaryMax })} />
+            </div>
+            <Checkbox checked={workbenchFilters.keepUnknownSalary} disabled={tailorBusy || addressScan.running}
+              onChange={(e) => setWorkbenchFilters({ keepUnknownSalary: e.target.checked })}>保留面议 / 未知薪水</Checkbox>
+            <div className="wb-salary-criteria">
+              <Text>公司人数</Text>
+              <InputNumber aria-label="最少公司人数" size="small" min={0} precision={0} placeholder="最少" value={workbenchFilters.companyMin}
+                disabled={tailorBusy || addressScan.running} onChange={(companyMin) => setWorkbenchFilters({ companyMin })} />
+              <span>至</span>
+              <InputNumber aria-label="最多公司人数" size="small" min={0} precision={0} placeholder="最多" value={workbenchFilters.companyMax}
+                disabled={tailorBusy || addressScan.running} onChange={(companyMax) => setWorkbenchFilters({ companyMax })} />
+              <span>人</span>
+            </div>
+            <Checkbox checked={workbenchFilters.keepUnknownCompanySize} disabled={tailorBusy || addressScan.running}
+              onChange={(e) => setWorkbenchFilters({ keepUnknownCompanySize: e.target.checked })}>保留人数未知的公司</Checkbox>
+            <Text type="secondary" style={{ fontSize: 12 }}>薪水、人数均按公开区间下限筛选；日薪按岗位工作制度折算。筛选同时用于批量定制。</Text>
+            {workbenchFilters.companyMin != null && workbenchFilters.companyMax != null && workbenchFilters.companyMax < workbenchFilters.companyMin && <Alert type="warning" showIcon message="最多人数不能低于最少人数" />}
+            {invalidSalaryFilter(workbenchFilters) && <Alert type="warning" showIcon message="最高薪水不能低于最低薪水" />}
+            <Space wrap>
+              <Button size="small" disabled={tailorBusy || running || !missingAddressJobs.length || addressScan.running}
+                onClick={fillOfficeAddresses}>补齐地址 / 人数（{missingAddressJobs.length}）</Button>
+              {addressScan.running && <Button size="small" onClick={() => { addressStop.current = true; }}>当前完成后停止</Button>}
+              <Button size="small" type="text" disabled={tailorBusy || addressScan.running} onClick={() => setWorkbenchFilters(DEFAULT_WORKBENCH_FILTERS)}>重置筛选</Button>
+            </Space>
+            {(addressScan.running || addressScan.note) && <Text type="secondary" style={{ fontSize: 12 }}>{addressScan.running ? `补齐中 ${addressScan.checked}/${addressScan.total}，已找到 ${addressScan.found} 个` : addressScan.note}</Text>}
+          </div>
           <Segmented
             block
             size="small"
@@ -2855,10 +2970,24 @@ export default function Workbench() {
               </span>
             </button>
             <div className="wb-filter-toolbar__right">
+              <Button className="wb-tailor-batch-button" size="small" icon={<FileTextOutlined />} disabled={!selectedTailorJobs.length || tailorBusy}
+                onClick={() => openJobAssistantBatch(selectedTailorJobs.map((p) => p.id))}>
+                批量定制（{selectedTailorJobs.length}）
+              </Button>
               <Button size="small" type="primary" icon={<ThunderboltOutlined />} onClick={onOneClickDeliver} disabled={!deliverableCount || running} title={running ? '投递引擎已在运行' : '把队列里已确认的岗位立刻开始投递（与右侧「开始投递」同一引擎开关）'}>一键投递</Button>
               <Button size="small" icon={<CheckOutlined />} onClick={onApproveAll}>批量确认</Button>
               <Button size="small" onClick={onRejectAll}>全部忽略</Button>
             </div>
+          </div>
+          <div className="wb-tailor-selection">
+            <Checkbox checked={ranked.length > 0 && selectedInFilter === ranked.length}
+              indeterminate={selectedInFilter > 0 && selectedInFilter < ranked.length}
+              disabled={!ranked.length} onChange={(e) => selectTailorFilter(e.target.checked)}>
+              全选当前筛选结果（{ranked.length}）
+            </Checkbox>
+            <Text type="secondary">已选 {selectedTailorJobs.length} 个{selectedTailorJobs.length > selectedInFilter ? `，其中 ${selectedTailorJobs.length - selectedInFilter} 个在其他筛选中` : ''}</Text>
+            {selectedTailorJobs.length > 0 && <Button size="small" type="text" onClick={() => setTailorSelection([])}>清空选择</Button>}
+            {tailorBusy && <Button size="small" type="link" onClick={() => setRoute('assistant')}>查看定制进度</Button>}
           </div>
         </div>
         <div className="wb-sort-hint">
@@ -2882,6 +3011,7 @@ export default function Workbench() {
                 // 元信息行只展示真实解析到的「公司 · 地点 · 薪资」；缺字段时整行不渲染，绝不显示占位/裸链接占位，
                 // 投递/招呼语依赖这些真实字段（见 overlay 权威解析），缺失即视为旧卡，需重新「加入任务」触发自愈补齐。
                 const metaLine = formatMetaLine(p.job?.company, p.job?.location, p.job?.salary);
+                const office = assessJobAddress(p.job);
                 return (
                   <div key={p.id} className={'job-card ' + jobCardStatus(p) + (p.id === activeId ? ' is-active' : '')}>
                     <div className="job-header" role="button" tabIndex={0} aria-expanded={isExpanded}
@@ -2889,6 +3019,12 @@ export default function Workbench() {
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpanded(p.id); } }}>
                       <div className="job-header-main">
                         <div className="job-title-row">
+                          <span className="job-tailor-checkbox" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                            <Checkbox aria-label={`选择定制 ${cleanTitle(p.job?.title, p.job?.salary)} ${p.job?.company || ''}`}
+                              checked={tailorSelection.includes(p.id)}
+                              onChange={(e) => setTailorSelection((previous) => e.target.checked
+                                ? [...new Set([...previous, p.id])] : previous.filter((id) => id !== p.id))} />
+                          </span>
                           <div className="job-title">
                             <PlatformChip platform={p.job?.platform} compact />
                             {cleanTitle(p.job?.title, p.job?.salary)}
@@ -2911,6 +3047,11 @@ export default function Workbench() {
                             )}
                           </div>
                         )}
+                        <div className="job-office-address">
+                          <Tag>公司人数：{companySizeOfJob(p.job)?.label || '未知'}</Tag>
+                          {office.suspicious && <Tooltip title={office.reasons.join('；')}><Tag color="orange">疑似城中村 / 住宅</Tag></Tooltip>}
+                          <span title={office.address}>{office.address ? `办公地址：${office.address}` : '办公地址待补齐'}</span>
+                        </div>
                         <div className="job-meta job-meta--wb">
                           {/* 首个标签 = AI 四种匹配度（档位：推荐/匹配/谨慎/不推荐，由 AI 四层整体裁决生成）；
                               旧数据缺 fitLevel 时降级为决策徽标（推荐/谨慎/不推荐），避免两枚「推荐」重复展示 */}
@@ -2967,6 +3108,7 @@ export default function Workbench() {
                           </div>
                           <div className="job-actions-left">
                             <Button size="small" icon={<EyeOutlined />} onClick={() => p.job?.url && webviewApi.current?.openInNewTab(p.job.url, p.job?.title)}>打开</Button>
+                            <Button size="small" icon={<FileTextOutlined />} onClick={() => openJobAssistant(p.id)}>定制简历</Button>
                             <Button size="small" onClick={() => onIgnore(p.id)}>忽略</Button>
                           </div>
                         </>
@@ -2981,6 +3123,7 @@ export default function Workbench() {
                           </div>
                           <div className="job-actions-left">
                             <Button size="small" icon={<EyeOutlined />} onClick={() => p.job?.url && webviewApi.current?.openInNewTab(p.job.url, p.job?.title)}>打开</Button>
+                            <Button size="small" icon={<FileTextOutlined />} onClick={() => openJobAssistant(p.id)}>定制简历</Button>
                             <Button size="small" onClick={() => onIgnore(p.id)}>忽略</Button>
                           </div>
                         </>
@@ -2999,6 +3142,7 @@ export default function Workbench() {
                           </div>
                           <div className="job-actions-right">
                             <Button size="small" icon={<EyeOutlined />} onClick={() => p.job?.url && webviewApi.current?.openInNewTab(p.job.url, p.job?.title)}>打开</Button>
+                            <Button size="small" icon={<FileTextOutlined />} onClick={() => openJobAssistant(p.id)}>定制简历</Button>
                             <Button size="small" onClick={() => onIgnore(p.id)} disabled={p.status === 'sent'}>忽略</Button>
                             <Button size="small" onClick={() => onSkip(p.id)} disabled={p.status === 'sent'}>跳过</Button>
                           </div>
