@@ -235,7 +235,7 @@ export default function JobAssistant() {
   };
 
   // ===== 经历补充材料（简历里没写、但本人真实具备的经历文件）=====
-  // 口径：只记文件绝对路径（会话内存态，不持久化）；正文**每次调用 AI 前现读磁盘并重新解析**，
+  // 文件引用持久保存；正文每次调用 AI 前现读磁盘并重新解析。
   // 所以用户在外部改了素材文件即时生效，应用内不保存任何素材内容副本。
   const materials = useDataStore(useShallow((s) => s.experienceMaterials));
   const addExperienceMaterial = useDataStore((s) => s.addExperienceMaterial);
@@ -548,7 +548,7 @@ export default function JobAssistant() {
         config.model,
         useDataStore.getState().greetingPrompt || undefined,
         extraText || undefined,
-        { supplements, previousResult: tailor || undefined }
+        { supplements, previousResult: tailor || undefined, writingPreferences: useDataStore.getState().resumeWritingPreferences }
       );
       // 迭代失败保留上一版和待提交文本，用户可以直接重试。
       if (tailor && r.method === 'local') {
@@ -599,7 +599,7 @@ export default function JobAssistant() {
       const extraMaterials = await resolveMaterialsText();
       return await writeTailorPointSupplement({
         point, text, job: { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim() },
-        resumeText, profile, model: config.model, extraMaterials, supplements: tailor?.supplements,
+        resumeText, profile, model: config.model, extraMaterials, supplements: tailor?.supplements, writingPreferences: useDataStore.getState().resumeWritingPreferences,
       });
     } finally {
       generationLock.current = false;
@@ -619,7 +619,7 @@ export default function JobAssistant() {
     try {
       await runTailorBatch(batchItems, async (item) => {
         const extra = await resolveMaterialsText();
-        return tailorForJob(item.job, resumeText, profile, config.model, useDataStore.getState().greetingPrompt || undefined, extra || undefined);
+        return tailorForJob(item.job, resumeText, profile, config.model, useDataStore.getState().greetingPrompt || undefined, extra || undefined, { writingPreferences: useDataStore.getState().resumeWritingPreferences });
       }, {
         shouldStop: () => batchStop.current,
         shouldSkip: (item) => batchJobIncluded(item) ? undefined : '已被工作台筛选排除或移除',

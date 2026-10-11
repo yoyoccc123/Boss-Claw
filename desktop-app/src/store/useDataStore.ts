@@ -15,6 +15,7 @@ import type {
 } from '@/lib/bossclaw/types';
 import { DEFAULT_STATS, DEFAULT_PROFILE, DEFAULT_PROFILE_DRAFT, DEFAULT_DIRECTION_PLAN, today } from '@/lib/bossclaw/defaults';
 import { cleanCompanyName } from '@/lib/bossclaw/jobDisplay';
+import type { ResumeWritingPreferences } from '@/lib/bossclaw/resumeWriting';
 
 /** 达标岗位本地缓存上限：最多保留最近 N 天（按日期分组）的达标岗位数据，超出自动清理更早几天的数据，防止 localStorage 撑爆。
  *  实测按每天约 460 个达标岗位、叠加图片简历+导入文件后，保留 7 天（≈3200 条）仍能把整 store 稳定在 5MB 配额约 60% 以内；90 天会随累计溢出。 */
@@ -35,7 +36,7 @@ function pruneQualifiedCache(records: Record<string, QualifiedJobExport[]>, maxD
   return pruned;
 }
 
-/** 经历补充材料（用户导入的补充经历**文件引用**，会话内存态，不持久化） */
+/** 经历补充材料（持久保存文件引用，正文每次调用现读）。 */
 export interface ExperienceMaterial {
   id: string;
   /** 来源文件名（展示用） */
@@ -48,8 +49,9 @@ export interface ExperienceMaterial {
 interface DataState {
   resumeText: string;
   resumeFileName: string;
+  resumeWritingPreferences: ResumeWritingPreferences;
   /**
-   * 经历补充材料（**会话内存态，不持久化**）：用户导入的补充经历文件仅记绝对路径，
+   * 经历补充材料（持久文件引用）：用户导入的补充经历文件仅记绝对路径，
    * 正文在每次调用 AI 前由主进程从磁盘现读并重新解析（外部改了文件即时生效，应用内不存内容副本）。
    * 口径：**仅用于定制简历链路**（定制简历内容与 JD 要点判定），既不改动 resumeText，也不参与
    * 职业画像生成与工作台评分口径。
@@ -75,6 +77,7 @@ interface DataState {
   qualifiedExports: Record<string, QualifiedJobExport[]>;
 
   setResumeText: (text: string, fileName?: string) => void;
+  setResumeWritingPreferences: (preferences: ResumeWritingPreferences) => void;
   /** 追加一条经历补充材料（只记文件路径，正文每次调用现读） */
   addExperienceMaterial: (item: { name: string; path: string; id?: string }) => void;
   removeExperienceMaterial: (id: string) => void;
@@ -111,6 +114,7 @@ export const useDataStore = create<DataState>()(
     (set, get) => ({
       resumeText: '',
       resumeFileName: '',
+      resumeWritingPreferences: {},
       experienceMaterials: [],
       resumeImage: null,
       imageResumes: [],
@@ -138,6 +142,7 @@ export const useDataStore = create<DataState>()(
           };
         }),
       setResumeImage: (dataUrl) => set({ resumeImage: dataUrl }),
+      setResumeWritingPreferences: (preferences) => set({ resumeWritingPreferences: { ...preferences } }),
       addExperienceMaterial: (item) =>
         set((s) => {
           const path = String(item.path || '').trim();
@@ -273,9 +278,8 @@ export const useDataStore = create<DataState>()(
         return s;
       },
       partialize: (s) => {
-        // experienceMaterials 是「经历补充文件」的会话态引用：不持久化（正文每次调用现读磁盘），
-        // 重启后需用户重新选择，避免应用内长期留存素材内容副本。
-        const { resumeImage, experienceMaterials: _materials, ...rest } = s;
+        // Persist references and preferences; source file content is still read afresh.
+        const { resumeImage, ...rest } = s;
         return rest as DataState;
       },
     }

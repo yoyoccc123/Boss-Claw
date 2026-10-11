@@ -63,7 +63,7 @@ try {
   const personal = buildResumeHtml(data);
   assert.ok(personal.includes('class="tpl-personal"'));
   assert.ok(personal.includes('font-size:12pt'));
-  assert.ok(personal.includes('flex:1.5'));
+  assert.ok(personal.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
   assert.ok(personal.includes('重点项目经历'));
   assert.ok(personal.includes('专业技能'), '个人模板保留专业技能模块标题');
   assert.ok(buildResumeHtml(data, 'unknown').includes('class="tpl-personal"'));

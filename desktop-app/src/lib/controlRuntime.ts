@@ -409,7 +409,9 @@ const handlers: Record<string, Handler> = {
       data.resumeText,
       data.profile,
       cfg.model,
-      greetingInstructions !== undefined ? String(greetingInstructions) : undefined
+      greetingInstructions !== undefined ? String(greetingInstructions) : undefined,
+      undefined,
+      { writingPreferences: data.resumeWritingPreferences }
     );
     return { applied: true, message: 'AI 定制简历/求职信完成', next: out };
   },
@@ -826,7 +828,7 @@ const handlers: Record<string, Handler> = {
     if (!job || typeof job !== 'object') return { applied: false, message: '缺少岗位对象 job（含 title/company/description 等）' };
     const cfg = useSettingsStore.getState().config;
     const data = useDataStore.getState();
-    const out = await tailorForJob(job as JobMeta, data.resumeText, data.profile, cfg.model, data.greetingPrompt || undefined);
+    const out = await tailorForJob(job as JobMeta, data.resumeText, data.profile, cfg.model, data.greetingPrompt || undefined, undefined, { writingPreferences: data.resumeWritingPreferences });
     const save = String(saveTo || 'none');
     if (save === 'greetings' && out.coverLetter?.trim()) {
       data.setGreetings([...data.greetings, out.coverLetter.trim()]);
