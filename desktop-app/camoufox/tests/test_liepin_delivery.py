@@ -28,6 +28,8 @@ class Locator:
         if self.page.input_fail:
             raise RuntimeError('offline input failure')
         self.page.state['editorText'] = text
+        if self.page.after_input:
+            self.page.state.update(self.page.after_input)
 
     def click(self, **_kwargs):
         if self.action == 'entry':
@@ -51,6 +53,7 @@ class Page:
                           defaultOutgoing=0, nonDefaultOutgoing=0, incoming=0, sendReady=True)
         self.writes = self.sends = self.entries = 0
         self.input_fail = self.no_bubble = self.retain_editor = self.changed = False
+        self.after_input = None
 
     def evaluate(self, _script, args=None):
         if args and args.get('phase') == 'before':
@@ -100,6 +103,7 @@ class LiepinDeliveryRegression(unittest.TestCase):
         self.page.state['nonDefaultOutgoing'] = 1
         result = self.finish()
         self.assertEqual(result['code'], 701)
+        self.assertIn('默认句以外的本人消息', result['message'])
         self.assertFalse(result['sent'])
         self.assertEqual((self.page.writes, self.page.sends), (0, 0))
 
@@ -111,13 +115,34 @@ class LiepinDeliveryRegression(unittest.TestCase):
 
     def test_workbench_greeting_already_sent_is_not_repeated(self):
         self.page.state.update(matching=1, outgoing=1, nonDefaultOutgoing=1)
-        self.assertEqual(self.finish()['code'], 701)
+        result = self.finish()
+        self.assertEqual(result['code'], 701)
+        self.assertIn('与当前工作台文案相同', result['message'])
         self.assertEqual((self.page.writes, self.page.sends), (0, 0))
 
     def test_real_reply_with_default_message_is_existing_conversation(self):
         self.page.state.update(outgoing=1, defaultOutgoing=1, incoming=1)
-        self.assertEqual(self.finish()['code'], 701)
+        result = self.finish()
+        self.assertEqual(result['code'], 701)
+        self.assertIn('已有招聘方回复', result['message'])
         self.assertEqual((self.page.writes, self.page.sends), (0, 0))
+
+    def test_hr_reply_during_fill_preserves_draft_without_sending(self):
+        self.page.after_input = {'incoming': 1}
+        result = self.finish()
+        self.assertTrue(result['needsReview'])
+        self.assertEqual((self.page.writes, self.page.sends), (1, 0))
+        self.assertEqual(self.page.state['editorText'], GREETING)
+
+    def test_current_message_appears_during_fill_is_not_repeated(self):
+        self.page.after_input = {'matching': 1}
+        self.assertTrue(self.finish()['needsReview'])
+        self.assertEqual((self.page.writes, self.page.sends), (1, 0))
+
+    def test_default_appears_during_fill_still_sends_workbench_text(self):
+        self.page.after_input = {'outgoing': 1, 'defaultOutgoing': 1}
+        self.assertTrue(self.finish()['greetingConfirmed'])
+        self.assertEqual((self.page.writes, self.page.sends), (1, 1))
 
     def test_existing_draft_is_preserved(self):
         self.page.state['editorText'] = '本人尚未提交的草稿'

@@ -87,9 +87,10 @@ function normalizeLiepinText(text) {
   return String(text || '').replace(/[\u200b\u200c\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-// 用户实际页面中的猎聘默认句；只认完整模板，不把“您好/感兴趣”等泛化文案当默认句。
+// 用户实际页面中的完整默认模板，职位名称后不一定另带“岗位”二字。
+// 仍要求固定开头与结尾，不把普通求职或实际沟通文案当作平台默认句。
 function isLiepinDefaultGreeting(text) {
-  return /^您好[！!，,。]?\s*我对贵公司发布的.{1,240}岗位很感兴趣[，,。]\s*期待进一步了解[。.!！]?$/.test(normalizeLiepinText(text));
+  return /^您好[！!，,。]?\s*我对贵公司发布的.{1,240}很感兴趣[，,。]\s*期待进一步了解[。.!！]?$/.test(normalizeLiepinText(text));
 }
 
 /** 只在选中的会话里定位发送和消息；输入框、草稿、其他窗口与页面正文都不能证明已发送。 */

@@ -3233,9 +3233,9 @@ async function platformApplyOnce(args = {}) {
       const target = imReady;
       const currentTarget = () => readLiepinImState(document).widgets.find((widget) => widget.element === target.element && widget.heading === target.heading && widget.editor);
       const beforeSend = readLiepinDeliveryState(target, safeGreeting);
-      if (beforeSend.matching.length || beforeSend.nonDefaultOutgoing.length || beforeSend.incoming.length) {
-        return fail('skip', { message: '目标会话已有岗位招呼语或实际沟通消息，已跳过重复发送' });
-      }
+      if (beforeSend.matching.length) return fail('skip', { message: '目标会话已发送与当前工作台文案相同的消息，已跳过重复发送' });
+      if (beforeSend.incoming.length) return fail('skip', { message: '目标会话已有招聘方回复，请在聊天中继续沟通，已跳过首次招呼语' });
+      if (beforeSend.nonDefaultOutgoing.length) return fail('skip', { message: '目标会话已有平台默认句以外的本人消息，已跳过重复发送' });
       if (beforeSend.editorText) {
         return fail('failed', { needsReview: true, error: '猎聘输入框已有未发送草稿，已保留，请人工核对后发送' });
       }
@@ -3266,6 +3266,9 @@ async function platformApplyOnce(args = {}) {
       }, 5000, '猎聘招呼语和发送按钮就绪');
       if (written === 'risk') return fail('risk', { code: 35, message: '猎聘输入后出现安全验证，已暂停' });
       if (!written || written === 'changed') return fail('failed', { needsReview: true, error: '猎聘输入文字或发送按钮未就绪，已保留草稿，请人工核对' });
+      if (written.matching.length || written.incoming.length || written.nonDefaultOutgoing.length) {
+        return fail('failed', { needsReview: true, error: '填写期间会话出现当前文案或实际沟通消息，已保留草稿，请人工核对' });
+      }
       const messageBefore = new Set(written.matching);
       notify('apply-stage', { stage: 'send_message', label: '发送猎聘招呼语', platform });
       await clickElement(written.sendButton);

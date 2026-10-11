@@ -30,6 +30,7 @@ const injected = [
     writtenWidget=readLiepinImState(document).widgets.find(w=>w.editor && (w.editor.ownerDocument.activeElement===w.editor || w.editor.getRootNode().activeElement===w.editor));
     if(!writtenWidget) return {ok:false}; const input=writtenWidget.editor;
     if('value' in input) input.value=value; else input.textContent=value;
+    if(test.afterInput) eval(test.afterInput);
     return {ok:true};
    };
    const clickElement=async(el)=>{
@@ -50,6 +51,10 @@ const injected = [
 
 const greeting = '您好，我对该岗位很感兴趣，具备相关项目经验，希望进一步沟通。';
 const defaultGreeting = '您好！我对贵公司发布的AI开发工程师（AI应用方向）（TEST001）岗位很感兴趣，期待进一步了解。';
+const reportedDefaultGreeting = '您好！我对贵公司发布的  Python后端软件开发实习生 【 深圳-南山区 】很感兴趣，期待进一步了解。';
+assert.equal(IM.isLiepinDefaultGreeting(reportedDefaultGreeting), true, '用户报告的默认句不含额外“岗位”二字');
+assert.equal(IM.isLiepinDefaultGreeting(defaultGreeting), true, '保留原默认模板兼容');
+for (const actual of [greeting, '您好，我已确认面试时间，谢谢。', reportedDefaultGreeting + '我已确认面试时间。']) assert.equal(IM.isLiepinDefaultGreeting(actual), false, '普通文案/实际沟通不能视为平台默认句');
 const modal = '<div class="im-ui-chat-modal-container"><div class="chat-header">招聘者甲</div><textarea placeholder="请输入消息"></textarea><button>发送</button></div>';
 const officialMessage = (message, direction = 'send', extra = '') => `<div class="im-ui-message-item"><div class="im-ui-message-item-body im-ui-message-item-${direction}"><div class="userAvatar">头像</div><div class="im-ui-message-item-content-wrap"><div class="im-ui-message-item-normal-message-wrapper"><div><p>${message}</p></div><div class="im-ui-message-item-extra-info"><span class="im-ui-message-item-opposite-readed">未读</span>${extra}</div></div></div></div></div>`;
 const mount = '<div id="im-c-entry" style="width:0;height:0"><textarea style="position:absolute;top:60px;left:20px" placeholder="请输入消息"></textarea><button style="position:absolute;top:120px;left:20px">发送</button></div>';
@@ -110,6 +115,15 @@ const tests = [
   { name: '默认句不遮蔽未发送草稿', click: append(modal.replace('</textarea>', `已有待发草稿</textarea>${officialMessage(defaultGreeting)}`)), stage: 'failed', review: true, sends: 0, writes: 0 },
   { name: '默认句不替代新增文案的发送确认', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}`)), noBubble: true, stage: 'failed', review: true },
   { name: '普通您好文案不被当作平台默认句', click: append(modal.replace('</textarea>', `</textarea>${officialMessage('您好，我做过检索系统项目，希望沟通具体工作内容。')}`)), stage: 'skip', sends: 0, writes: 0 },
+  { name: '用户报告的默认句没有岗位二字仍发送工作台文案', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(reportedDefaultGreeting)}`)), stage: 'success' },
+  { name: '继续聊含无岗位二字的默认句仍发送当前文案', label: '继续聊', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(reportedDefaultGreeting)}`)), stage: 'success' },
+  { name: '用户默认句加已发送的当前文案仍跳过', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(reportedDefaultGreeting)}${officialMessage(greeting)}`)), stage: 'skip', sends: 0, writes: 0, messageIncludes: '与当前工作台文案相同' },
+  { name: '用户默认句加HR回复仍跳过首次招呼', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(reportedDefaultGreeting)}${officialMessage('请问什么时候可以到岗？', 'receive')}`)), stage: 'skip', sends: 0, writes: 0, messageIncludes: '已有招聘方回复' },
+  { name: '用户默认句加实际面试沟通仍跳过', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(reportedDefaultGreeting)}${officialMessage('我已确认面试时间，谢谢。')}`)), stage: 'skip', sends: 0, writes: 0, messageIncludes: '默认句以外的本人消息' },
+  { name: '当前文案就是平台默认句时不重复发同文', greeting: reportedDefaultGreeting, click: append(modal.replace('</textarea>', `</textarea>${officialMessage(reportedDefaultGreeting)}`)), stage: 'skip', sends: 0, writes: 0 },
+  { name: '填写期间收到HR回复保留草稿不发送', click: append(modal), afterInput: `writtenWidget.element.insertAdjacentHTML('beforeend',${JSON.stringify(officialMessage('请问什么时候可以到岗？', 'receive'))});`, stage: 'failed', review: true, sends: 0 },
+  { name: '填写期间当前文案已出现时不重复发', click: append(modal), afterInput: `writtenWidget.element.insertAdjacentHTML('beforeend',${JSON.stringify(officialMessage(greeting))});`, stage: 'failed', review: true, sends: 0 },
+  { name: '填写期间出现平台默认句仍发送真实文案', click: append(modal), afterInput: `writtenWidget.element.insertAdjacentHTML('beforeend',${JSON.stringify(officialMessage(reportedDefaultGreeting))});`, stage: 'success' },
 ];
 const sharedTests = [
   { name: '共享快照只标记新会话', script: `${append(modal)}snapshotLiepinDelivery(document,{phase:'before'});const old=document.querySelector('textarea');const unchanged=snapshotLiepinDelivery(document);${append(modal.replace('招聘者甲','招聘者乙'))}const target=snapshotLiepinDelivery(document);return !unchanged.ready&&target.ready&&old.getAttribute('data-bossclaw-liepin-editor')==='previous'&&document.querySelectorAll('[data-bossclaw-liepin-editor="active"]').length===1&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===1;` },
@@ -117,6 +131,7 @@ const sharedTests = [
   { name: '共享快照遇到多个新会话不猜目标', script: `${append(modal+modal.replace('招聘者甲','招聘者乙'))}return !snapshotLiepinDelivery(document).ready&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===0;` },
   { name: '共享快照只认可本人完整文字气泡', script: `${append(modal)}const root=document.querySelector('.im-ui-chat-modal-container');root.insertAdjacentHTML('beforeend','<div class="message-left">'+greeting+'</div><div class="message-right">'+greeting+'</div>');const state=snapshotLiepinDelivery(document,{greeting});return state.matching===1&&state.outgoing===1;` },
   { name: '共享快照区分默认句和实际沟通', script: `${append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}`))}const defaults=snapshotLiepinDelivery(document,{greeting});${append('')}document.querySelector('.im-ui-chat-modal-container').insertAdjacentHTML('beforeend',${JSON.stringify(officialMessage(greeting))});const sent=snapshotLiepinDelivery(document,{greeting});return defaults.defaultOutgoing===1&&defaults.nonDefaultOutgoing===0&&defaults.incoming===0&&sent.defaultOutgoing===1&&sent.nonDefaultOutgoing===1&&sent.matching===1;` },
+  { name: 'Camoufox共享快照识别用户无岗位二字的默认句', script: `${append(modal.replace('</textarea>', `</textarea>${officialMessage(reportedDefaultGreeting)}`))}const state=snapshotLiepinDelivery(document,{greeting});return state.defaultOutgoing===1&&state.nonDefaultOutgoing===0&&state.matching===0;` },
 ];
 const temp = mkdtempSync(join(tmpdir(), 'bossclaw-liepin-im-test-'));
 const entry = join(temp, 'main.cjs');
@@ -166,6 +181,7 @@ for (let i = 0; i < tests.length; i++) {
   assert.equal(actual.clicked, expected.clicks ?? 1, expected.name);
   if (expected.review) assert.equal(result.needsReview, true, expected.name);
   if (expected.code) assert.equal(result.code, expected.code, expected.name);
+  if (expected.messageIncludes) assert.ok(result.message.includes(expected.messageIncludes), expected.name);
   if (expected.stage === 'success') { assert.equal(result.greetingConfirmed, true, expected.name); assert.equal(actual.sends, 1, expected.name); }
   if (expected.sends !== undefined) assert.equal(actual.sends, expected.sends, expected.name);
   if (expected.writes !== undefined) assert.equal(actual.writes, expected.writes, expected.name);
