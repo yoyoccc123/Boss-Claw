@@ -332,8 +332,15 @@ class LiepinCollector(CollectorBase):
                 human_sleep(0.25, 0.2, 0.1)
             if not target or not target.get('ready'):
                 return unconfirmed('猎聘目标会话未就绪，请人工核对')
-            if target.get('matching') or target.get('nonDefaultOutgoing') or target.get('incoming'):
-                return {'ok': False, 'code': 701, 'sent': False, 'alreadyChatted': True, 'message': '目标会话已有岗位招呼语或实际沟通消息，跳过重复发送'}
+            skip_reason = None
+            if target.get('matching'):
+                skip_reason = '目标会话已发送与当前工作台文案相同的消息，跳过重复发送'
+            elif target.get('incoming'):
+                skip_reason = '目标会话已有招聘方回复，请在聊天中继续沟通，跳过首次招呼语'
+            elif target.get('nonDefaultOutgoing'):
+                skip_reason = '目标会话已有平台默认句以外的本人消息，跳过重复发送'
+            if skip_reason:
+                return {'ok': False, 'code': 701, 'sent': False, 'alreadyChatted': True, 'message': skip_reason}
             if target.get('editorText'):
                 return unconfirmed('猎聘输入框已有未发送草稿，请人工核对，程序不会覆盖')
             heading = target.get('heading')
@@ -349,6 +356,8 @@ class LiepinCollector(CollectorBase):
                 human_sleep(0.2, 0.2, 0.1)
             else:
                 return unconfirmed('猎聘输入或发送按钮未就绪，请人工核对草稿')
+            if state.get('matching') or state.get('incoming') or state.get('nonDefaultOutgoing'):
+                return unconfirmed('填写期间会话出现当前文案或实际沟通消息，已保留草稿，请人工核对')
             matches_before = state.get('matching', 0)
             marked_locator('data-bossclaw-liepin-send').click(timeout=5000)
             deadline = time.time() + 10
