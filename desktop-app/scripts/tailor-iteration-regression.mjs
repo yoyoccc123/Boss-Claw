@@ -39,8 +39,14 @@ const draft = (text = '参与知识库项目。', after = 72) => ({
 });
 const nodeBundle = join(temporary, 'logic.cjs');
 await bundle("export * from './src/lib/bossclaw/jobAssistant'; export * from './src/lib/bossclaw/tailorBatch';", nodeBundle, 'node');
-const { tailorForJob, appendTailorSupplement, normalizeAiMatch, upsertTailorHistory, finalizeJdPoints, normalizeTailorDoc, writeTailorPointSupplement } = require(nodeBundle);
+const { tailorForJob, appendTailorSupplement, normalizeAiMatch, upsertTailorHistory, finalizeJdPoints, normalizeTailorDoc, writeTailorPointSupplement, createTailorBatch, runTailorBatch } = require(nodeBundle);
 const calls = [];
+const checkProjectWriting = (request) => {
+  const system = request.filter(m => m.role === 'system').map(m => m.content).join('\n');
+  for (const required of ['课程设计、竞赛、个人原型、开源复现/二次开发', '输入→处理/接口/工具→输出或存储', '离线测试不能写成线上效果', '参考材料只借鉴表达方法']) {
+    assert.ok(system.includes(required), `实际模型请求缺少项目表达约束：${required}`);
+  }
+};
 let replies = [];
 globalThis.__modelHook = async (messages) => {
   calls.push(messages);
@@ -53,6 +59,7 @@ const model = { apiKey: 'offline-fixture-key', model: 'offline', provider: 'cust
 replies = [draft(), { matchScore: { before: 60, after: 72 } }];
 const first = await tailorForJob(job, resume, profile, model);
 assert.equal(first.method, 'ai');
+calls.slice(-2).forEach(checkProjectWriting);
 const one = appendTailorSupplement(undefined, '  负责文档切分，测试30条问题。  ', 1);
 assert.equal(one[0].text, '负责文档切分，测试30条问题。');
 const reviewedDoc = draft('负责文档切分并测试30条问题。').resume;
@@ -70,6 +77,7 @@ assert.equal(third.aiMatch.after, 91, '目标100分不得覆盖模型实际评�
 assert.equal(third.previousScore, 84);
 assert.deepEqual(third.supplements, two);
 for (const request of calls.slice(-2)) {
+  checkProjectWriting(request);
   const prompt = request.map((m) => m.content).join('\n');
   assert.ok(prompt.includes(one[0].text) && prompt.includes(two[1].text), '草稿与回审都要收到全部轮次');
   assert.ok(prompt.includes('上一版（仅编辑参考，不是事实来源）'));
@@ -129,6 +137,7 @@ const pointWriting = await writeTailorPointSupplement(pointInput);
 assert.equal(pointWriting.missingDetails.length, 3);
 assert.ok(pointWriting.text.includes('没有插件开发经历'));
 const writingPrompt = calls.at(-1).map(m => m.content).join('\n');
+checkProjectWriting(calls.at(-1));
 for (const required of [pointInput.text, '本人负责接口测试。', one[0].text, two[1].text, '不能把了解升级成熟练/精通', '必须保留否定或计划性质']) assert.ok(writingPrompt.includes(required));
 const writingCalls = calls.length;
 await assert.rejects(() => writeTailorPointSupplement({ ...pointInput, text: ' ' }), /请先写/);
@@ -139,6 +148,26 @@ for (const invalid of ['', { wrong: 'object' }]) {
   await assert.rejects(() => writeTailorPointSupplement(pointInput), /未返回有效草稿/);
 }
 console.log('PASS: 单要点 AI 整理保留全部事实来源、能力水平和否定，限制待补问题、拒绝空草稿。');
+
+const projectSource = '课程设计：参与知识库接口集成，使用AI编程工具辅助，完成本地接口测试，未上线。';
+const projectDraft = draft('参与知识库接口集成，使用AI编程工具辅助并完成本地接口测试。');
+projectDraft.resume.projects[0].meta = '课程设计｜Python';
+projectDraft.resume.projects[0].bullets[0].source = projectSource;
+const projectBatch = createTailorBatch([{ id: 'engineering-a', job }, { id: 'engineering-b', job: { ...job, company: '示例乙公司' } }], ['engineering-a', 'engineering-b']);
+const projectCallStart = calls.length;
+const projectResults = [];
+replies = [projectDraft, { resume: null }, projectDraft, { resume: null }];
+await runTailorBatch(projectBatch, item => tailorForJob(item.job, projectSource, profile, model), {
+  shouldStop: () => false, onUpdate: () => {}, onResult: item => projectResults.push(item),
+});
+assert.equal(projectResults.length, 2);
+assert.equal(calls.length - projectCallStart, 4, '批量中每个岗位都应经过实际起草和回审');
+calls.slice(projectCallStart).forEach(checkProjectWriting);
+for (const item of projectResults) {
+  assert.equal(item.result.doc.projects[0].meta, projectDraft.resume.projects[0].meta);
+  assert.equal(item.result.doc.projects[0].bullets[0].source, projectSource, '批量输出保留事实出处');
+}
+console.log('PASS: 初次生成、多轮补充、逐项续写和批量起草/回审共用项目表达规则；保留课程项目身份和来源。');
 
 // 以下使用实际页面与实际生成函数，仅把模型网络边界替换为确定性回复。
 const browserBundle = join(temporary, 'ui.js');

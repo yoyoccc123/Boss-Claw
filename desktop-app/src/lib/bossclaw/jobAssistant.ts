@@ -28,6 +28,7 @@ import { stableProfileView, fallbackApplicantGreeting, settleGreetingLength } fr
 import { allocateContextBudget, fitContextToTokens } from './contextBudget';
 import { prepareContextText } from './oversizedContext';
 import { DEFAULT_ANALYZE_GREETING_INSTRUCTIONS } from './prompts';
+import { PROJECT_WRITING_RULE } from './resumeWriting';
 import { buildSchoolDisclosureRule, hasSchoolMention, resolveSchoolTier } from './schoolTier';
 import { normalizeStringList } from './helpers';
 import { decodeSalaryDigits } from './jobDisplay';
@@ -141,6 +142,7 @@ export async function writeTailorPointSupplement(input: {
 保留“了解/熟悉/参与/负责”等原有水平和职责，不能把了解升级成熟练/精通，不能把参与改成独立负责。
 不得编造项目、框架名称、职责、数字、成果、工作时长、到岗或面试承诺。本人明确说“没有做过”或“希望学习”的内容，必须保留否定或计划性质。
 本轮资料足以说明“了解”某技能时，可直接整理成技能表述，不强求项目细节。资料不足时，只整理能确认的部分，并在 missingDetails 提出最多3个具体问题；不要用占位符补造未知事实。
+${PROJECT_WRITING_RULE}
 text 用求职者口吻写成可直接提交的补充文字，保留用户输入中的有效事实；只输出 JSON：{"text":"整理或续写的草稿","missingDetails":["尚需本人确认的问题"]}。` },
     { role: 'user', content: `目标：${fitContextToTokens(JSON.stringify({ jobTitle: input.job.title, company: input.job.company, point: input.point.point, layer: input.point.layer }), budget.point)}
 简历事实：${resume}
@@ -282,6 +284,8 @@ export function buildTailorSystemPrompt(greetingInstructions: string, schoolRule
 ${greetingInstructions}${schoolRule}
 10. suggestions 为 3-5 条「求职者可执行」的优化建议：基于简历与 JD 的真实差距给出，每条不超过 40 字，不得建议编造事实。
 
+${PROJECT_WRITING_RULE}
+
 【resume：结构化简历文档（七模块）】
 - resume 是**可直接排版成 PDF 的定制简历正文**，不是摘要、不是备注。模块固定为：教育经历（education）/ 实习经历（internships）/ 工作经历（works）/ 项目经历（projects）/ 专业技能（skills）/ 个人荣誉（honors）/ 自我评价（selfEval）。顺序由程序决定，你只填内容。
 - **没有内容的模块一律返回空数组或空对象，绝不编造内容去填充、也不写"暂无"**。
@@ -349,6 +353,9 @@ export function buildReviewSystemPrompt(schoolRule = ''): string {
 5. 求职信口吻：coverLetter 必须求职者第一人称（以「您好，我想应聘贵公司的{岗位名}」开头），全文 120-250 字（含标点，建议约 150 字，与 greetings.ts::GREETING_LENGTH_RULE 同口径）、单行不换行；项目亮点必须精炼（只挑 1-2 个与岗位最相关的真实项目/技能、禁止罗列技术栈清单）；严禁招聘方口吻（「看到你的简历」「你的经历很匹配我们」「欢迎进一步沟通」「我们团队」「候选人」等），不得承诺薪资、到岗时间、面试时间。**校名披露（只约束 coverLetter，简历正文 resume 中的学校名照抄原文不受此限）**：${schoolRule ? schoolRule.trim() : '院校名称只有简历院校属于 985/211 时才允许写出，其余院校一律不出现任何院校名称或层级字样，只写学历/专业/年级。'}
 6. 建议可执行性：suggestions 3-5 条、基于简历与 JD 的真实差距、每条不超过 40 字。
 7. **能力描述语保真（重点复查项）**：逐条比对 resume.skills 与各模块 bullet 的 text / 同条 source，**原文中的「精通 / 熟练 / 熟悉 / 掌握 / 擅长 / 了解 / 具备…能力 / 沉淀」等描述语是否被保留**？凡是「原文有描述语、text 里却压成了无修饰的技能罗列」（如 source「前端：熟悉 React、TypeScript，沉淀通用组件库」被改成 text「前端：React、TypeScript、通用组件库」），**必须在 resume 中把描述语按 source 原文补回**（可同义替换，不得升级为「精通」），并在 reviewNote 里说明补回了哪几条；同时检查有没有反向错误——把原文的「了解」写成「精通」这类**凭空升级**，也要改回原文强度。
+
+${PROJECT_WRITING_RULE}
+按上述项目表达规则逐条回查：保留项目性质和本人职责，补回被压掉但有source支撑的业务链路、验证或交付细节；删除无实施依据的部署、客户、指标或故障故事。资料不足时只提出具体建议，不新增事实。
 
 保留草稿 jdPoints 的要点名称、层级、顺序和权重，不增删要点；必须逐项重新核对合并本轮修订后的最终 resume，并返回完整 jdPoints（只更新 verdict/evidence）。已在最终正文写明的能力标为 covered，依据引用最终正文；仅在补充里存在而未写入正文才是 addable。用户明确提供的「了解」技能可如实写入 skills，不强求项目细节；不得升级水平或编造项目经历。纯愿望、否定或到岗/工作时间意向未经本人明确确认时，不能视为具备。
 用同一套标准返回 matchScore：before 评估原始资料与有效补充，after 必须评估合并本轮修订后的最终简历文档。不能沿用修订前分数，也不能因目标100分而抬高分数；未修订正文时可以沿用草稿评分。

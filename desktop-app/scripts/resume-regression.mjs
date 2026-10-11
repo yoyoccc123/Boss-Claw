@@ -40,12 +40,14 @@ try {
   // 历史文档不经过新的数量裁剪，导出仍保留用户勾选的所有事实。
   const historical = { ...raw, internships: [], works: [], honors: [] };
   assert.equal(buildResumeDocData('', null, { doc: historical }, {}, []).modules.length, 0, '取消全部模块时不能重新输出所有内容');
-  const data = buildResumeDocData('', null, { doc: historical }, { name: '张三 <script>', targetTitle: 'Agent 开发' }, ['selfEval', 'skills', 'projects', 'education']);
+  const data = buildResumeDocData('', null, { doc: historical }, { name: '张三 <script>', targetTitle: 'Agent 开发', phone: '13800000000', email: 'resume@example.invalid' }, ['selfEval', 'skills', 'projects', 'education']);
   assert.equal(data.modules.find((m) => m.id === 'projects').blocks.length, 5);
   assert.equal(data.modules.find((m) => m.id === 'projects').blocks[0].bullets.length, 6);
   for (const template of RESUME_TEMPLATES) {
     const html = buildResumeHtml(data, template.id);
     assert.ok(html.includes('张三 &lt;script&gt;'));
+    assert.equal((html.match(/联系电话/g) || []).length, 1, `${template.id} 显示联系电话标签`);
+    assert.equal((html.match(/邮箱/g) || []).length, 1, `${template.id} 显示邮箱标签`);
     assert.ok(!html.includes('<script>'), '文字不得成为可执行 HTML');
     assert.ok(!html.includes('原文摘录：'), '事实核对来源不进入投递正文');
     assert.ok(!html.includes('class="photo-box"'), '未上传照片不出现照片框');
@@ -63,6 +65,7 @@ try {
   assert.ok(personal.includes('font-size:12pt'));
   assert.ok(personal.includes('flex:1.5'));
   assert.ok(personal.includes('重点项目经历'));
+  assert.ok(personal.includes('专业技能'), '个人模板保留专业技能模块标题');
   assert.ok(buildResumeHtml(data, 'unknown').includes('class="tpl-personal"'));
   console.log('PASS resume: 精简上限/来源、技能去重、历史兼容、个人模板与六套可选模板顺序与转义。');
 } finally {
