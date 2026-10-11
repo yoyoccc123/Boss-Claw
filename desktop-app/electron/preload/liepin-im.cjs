@@ -26,15 +26,21 @@ function readLiepinImState(doc) {
   };
   const readWidget = (root, modal) => {
     if (widgets.some((widget) => widget.element === root)) return;
-    const editor = query(root, 'textarea, [contenteditable="true"], [role="textbox"][aria-multiline="true"], #chat-input')
-      .find((el) => shown(el) && !el.disabled && !el.readOnly
+    const editors = query(root, 'textarea, [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"][aria-multiline="true"], #chat-input, input[type="text"], input:not([type])')
+      .filter((el) => shown(el) && !el.disabled && !el.readOnly
+        && (el.tagName !== 'INPUT' || el.id === 'chat-input' || /消息|message/i.test([el.getAttribute('placeholder'), el.getAttribute('aria-label')].join(' ')))
         && !/搜索|查找|search/i.test([el.getAttribute('placeholder'), el.getAttribute('aria-label'), el.getAttribute('type')].join(' ')));
+    const editor = editors.length === 1 ? editors[0] : null;
     const rendered = modal && [root, ...query(root, '*')].some((el) => shown(el) && text(el));
     if (!editor && !rendered) return;
     const heading = query(root, '[class*="header"], [class*="title"], [role="heading"]')
       .filter((el) => shown(el) && !String(el.className).includes('im-ui-basic-entry'))
       .slice(0, 6).map((el) => text(el).slice(0, 80)).join('|');
-    widgets.push({ element: root, heading });
+    // 同一编辑器的外层挂载点与内层弹窗只保留内层，避免把侧栏或其他会话当作当前消息范围。
+    const outer = editor ? widgets.findIndex((widget) => widget.editor === editor) : -1;
+    const widget = { element: root, heading, editor };
+    if (outer >= 0) widgets[outer] = widget;
+    else widgets.push(widget);
   };
   const inspect = (scope, insideIm = false) => {
     if (!scope || seen.has(scope) || seen.size >= 40) return;
@@ -68,4 +74,103 @@ function hasNewLiepinConversation(before, after) {
   });
 }
 
-module.exports = { readLiepinImState, hasNewLiepinConversation };
+function findNewLiepinConversation(before, after) {
+  const candidates = after.widgets.filter((current) => {
+    if (!current.editor) return false;
+    const previous = before.widgets.find((old) => old.element === current.element);
+    return !previous || Boolean(current.heading && previous.heading && current.heading !== previous.heading);
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function normalizeLiepinText(text) {
+  return String(text || '').replace(/[\u200b\u200c\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** 只在选中的会话里定位发送和消息；输入框、草稿、其他窗口与页面正文都不能证明已发送。 */
+function readLiepinDeliveryState(widget, greeting) {
+  const { element: root, editor } = widget;
+  const query = (selector) => { try { return Array.from(root.querySelectorAll(selector)); } catch { return []; } };
+  const shown = (el) => {
+    try {
+      let node = el;
+      while (node) {
+        const style = node.ownerDocument.defaultView.getComputedStyle(node);
+        if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        node = node.parentElement || node.getRootNode()?.host;
+      }
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    } catch { return false; }
+  };
+  const disabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true' || /(^|\s)disable(d)?(\s|$)/i.test(String(el.className || ''));
+  const text = (el) => normalizeLiepinText(el.innerText || el.textContent || el.value);
+  const sends = query('button, a, [role="button"], input[type="submit"], [class*="send"], [class*="Send"]')
+    .filter((el) => shown(el) && !disabled(el) && /^(发送|发送消息)$/.test(text(el)));
+  // 发送按钮内 span 和其父 button 不算两个按钮；多个独立按钮则拒绝猜测。
+  const actions = sends.filter((el) => el.matches('button, a, [role="button"], input[type="submit"]'));
+  const candidates = actions.length ? actions : sends;
+  const buttons = candidates.filter((el) => !candidates.some((other) => other !== el && el.contains(other)));
+  const sendButton = buttons.length === 1 ? buttons[0] : null;
+  const needle = normalizeLiepinText(greeting);
+  const matching = [];
+  const outgoing = [];
+  for (const el of query('div, p, span, li, [data-message-id]')) {
+    if (!shown(el) || el === editor || el.contains(editor) || editor?.contains(el)) continue;
+    if (el.closest('button, a, [role="button"], textarea, [contenteditable], [role="textbox"], [class*="header"], [class*="title"]')) continue;
+    const content = text(el);
+    if (!content) continue;
+    let node = el;
+    let incoming = false, own = false, failed = false, pending = false;
+    while (node && node !== root) {
+      const hint = [node.className, node.getAttribute('data-direction'), node.getAttribute('data-sender'), node.getAttribute('data-status')].join(' ');
+      // 猎聘官方 fe-im-pc 组件以 message-item-send/receive 标识方向；pending/failed 图标在消息行内。
+      incoming ||= node.classList.contains('im-ui-message-item-receive') || /incoming|received|receive-message|from-other|message-left|msg-left|is-other/i.test(hint)
+        || /(^|[\s_-])(left|other|hr)([\s_-]|$)/i.test(hint) || node.getAttribute('data-is-self') === 'false';
+      own ||= node.classList.contains('im-ui-message-item-send') || /outgoing|myself|item-my|is-self|from-self|message-right|msg-right/i.test(hint)
+        || /(^|[\s_-])(self|mine|right|sent|send)([\s_-]|$)/i.test(hint) || node.getAttribute('data-is-self') === 'true';
+      failed ||= /send-fail|send-error|message-fail|\bfailed\b/i.test(hint)
+        || Array.from(node.querySelectorAll('[class*="fail"], [class*="error"]')).some((error) => shown(error));
+      pending ||= /\bsending\b|\bpending\b/i.test(hint)
+        || Array.from(node.querySelectorAll('[class*="im-ui-message-item-loadingicon"]')).some((icon) => shown(icon));
+      node = node.parentElement;
+    }
+    if (incoming || failed || pending) continue;
+    if (own) outgoing.push(el);
+    if (own && needle && content === needle) matching.push(el);
+  }
+  const innermost = (items) => items.filter((el) => !items.some((other) => other !== el && el.contains(other)));
+  return {
+    sendButton, editorText: normalizeLiepinText(editor?.value ?? editor?.innerText ?? ''),
+    matching: innermost(matching), outgoing: innermost(outgoing),
+  };
+}
+
+/** Camoufox 复用同一 DOM 判据；只回传计数和标记，不向日志暴露消息正文。 */
+function snapshotLiepinDelivery(doc, { greeting = '', phase = 'target' } = {}) {
+  const state = readLiepinImState(doc);
+  const widgets = state.widgets.filter((widget) => widget.editor);
+  const editorMark = 'data-bossclaw-liepin-editor';
+  const headingMark = 'data-bossclaw-liepin-heading';
+  if (phase === 'before') {
+    for (const widget of widgets) {
+      widget.editor.setAttribute(editorMark, 'previous');
+      widget.editor.setAttribute(headingMark, widget.heading);
+    }
+    return { ready: false, roots: state.rootsSeen, conversations: widgets.length };
+  }
+  const targets = widgets.filter((widget) => widget.editor.getAttribute(editorMark) !== 'previous'
+    || widget.editor.getAttribute(headingMark) !== widget.heading);
+  if (targets.length !== 1) return { ready: false, conversations: targets.length };
+  const target = targets[0];
+  if (target.editor.getAttribute(editorMark) === 'active' && target.editor.getAttribute(headingMark) !== target.heading) return { ready: false, changed: true };
+  const delivery = readLiepinDeliveryState(target, greeting);
+  target.editor.setAttribute(editorMark, 'active');
+  target.editor.setAttribute(headingMark, target.heading);
+  for (const widget of widgets) for (const button of widget.element.querySelectorAll('[data-bossclaw-liepin-send]')) button.removeAttribute('data-bossclaw-liepin-send');
+  if (delivery.sendButton) delivery.sendButton.setAttribute('data-bossclaw-liepin-send', 'active');
+  return { ready: true, heading: target.heading, editorText: delivery.editorText, matching: delivery.matching.length,
+    outgoing: delivery.outgoing.length, sendReady: !!delivery.sendButton };
+}
+
+module.exports = { readLiepinImState, hasNewLiepinConversation, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState, snapshotLiepinDelivery };

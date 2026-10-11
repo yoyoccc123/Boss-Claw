@@ -1925,6 +1925,12 @@ export default function Workbench() {
   /** 通道 A：非 BOSS 平台 DOM 投递（猎聘/智联/51Job；新建对应平台标签页） */
   const deliverNonBoss = async (candidate: PendingItem, url: string): Promise<void> => {
     const pf = String(candidate.job?.platform || 'boss') as JobPlatform;
+    const liveCandidate = useDataStore.getState().pending.find((p) => p.id === candidate.id);
+    const greeting = String(liveCandidate?.deliveryGreeting || liveCandidate?.analysis?.greeting || candidate.deliveryGreeting || candidate.analysis?.greeting || '').trim();
+    if (pf === 'liepin' && greeting.length < 8) {
+      pauseAssist('猎聘招呼语为空或过短，请先补充招呼语再投递');
+      return;
+    }
     if (!claimDelivery(candidate.id, pf)) {
       addLog('warn', `岗位正由后台「自动沟通」投递，工作台已跳过：${candidate.job?.title || '岗位'}`);
       // 不降级状态：该岗位是 approved_queue（「投递中」），只是本轮投递权被后台占用。
@@ -1939,14 +1945,13 @@ export default function Workbench() {
     }
     setApplyStage('open_job');
     addLog('info', `通过「${platformLabel(pf)}」新标签页投递：${candidate.job?.title || '岗位'}`);
-    // 注意：智联「继续沟通」的招呼语发送已移交「自动沟通」引擎，工作台 platformApply 不再携带
-    // greeting（避免在 platform-apply 内做整套填发确认导致 25s 超时）——见 webview.cjs continue_chat 收口。
+    // 猎聘必须把本岗位实际招呼语传入聊天发送流程；智联继续沟通仍由自动沟通引擎处理。
     let r: any;
     try {
       // 非 BOSS 路径的 platformApply 内部自行「打开标签页 + 下发投递」，无法把加载与节流拆开并行，
       // 因此与串行版本保持一致：先等满岗位间隔再执行（安全语义优先于观感）。
       await awaitDeliveryGap();
-      r = await webviewApi.current?.platformApply(url, pf, candidate.job);
+      r = await webviewApi.current?.platformApply(url, pf, candidate.job, greeting);
     } catch (e) {
       r = { ok: false, stage: 'failed', error: String((e as Error)?.message || e) };
     } finally {

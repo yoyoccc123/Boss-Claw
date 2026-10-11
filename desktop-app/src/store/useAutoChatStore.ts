@@ -448,6 +448,14 @@ async function chatJob(item: PendingItem): Promise<ChatJobOutcome> {
       return 'success';
     }
 
+    if (result.needsReview) {
+      const msg = String(result.message || '发送结果未确认，请人工核对');
+      updatePending(item.id, { status: 'failed', error: msg, retryable: false });
+      addChatLog({ level: 'error', stage: 'confirm', jobId, jobTitle: title, company, msg, errorDetail: '已停止自动沟通，核对实际消息后再处理，避免重复发送。' });
+      addLog('error', `发送结果待人工核对：${title}`);
+      return 'stop';
+    }
+
     const code = result.code ?? null;
     const msg = String(result.message || result.error || '自动沟通失败');
     const isRiskStop = isCamoufoxStopCode(code) || code === 35;

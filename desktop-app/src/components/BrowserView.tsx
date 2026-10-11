@@ -136,7 +136,7 @@ export interface WebviewApi {
    * platform-apply，终态经 platform-apply-result 回传 resolve。返回 {ok, stage, external?, code?, message?, error?, tabId}。
    * stage: success | external | skip | stop | risk | failed。
    */
-  platformApply: (url: string, platform: JobPlatform, job: any) => Promise<{
+  platformApply: (url: string, platform: JobPlatform, job: any, greeting?: string) => Promise<{
     ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean;
   }>;
   /**
@@ -937,7 +937,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   // 一旦该标记因任何原因未置位（详见 handleRegister 上方「身份稳定 ref 回调」的根因说明），
   // 就会把「页面 2s 内早已可用」误判成「详情页加载超时」——本次报告的智联投递失败即此。
   const platformApply = useCallback(
-    (url: string, platform: JobPlatform, job: any): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean }> =>
+    (url: string, platform: JobPlatform, job: any, greeting = ''): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean }> =>
       new Promise((resolve) => {
         const tabId = openInNewTab(url, PLATFORM_META[platform]?.label || '岗位投递', 'detail');
         if (!tabId) {
@@ -951,9 +951,9 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           const timer = setTimeout(() => {
             if (apiResolvers.current.has(seq)) {
               apiResolvers.current.delete(seq);
-              resolve({ ok: false, stage: 'failed', error: 'platform-apply 超时（25s）', tabId });
+              resolve({ ok: false, stage: 'failed', error: '投递结果未在规定时间内确认，请人工核对', needsReview: platform === 'liepin', tabId });
             }
-          }, 26000);
+          }, platform === 'liepin' ? 55000 : 26000);
           apiResolvers.current.set(seq, (payload: any) => {
             clearTimeout(timer);
             resolve({ ...(payload || {}), tabId });
@@ -962,6 +962,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             seq,
             platform,
             job,
+            greeting,
             externalApplyHints: PLATFORM_META[platform]?.externalApplyHints || [],
           });
         };
