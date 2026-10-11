@@ -22,7 +22,7 @@ const injected = [
   section('async function platformApply', '// platform-apply：非 BOSS'),
   `const normLabelText = ${A.normLabelText.toString()};`,
   `const ADAPTERS = {labelHit: ${A.labelHit.toString()}, labelExactHit: ${A.labelExactHit.toString()}, LOGIN_WALL_TEXT_RE: ${A.LOGIN_WALL_TEXT_RE}};`,
-  IM.readLiepinImState.toString(), IM.findNewLiepinConversation.toString(), IM.normalizeLiepinText.toString(), IM.readLiepinDeliveryState.toString(),
+  IM.readLiepinImState.toString(), IM.findNewLiepinConversation.toString(), IM.normalizeLiepinText.toString(), IM.isLiepinDefaultGreeting.toString(), IM.readLiepinDeliveryState.toString(),
   `const PLATFORM = "liepin";
    let writtenWidget=null;
    const trustedInput=async(_action,value)=>{
@@ -39,6 +39,7 @@ const injected = [
     if(test.noBubble) return;
     const bubble=input.ownerDocument.createElement('div'); bubble.className=test.bubbleClass||'message-right'; bubble.style.width='250px';
     bubble.textContent=test.bubbleText||greeting;
+    if(test.bubbleHtml)bubble.innerHTML=test.bubbleHtml;
     if(test.bubbleChild)bubble.insertAdjacentHTML('beforeend',test.bubbleChild);
     const root=test.wrongWindow ? document.querySelector('.other-chat') : writtenWidget.element;
     (root.nodeType===9 ? root.body : root).appendChild(bubble);
@@ -48,7 +49,9 @@ const injected = [
 ].join('\n');
 
 const greeting = '您好，我对该岗位很感兴趣，具备相关项目经验，希望进一步沟通。';
+const defaultGreeting = '您好！我对贵公司发布的AI开发工程师（AI应用方向）（TEST001）岗位很感兴趣，期待进一步了解。';
 const modal = '<div class="im-ui-chat-modal-container"><div class="chat-header">招聘者甲</div><textarea placeholder="请输入消息"></textarea><button>发送</button></div>';
+const officialMessage = (message, direction = 'send', extra = '') => `<div class="im-ui-message-item"><div class="im-ui-message-item-body im-ui-message-item-${direction}"><div class="userAvatar">头像</div><div class="im-ui-message-item-content-wrap"><div class="im-ui-message-item-normal-message-wrapper"><div><p>${message}</p></div><div class="im-ui-message-item-extra-info"><span class="im-ui-message-item-opposite-readed">未读</span>${extra}</div></div></div></div></div>`;
 const mount = '<div id="im-c-entry" style="width:0;height:0"><textarea style="position:absolute;top:60px;left:20px" placeholder="请输入消息"></textarea><button style="position:absolute;top:120px;left:20px">发送</button></div>';
 const append = (html) => `document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(html)});`;
 const tests = [
@@ -98,12 +101,22 @@ const tests = [
   { name: '猎聘官方发送中图标不算成功', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-send', bubbleChild: '<span class="im-ui-message-item-loadingicon im-ui-message-item-loadingicon-send" style="display:inline-block;width:16px;height:16px"></span>', stage: 'failed', review: true },
   { name: '猎聘官方失败图标不算成功', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-send', bubbleChild: '<span class="im-ui-message-item-failed-icon im-ui-message-item-failed-icon-send" style="display:inline-block;width:16px;height:16px"></span>', stage: 'failed', review: true },
   { name: '猎聘官方发送完成隐藏加载图标后确认', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-send', bubbleChild: '<span class="im-ui-message-item-loadingicon im-ui-message-item-loadingicon-send" style="display:inline-block;width:16px;height:16px"></span>', afterSend: "setTimeout(()=>{document.querySelector('.im-ui-message-item-loadingicon').style.display='none';},150);", stage: 'success' },
+  { name: '平台默认句不阻止发送工作台文案', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}`)), stage: 'success' },
+  { name: '继续聊仅有平台默认句时发送工作台文案', label: '继续聊', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}`)), stage: 'success' },
+  { name: '默认句带已读状态且文案以官方结构发送', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}`)), bubbleClass: 'fixture-message', bubbleHtml: officialMessage(greeting), stage: 'success' },
+  { name: '默认句与已有工作台文案不重复发送', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}${officialMessage(greeting)}`)), stage: 'skip', sends: 0, writes: 0 },
+  { name: '默认句与其他真实我方消息不重复发送', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}${officialMessage('我已确认面试时间，谢谢。')}`)), stage: 'skip', sends: 0, writes: 0 },
+  { name: '默认句与招聘方实际回复视为已有沟通', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}${officialMessage('请问什么时候可以到岗？', 'receive')}`)), stage: 'skip', sends: 0, writes: 0 },
+  { name: '默认句不遮蔽未发送草稿', click: append(modal.replace('</textarea>', `已有待发草稿</textarea>${officialMessage(defaultGreeting)}`)), stage: 'failed', review: true, sends: 0, writes: 0 },
+  { name: '默认句不替代新增文案的发送确认', click: append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}`)), noBubble: true, stage: 'failed', review: true },
+  { name: '普通您好文案不被当作平台默认句', click: append(modal.replace('</textarea>', `</textarea>${officialMessage('您好，我做过检索系统项目，希望沟通具体工作内容。')}`)), stage: 'skip', sends: 0, writes: 0 },
 ];
 const sharedTests = [
   { name: '共享快照只标记新会话', script: `${append(modal)}snapshotLiepinDelivery(document,{phase:'before'});const old=document.querySelector('textarea');const unchanged=snapshotLiepinDelivery(document);${append(modal.replace('招聘者甲','招聘者乙'))}const target=snapshotLiepinDelivery(document);return !unchanged.ready&&target.ready&&old.getAttribute('data-bossclaw-liepin-editor')==='previous'&&document.querySelectorAll('[data-bossclaw-liepin-editor="active"]').length===1&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===1;` },
   { name: '共享快照在选中后拒绝切换招聘者', script: `${append(modal)}snapshotLiepinDelivery(document,{phase:'before'});document.querySelector('.chat-header').textContent='招聘者乙';const selected=snapshotLiepinDelivery(document);document.querySelector('.chat-header').textContent='招聘者丙';return selected.ready&&snapshotLiepinDelivery(document).changed===true;` },
   { name: '共享快照遇到多个新会话不猜目标', script: `${append(modal+modal.replace('招聘者甲','招聘者乙'))}return !snapshotLiepinDelivery(document).ready&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===0;` },
   { name: '共享快照只认可本人完整文字气泡', script: `${append(modal)}const root=document.querySelector('.im-ui-chat-modal-container');root.insertAdjacentHTML('beforeend','<div class="message-left">'+greeting+'</div><div class="message-right">'+greeting+'</div>');const state=snapshotLiepinDelivery(document,{greeting});return state.matching===1&&state.outgoing===1;` },
+  { name: '共享快照区分默认句和实际沟通', script: `${append(modal.replace('</textarea>', `</textarea>${officialMessage(defaultGreeting)}`))}const defaults=snapshotLiepinDelivery(document,{greeting});${append('')}document.querySelector('.im-ui-chat-modal-container').insertAdjacentHTML('beforeend',${JSON.stringify(officialMessage(greeting))});const sent=snapshotLiepinDelivery(document,{greeting});return defaults.defaultOutgoing===1&&defaults.nonDefaultOutgoing===0&&defaults.incoming===0&&sent.defaultOutgoing===1&&sent.nonDefaultOutgoing===1&&sent.matching===1;` },
 ];
 const temp = mkdtempSync(join(tmpdir(), 'bossclaw-liepin-im-test-'));
 const entry = join(temp, 'main.cjs');
@@ -128,7 +141,7 @@ app.whenReady().then(async()=>{
   }
   for(const test of ${JSON.stringify(sharedTests)}){
    await win.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent('<style>textarea{width:200px;height:50px} .im-ui-chat-modal-container{width:300px;padding:10px}</style>'));
-   const script='(()=>{const greeting='+${JSON.stringify(JSON.stringify(greeting))}+';'+${JSON.stringify([IM.readLiepinImState, IM.normalizeLiepinText, IM.readLiepinDeliveryState, IM.snapshotLiepinDelivery].map(fn=>fn.toString()).join('\n'))}+String.fromCharCode(10)+test.script+'})()';
+   const script='(()=>{const greeting='+${JSON.stringify(JSON.stringify(greeting))}+';'+${JSON.stringify([IM.readLiepinImState, IM.normalizeLiepinText, IM.isLiepinDefaultGreeting, IM.readLiepinDeliveryState, IM.snapshotLiepinDelivery].map(fn=>fn.toString()).join('\n'))}+String.fromCharCode(10)+test.script+'})()';
    results.push({name:test.name,passed:await win.webContents.executeJavaScript(script)});
   }
   fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify(results));

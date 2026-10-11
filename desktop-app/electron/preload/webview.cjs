@@ -3233,8 +3233,8 @@ async function platformApplyOnce(args = {}) {
       const target = imReady;
       const currentTarget = () => readLiepinImState(document).widgets.find((widget) => widget.element === target.element && widget.heading === target.heading && widget.editor);
       const beforeSend = readLiepinDeliveryState(target, safeGreeting);
-      if (beforeSend.matching.length || beforeSend.outgoing.length) {
-        return fail('skip', { message: '目标会话已有已发送消息，已跳过，避免重复发送招呼语' });
+      if (beforeSend.matching.length || beforeSend.nonDefaultOutgoing.length || beforeSend.incoming.length) {
+        return fail('skip', { message: '目标会话已有岗位招呼语或实际沟通消息，已跳过重复发送' });
       }
       if (beforeSend.editorText) {
         return fail('failed', { needsReview: true, error: '猎聘输入框已有未发送草稿，已保留，请人工核对后发送' });

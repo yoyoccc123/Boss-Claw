@@ -47,7 +47,8 @@ class Page:
         self.frames = [self]
         self.context = object()
         self.url = 'https://www.liepin.com/job/offline.shtml'
-        self.state = dict(ready=True, heading='示例招聘方', editorText='', matching=0, outgoing=0, sendReady=True)
+        self.state = dict(ready=True, heading='示例招聘方', editorText='', matching=0, outgoing=0,
+                          defaultOutgoing=0, nonDefaultOutgoing=0, incoming=0, sendReady=True)
         self.writes = self.sends = self.entries = 0
         self.input_fail = self.no_bubble = self.retain_editor = self.changed = False
 
@@ -96,9 +97,26 @@ class LiepinDeliveryRegression(unittest.TestCase):
 
     def test_existing_message_is_skipped_without_counting_success(self):
         self.page.state['outgoing'] = 1
+        self.page.state['nonDefaultOutgoing'] = 1
         result = self.finish()
         self.assertEqual(result['code'], 701)
         self.assertFalse(result['sent'])
+        self.assertEqual((self.page.writes, self.page.sends), (0, 0))
+
+    def test_platform_default_message_does_not_replace_workbench_greeting(self):
+        self.page.state.update(outgoing=1, defaultOutgoing=1)
+        result = self.finish()
+        self.assertTrue(result['greetingConfirmed'])
+        self.assertEqual((self.page.writes, self.page.sends), (1, 1))
+
+    def test_workbench_greeting_already_sent_is_not_repeated(self):
+        self.page.state.update(matching=1, outgoing=1, nonDefaultOutgoing=1)
+        self.assertEqual(self.finish()['code'], 701)
+        self.assertEqual((self.page.writes, self.page.sends), (0, 0))
+
+    def test_real_reply_with_default_message_is_existing_conversation(self):
+        self.page.state.update(outgoing=1, defaultOutgoing=1, incoming=1)
+        self.assertEqual(self.finish()['code'], 701)
         self.assertEqual((self.page.writes, self.page.sends), (0, 0))
 
     def test_existing_draft_is_preserved(self):

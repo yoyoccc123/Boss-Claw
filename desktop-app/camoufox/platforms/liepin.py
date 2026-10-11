@@ -332,8 +332,8 @@ class LiepinCollector(CollectorBase):
                 human_sleep(0.25, 0.2, 0.1)
             if not target or not target.get('ready'):
                 return unconfirmed('猎聘目标会话未就绪，请人工核对')
-            if target.get('matching') or target.get('outgoing'):
-                return {'ok': False, 'code': 701, 'sent': False, 'alreadyChatted': True, 'message': '目标会话已有消息，跳过重复招呼语'}
+            if target.get('matching') or target.get('nonDefaultOutgoing') or target.get('incoming'):
+                return {'ok': False, 'code': 701, 'sent': False, 'alreadyChatted': True, 'message': '目标会话已有岗位招呼语或实际沟通消息，跳过重复发送'}
             if target.get('editorText'):
                 return unconfirmed('猎聘输入框已有未发送草稿，请人工核对，程序不会覆盖')
             heading = target.get('heading')
