@@ -25,7 +25,7 @@ import type { AppConfig, JobMeta, Profile } from './types';
 import { cachedCallModel, aiFailureKind } from './llm';
 import { reloadSkills, skillInstructionsFor } from './skills';
 import { stableProfileView, fallbackApplicantGreeting, settleGreetingLength } from './matching';
-import { allocateContextBudget, fitContextToTokens } from './contextBudget';
+import { allocateContextBudget, estimateTokens, fitContextToTokens, resolveContextBudget } from './contextBudget';
 import { prepareContextText } from './oversizedContext';
 import { DEFAULT_ANALYZE_GREETING_INSTRUCTIONS } from './prompts';
 import { PROJECT_WRITING_RULE } from './resumeWriting';
@@ -571,8 +571,73 @@ export function finalizeJdPoints(
     if (direct) return { ...point, verdict: 'covered', evidence: `最终正文：${direct.trim()}`.slice(0, 60), statusVerified: true };
     if (update) return { ...point, verdict: update.verdict, evidence: update.evidence, statusVerified: true };
     if (!docChanged) return { ...point, statusVerified: true };
-    return { ...point, evidence: '最终正文已修改，该要点未获得有效复核，请重新生成核对。', statusVerified: false };
+    return { ...point, evidence: '最终正文已修改，该要点未获得有效复核，请点击复核要点。', statusVerified: false };
   });
+}
+
+/** 只复核已经交付的正文，绝不把复核响应中的新正文或经历写回简历。 */
+export async function recheckTailorResult(input: {
+  result: TailorResult; job: JobMeta; resumeText: string; profile: Profile | null;
+  model: AppConfig['model']; extraMaterials?: string;
+}): Promise<TailorResult> {
+  const { result, job, resumeText, profile, model } = input;
+  if (!model?.apiKey) throw new Error('请先在设置中配置 AI');
+  if (!result.jdPoints.length) throw new Error('当前结果没有可复核的岗位要点');
+  const system = `你是简历最终正文复核员。只核对已有正文，禁止改写简历、求职信或增加要点。
+事实来源仅限简历原文、本人导入材料及已确认的用户补充；画像仅供理解。岗位要求、教程、上一版AI正文不是新增经历依据。保留补充中的否定、纠错与编辑要求，愿望不能当作已具备事实，了解不能升级成熟练。
+逐条返回原有 id，不得遗漏、重复或改名。covered=真实事实已在最终正文体现且满足要求；addable=事实来源支持但最终正文未体现；missing=事实来源不足或不满足要求。不能只因出现关键词就判为covered，复合条件须全部满足。团队环境只判断适配，不写成求职者经历。
+evidence必须说明最终正文中的对应内容或真实缺口，不能沿用旧判定。评分同口径比较原简历与最终正文，0到100分，不因补充或重试强制加分。
+只返回JSON：{"jdPoints":[{"id":"p1","verdict":"covered|addable|missing","evidence":"具体依据，60字以内"}],"matchScore":{"before":60,"after":72}}`;
+  const body = JSON.stringify({
+    education: result.doc.education, internships: result.doc.internships, works: result.doc.works,
+    projects: result.doc.projects, skills: result.doc.skills, honors: result.doc.honors, selfEval: result.doc.selfEval,
+  }, (key, value) => key === 'source' ? undefined : value);
+  const points = JSON.stringify(result.jdPoints.map((p, i) => ({ id: `p${i + 1}`, point: p.point, layer: p.layer })));
+  // 保留最终正文和完整清单；仅为事实材料分配剩余窗口，不裁坏 JSON。
+  const available = resolveContextBudget(model, { outputTokens: 3072 }).inputBudgetTokens
+    - estimateTokens(system + body + points) - 1000;
+  if (available < 1500) throw new Error('当前模型窗口不足以完整复核，请增大上下文窗口');
+  const facts = await prepareContextText(String(resumeText || ''), model, {
+    tokenBudget: Math.floor(available * 0.45), cacheScope: 'assistant', purpose: '定制简历-最终正文复核事实',
+    focus: '保留求职者真实教育、项目、技能、职责与成果，保留能力水平、否定、具体名称与数字',
+  });
+  const supplemental = [input.extraMaterials || '', ...(result.supplements || []).map((s, i) => `【第${i + 1}轮用户补充】\n${s.text}`)].filter(Boolean).join('\n\n');
+  const extra = supplemental ? (await prepareContextText(supplemental, model, {
+    tokenBudget: Math.floor(available * 0.25), cacheScope: 'assistant', purpose: '定制简历-最终正文复核补充', mode: 'transform',
+    focus: '按顺序保留事实、否定、纠错和编辑要求，区分事实和愿望',
+    instruction: '保留各轮顺序和纠错、否定；编辑要求和愿望不能转换成已具备的事实。',
+  })).text : '';
+  // 复核响应还需业务校验；不复用未通过校验的缓存，确保点击重试能再次请求。
+  const response: any = await cachedCallModel([
+    { role: 'system', content: system },
+    { role: 'user', content: `简历原文：${facts.text}\n本人材料与已确认补充：${extra}\n画像（仅参考）：${fitContextToTokens(profile ? JSON.stringify(stableProfileView(profile)) : '', Math.floor(available * 0.1))}\n岗位：${JSON.stringify({ title: job.title, company: job.company, description: fitContextToTokens(job.description || '', Math.floor(available * 0.2)) })}\n最终正文（只读）：${body}\n原有要点：${points}` },
+  ], model, { maxTokens: 3072, temperature: 0.1 }, { scope: 'assistant', ttlMs: 0 });
+  const assessed = response?.jdPoints;
+  const score = response?.matchScore;
+  const validScore = (v: unknown) => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== ''))
+    && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100;
+  const aiMatch = validScore(score?.before ?? score?.beforeScore) && validScore(score?.after ?? score?.afterScore)
+    ? normalizeAiMatch(score) : null;
+  if (!Array.isArray(assessed) || assessed.length !== result.jdPoints.length || !aiMatch) {
+    throw new Error('AI 未返回完整的要点判定与评分，已有简历已保留，请重试复核');
+  }
+  const updates = new Map<string, { verdict: JdPointVerdict; evidence: string }>();
+  for (const p of assessed) {
+    if (typeof p?.id !== 'string' || !/^p[1-9]\d*$/.test(p.id) || Number(p.id.slice(1)) > result.jdPoints.length
+      || updates.has(p.id) || !JD_VERDICTS.includes(p.verdict) || typeof p.evidence !== 'string' || !p.evidence.trim()) {
+      throw new Error('AI 复核要点不完整或格式无效，已有简历已保留，请重试复核');
+    }
+    updates.set(p.id, { verdict: p.verdict, evidence: p.evidence.trim().slice(0, 60) });
+  }
+  if (result.jdPoints.some((_, i) => !updates.has(`p${i + 1}`))) {
+    throw new Error('AI 遗漏了要点判定，已有简历已保留，请重试复核');
+  }
+  return {
+    ...result,
+    jdPoints: result.jdPoints.map((p, i) => ({ ...p, ...updates.get(`p${i + 1}`)!, statusVerified: true })),
+    aiMatch,
+    warning: /^(复检修改了正文但未返回有效评分|最终正文复核尚未完成)/.test(result.warning || '') ? undefined : result.warning,
+  };
 }
 
 export interface TailorRewriteResult {
@@ -976,7 +1041,7 @@ export async function tailorForJob(
     // 描述语保真兜底检出（只检出、不自动回填；回填措辞交给 AI 复检或人工）
     const qualifierLoss = findQualifierLoss(rewrites);
 
-    return {
+    const finalResult: TailorResult = {
       ...draft,
       doc: finalDoc,
       supplements,
@@ -998,6 +1063,15 @@ export async function tailorForJob(
       // AI 首次返回的 JSON 不完整、已由二次补齐修复时，提示（内容仍来自 AI，非降级）
       warning: scoreWarning || ((result as any)?._repaired ? 'AI 首次返回的 JSON 不完整，已通过自动补齐修复（结果仍来自 AI）。' : undefined),
     };
+    if (finalResult.jdPoints.length && (finalResult.jdPoints.some((p) => !p.statusVerified) || !finalResult.aiMatch)) {
+      try {
+        return await recheckTailorResult({ result: finalResult, job, resumeText, profile, model, extraMaterials: extra });
+      } catch {
+        // 补查失败保留最终正文和待复核状态，不能降级或展示旧稿分数。
+        return { ...finalResult, warning: '最终正文复核尚未完成，简历内容已保留；请点击「复核要点」重试。' };
+      }
+    }
+    return finalResult;
   } catch (error: any) {
     const kind = aiFailureKind(error);
     const reason =

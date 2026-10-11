@@ -47,6 +47,7 @@ interface TailorResultViewProps {
   supplementText?: string;
   onSupplementChange?: (text: string) => void;
   onRegenerate?: () => void;
+  onRecheck?: () => void;
   onHelpWritePoint?: (point: TailorJdPoint, text: string) => Promise<TailorPointDraft>;
   onSupplementPoint?: (point: TailorJdPoint, text: string) => Promise<boolean>;
   regenerating?: boolean;
@@ -75,6 +76,7 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
   supplementText = '',
   onSupplementChange,
   onRegenerate,
+  onRecheck,
   onHelpWritePoint,
   onSupplementPoint,
   regenerating = false,
@@ -456,6 +458,11 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
                 {verdictCount.addable > 0 && <Tag color="gold">可补充 {verdictCount.addable}</Tag>}
                 {verdictCount.missing > 0 && <Tag color="red">不具备 {verdictCount.missing}</Tag>}
                 {pendingPointCount > 0 && <Tag>待复核 {pendingPointCount}</Tag>}
+                {onRecheck && (pendingPointCount > 0 || !tailor.aiMatch) && (
+                  <Button size="small" onClick={onRecheck} loading={regenerating} disabled={regenerating || regenerateDisabled}>
+                    复核要点
+                  </Button>
+                )}
                 {onImportMaterials && (
                   <Tooltip title="导入简历里没写的真实经历素材（实习/项目/获奖等），AI 会据此补齐简历">
                     <Button size="small" icon={<UploadOutlined />} onClick={onImportMaterials}>
@@ -467,7 +474,7 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
             </div>
 
             {pendingPointCount > 0 && <Alert type="info" showIcon style={{ marginBottom: 12 }}
-              message="部分要点尚未按最终正文复核，重新生成可更新判定；原补充内容会保留。" />}
+              message="AI 尚未完成最终正文的要点复核，不代表不具备。点击「复核要点」更新判定与评分，现有正文会保留。" />}
 
             <div className="tailor-point-layers">
               {LAYER_ORDER.map((layer) => {
@@ -661,7 +668,7 @@ export const TailorResultView: React.FC<TailorResultViewProps> = ({
             </div>
             <div className="tailor-point-detail-row">
               <span className="tailor-point-detail-label">判定依据</span>
-              <span>{detailPoint.statusVerified ? detailPoint.evidence || '（AI 未给出依据，请人工核对）' : '本条尚未按最终简历正文复核，请重新生成更新判定。'}</span>
+              <span>{detailPoint.statusVerified ? detailPoint.evidence || '（AI 未给出依据，请人工核对）' : '本条尚未按最终简历正文复核，请点击「复核要点」更新判定。'}</span>
             </div>
             {onSupplementPoint && (
               <div style={{ marginTop: 20 }} data-testid="tailor-point-editor">
