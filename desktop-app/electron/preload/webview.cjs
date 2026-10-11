@@ -3257,15 +3257,32 @@ async function platformApplyOnce(args = {}) {
         input.dispatchEvent(new input.ownerDocument.defaultView.Event('input', { bubbles: true }));
         input.dispatchEvent(new input.ownerDocument.defaultView.Event('change', { bubbles: true }));
       } catch {}
+      let lastWritten = null;
+      let readinessReadError = false;
       const written = await waitFor(() => {
         if (riskHit()) return 'risk';
         const current = currentTarget();
         if (!current) return 'changed';
-        const state = readLiepinDeliveryState(current, safeGreeting);
-        return state.editorText === safeGreeting && state.sendButton ? state : null;
+        try {
+          const state = readLiepinDeliveryState(current, safeGreeting);
+          lastWritten = state;
+          return state.editorText === safeGreeting && state.sendButton ? state : null;
+        } catch { readinessReadError = true; return null; }
       }, 5000, '猎聘招呼语和发送按钮就绪');
       if (written === 'risk') return fail('risk', { code: 35, message: '猎聘输入后出现安全验证，已暂停' });
-      if (!written || written === 'changed') return fail('failed', { needsReview: true, error: '猎聘输入文字或发送按钮未就绪，已保留草稿，请人工核对' });
+      if (written === 'changed') return fail('failed', { needsReview: true, error: '猎聘目标会话已变化，已保留草稿并停止发送，请人工核对' });
+      if (!written) {
+        const expectedChars = safeGreeting.length;
+        const editorChars = lastWritten?.editorText.length ?? 0;
+        const textMatches = lastWritten?.editorText === safeGreeting;
+        const readiness = lastWritten?.readiness || {};
+        const details = `官方按钮 ${readiness.officialSendButtons || 0}，禁用 ${readiness.disabledOfficialSendButtons || 0}，可用 ${readiness.sendCandidates || 0}`;
+        const error = !lastWritten ? '猎聘读取输入框或发送按钮失败，已保留草稿，请人工核对'
+          : !textMatches ? `猎聘输入文字核对失败（应为 ${expectedChars} 字，读到 ${editorChars} 字），已保留草稿，请人工核对`
+            : `猎聘文案已填入，但未找到唯一可用的发送按钮（${details}），已保留草稿，请人工核对`;
+        return fail('failed', { needsReview: true, error,
+          imDiagnostic: { expectedChars, editorChars, textMatches, readinessReadError, ...readiness } });
+      }
       if (written.matching.length || written.incoming.length || written.nonDefaultOutgoing.length) {
         return fail('failed', { needsReview: true, error: '填写期间会话出现当前文案或实际沟通消息，已保留草稿，请人工核对' });
       }
