@@ -211,7 +211,7 @@ function renderPhotoBox(photo: string | undefined): string {
 function renderContactLine(contact: ResumeDocData['contact']): string {
   const bits: string[] = [];
   if (contact.targetTitle.trim()) bits.push(`<span><span class="label">求职意向</span>${htmlEscape(contact.targetTitle.trim())}</span>`);
-  if (contact.phone.trim()) bits.push(`<span><span class="label">电话</span>${htmlEscape(contact.phone.trim())}</span>`);
+  if (contact.phone.trim()) bits.push(`<span><span class="label">联系电话</span>${htmlEscape(contact.phone.trim())}</span>`);
   if (contact.email.trim()) bits.push(`<span><span class="label">邮箱</span>${htmlEscape(contact.email.trim())}</span>`);
   if (!bits.length) return '';
   return `<div class="resume-contact">${bits.join('<span class="sep">|</span>')}</div>`;
@@ -269,7 +269,10 @@ function renderModules(modules: ResumeDocModule[]): string {
 /** 深蓝参考版仅把相邻的简介/技能并排；勾选和用户模块顺序始终生效。 */
 function renderFocus(data: ResumeDocData): string {
   const { contact } = data;
-  const details = [contact.phone, contact.email].filter((s) => s.trim());
+  const details = [
+    contact.phone.trim() ? `联系电话：${contact.phone.trim()}` : '',
+    contact.email.trim() ? `邮箱：${contact.email.trim()}` : '',
+  ].filter(Boolean);
   const header = contact.name || details.length || data.photo
     ? `<header class="focus-header"><div class="resume-header-main">` +
       (contact.name ? `<h1 class="resume-name">${htmlEscape(contact.name)}</h1>` : '') +
@@ -277,7 +280,7 @@ function renderFocus(data: ResumeDocData): string {
       (details.length ? `<div class="focus-contact">${details.map((s) => `<div>${htmlEscape(s)}</div>`).join('')}</div>` : '') +
       renderPhotoBox(data.photo) + `</header>`
     : '';
-  const titles: Record<string, string> = { selfEval: '个人简介', skills: '高匹配技能', projects: '重点项目经历' };
+  const titles: Record<string, string> = { selfEval: '个人简介', projects: '重点项目经历' };
   const modules = data.modules.map((mod) => ({ ...mod, title: titles[mod.id] || mod.title }));
   const parts: string[] = [];
   for (let i = 0; i < modules.length; i++) {
@@ -297,7 +300,7 @@ function renderSplit(data: ResumeDocData): string {
   const { contact, modules, photo } = data;
   const contactBits: string[] = [];
   if (contact.targetTitle.trim()) contactBits.push(`<div>求职意向 ${htmlEscape(contact.targetTitle.trim())}</div>`);
-  if (contact.phone.trim()) contactBits.push(`<div>电话 ${htmlEscape(contact.phone.trim())}</div>`);
+  if (contact.phone.trim()) contactBits.push(`<div>联系电话 ${htmlEscape(contact.phone.trim())}</div>`);
   if (contact.email.trim()) contactBits.push(`<div>邮箱 ${htmlEscape(contact.email.trim())}</div>`);
 
   return (
