@@ -96,7 +96,7 @@ function isLiepinDefaultGreeting(text) {
 /** 只在选中的会话里定位发送和消息；输入框、草稿、其他窗口与页面正文都不能证明已发送。 */
 function readLiepinDeliveryState(widget, greeting) {
   const { element: root, editor } = widget;
-  const query = (selector) => { try { return Array.from(root.querySelectorAll(selector)); } catch { return []; } };
+  const query = (selector, scope = root) => { try { return Array.from(scope.querySelectorAll(selector)); } catch { return []; } };
   const shown = (el) => {
     try {
       let node = el;
@@ -111,8 +111,15 @@ function readLiepinDeliveryState(widget, greeting) {
   };
   const disabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true' || /(^|\s)disable(d)?(\s|$)/i.test(String(el.className || ''));
   const text = (el) => normalizeLiepinText(el.innerText || el.textContent || el.value);
-  const sends = query('button, a, [role="button"], input[type="submit"], [class*="send"], [class*="Send"]')
-    .filter((el) => shown(el) && !disabled(el) && /^(发送|发送消息)$/.test(text(el)));
+  // 猎聘官方按钮位于当前编辑器自己的 chat-input footer 内。
+  // 不让图片/拒绝理由弹窗等其他“发送”控件参与当前文字消息的选择。
+  const inputRoot = editor?.closest('.im-ui-chat-input');
+  const officialButtons = inputRoot && root.contains(inputRoot)
+    ? Array.from(inputRoot.querySelectorAll('button.im-ui-basic-send-btn, [role="button"].im-ui-basic-send-btn')) : [];
+  const sendLabel = (el) => /^(发送|发送消息)$/.test(text(el).replace(/\s+/g, ''));
+  const sends = officialButtons.length ? officialButtons.filter((el) => shown(el) && !disabled(el) && sendLabel(el))
+    : query('button, a, [role="button"], input[type="submit"], [class*="send"], [class*="Send"]', inputRoot && root.contains(inputRoot) ? inputRoot : root)
+      .filter((el) => shown(el) && !disabled(el) && sendLabel(el));
   // 发送按钮内 span 和其父 button 不算两个按钮；多个独立按钮则拒绝猜测。
   const actions = sends.filter((el) => el.matches('button, a, [role="button"], input[type="submit"]'));
   const candidates = actions.length ? actions : sends;
@@ -156,6 +163,8 @@ function readLiepinDeliveryState(widget, greeting) {
   const sent = innermost(outgoing);
   return {
     sendButton, editorText: normalizeLiepinText(editor?.value ?? editor?.innerText ?? ''),
+    readiness: { sendCandidates: buttons.length, officialSendButtons: officialButtons.length,
+      disabledOfficialSendButtons: officialButtons.filter(disabled).length },
     matching: innermost(matching), outgoing: sent,
     defaultOutgoing: sent.filter((el) => isLiepinDefaultGreeting(text(el))),
     nonDefaultOutgoing: sent.filter((el) => !isLiepinDefaultGreeting(text(el))),
@@ -189,7 +198,7 @@ function snapshotLiepinDelivery(doc, { greeting = '', phase = 'target' } = {}) {
   return { ready: true, heading: target.heading, editorText: delivery.editorText, matching: delivery.matching.length,
     outgoing: delivery.outgoing.length, defaultOutgoing: delivery.defaultOutgoing.length,
     nonDefaultOutgoing: delivery.nonDefaultOutgoing.length, incoming: delivery.incoming.length,
-    sendReady: !!delivery.sendButton };
+    sendReady: !!delivery.sendButton, readiness: delivery.readiness };
 }
 
 module.exports = { readLiepinImState, hasNewLiepinConversation, findNewLiepinConversation, normalizeLiepinText, isLiepinDefaultGreeting, readLiepinDeliveryState, snapshotLiepinDelivery };

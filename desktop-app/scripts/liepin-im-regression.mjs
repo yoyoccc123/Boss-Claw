@@ -34,7 +34,7 @@ const injected = [
     return {ok:true};
    };
    const clickElement=async(el)=>{
-    el.click(); if(!/^(发送|发送消息)$/.test(el.textContent.trim())) return;
+    el.click(); if(!/^(发送|发送消息)$/.test(el.textContent.replace(/\\s+/g,''))) return;
     sends++; const input=writtenWidget.editor;
     if(!test.retainEditor) {if('value' in input) input.value='';else input.textContent='';}
     if(test.noBubble) return;
@@ -56,11 +56,26 @@ assert.equal(IM.isLiepinDefaultGreeting(reportedDefaultGreeting), true, '用户�
 assert.equal(IM.isLiepinDefaultGreeting(defaultGreeting), true, '保留原默认模板兼容');
 for (const actual of [greeting, '您好，我已确认面试时间，谢谢。', reportedDefaultGreeting + '我已确认面试时间。']) assert.equal(IM.isLiepinDefaultGreeting(actual), false, '普通文案/实际沟通不能视为平台默认句');
 const modal = '<div class="im-ui-chat-modal-container"><div class="chat-header">招聘者甲</div><textarea placeholder="请输入消息"></textarea><button>发送</button></div>';
+// 公开猎聘组件：chat-input 内的 textarea 和 input-actions/basic-send-btn。
+const officialModal = '<div class="im-ui-chat-modal-container"><div class="chat-header">招聘者甲</div><div class="im-ui-chat-input"><div class="im-ui-input-content"><textarea class="im-ui-textarea" maxlength="800" placeholder="请输入文字，按Enter键发送"></textarea></div><div class="im-ui-input-actions"><button class="im-ui-basic-send-btn"><span>发送</span></button></div></div></div>';
 const officialMessage = (message, direction = 'send', extra = '') => `<div class="im-ui-message-item"><div class="im-ui-message-item-body im-ui-message-item-${direction}"><div class="userAvatar">头像</div><div class="im-ui-message-item-content-wrap"><div class="im-ui-message-item-normal-message-wrapper"><div><p>${message}</p></div><div class="im-ui-message-item-extra-info"><span class="im-ui-message-item-opposite-readed">未读</span>${extra}</div></div></div></div></div>`;
 const mount = '<div id="im-c-entry" style="width:0;height:0"><textarea style="position:absolute;top:60px;left:20px" placeholder="请输入消息"></textarea><button style="position:absolute;top:120px;left:20px">发送</button></div>';
 const append = (html) => `document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(html)});`;
 const tests = [
   { name: '普通聊天窗口', click: append(modal), stage: 'success' },
+  { name: '官方输入区域的发送按钮', click: append(officialModal), stage: 'success' },
+  { name: '官方输入区域完整166字文案发送确认', greeting: greeting.repeat(6).slice(0,166), click: append(officialModal), stage: 'success' },
+  { name: '官方输入区域位于开放shadow root', click: `const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);root.attachShadow({mode:'open'}).innerHTML=${JSON.stringify(officialModal)};`, stage: 'success' },
+  { name: '官方输入区域位于同源iframe', click: `const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);const frame=document.createElement('iframe');frame.srcdoc=${JSON.stringify(officialModal)};root.append(frame);`, stage: 'success' },
+  { name: '官方按钮有中文间空格仍识别', click: append(officialModal.replace('<span>发送</span>', '<span>发 送</span>')), stage: 'success' },
+  { name: '官方输入区域不受其他发送按钮干扰', click: append(officialModal.replace('<div class="im-ui-chat-input">', '<button class="image-confirm">发送</button><div class="im-ui-chat-input">')), stage: 'success' },
+  { name: '官方按钮缺失时不点输入区域外的发送按钮', click: append(officialModal.replace('<button class="im-ui-basic-send-btn"><span>发送</span></button>', '').replace('<div class="im-ui-chat-input">', '<button>发送</button><div class="im-ui-chat-input">')), stage: 'failed', review: true, sends: 0, messageIncludes: '未找到唯一可用的发送按钮' },
+  { name: '官方按钮禁用时不点其他发送按钮', click: append(officialModal.replace('class="im-ui-basic-send-btn"', 'class="im-ui-basic-send-btn" disabled').replace('<div class="im-ui-chat-input">', '<button>发送</button><div class="im-ui-chat-input">')), stage: 'failed', review: true, sends: 0, messageIncludes: '官方按钮 1，禁用 1，可用 0' },
+  { name: '官方按钮隐藏时不点其他发送按钮', click: append(officialModal.replace('class="im-ui-basic-send-btn"', 'class="im-ui-basic-send-btn" style="display:none"').replace('<div class="im-ui-chat-input">', '<button>发送</button><div class="im-ui-chat-input">')), stage: 'failed', review: true, sends: 0, messageIncludes: '官方按钮 1，禁用 0，可用 0' },
+  { name: '官方输入区域多个官方按钮不猜测', click: append(officialModal.replace('</button>', '</button><button class="im-ui-basic-send-btn">发送</button>')), stage: 'failed', review: true, sends: 0, messageIncludes: '官方按钮 2，禁用 0，可用 2' },
+  { name: '官方按钮延迟启用后发送', click: append(officialModal.replace('class="im-ui-basic-send-btn"', 'class="im-ui-basic-send-btn" disabled')), afterInput: "setTimeout(()=>{writtenWidget.element.querySelector('.im-ui-basic-send-btn').disabled=false;},150);", stage: 'success' },
+  { name: '输入被截断时不发送并显示字数', click: append(officialModal), afterInput: "writtenWidget.editor.value=writtenWidget.editor.value.slice(0,-1);", stage: 'failed', review: true, sends: 0, messageIncludes: '输入文字核对失败' },
+  { name: '填写时切换会话显示会话变化', click: append(officialModal), afterInput: "document.querySelector('.chat-header').textContent='招聘者丙';", stage: 'failed', review: true, sends: 0, messageIncludes: '目标会话已变化' },
   { name: '首个窗口隐藏，第二个可见', before: append(modal.replace('class="im-ui-chat-modal-container"', 'class="im-ui-chat-modal-container" style="display:none"')), click: append(modal), stage: 'success' },
   { name: '无尺寸挂载点的可见编辑区', click: append(mount), stage: 'success' },
   { name: '开放 shadow root', click: "const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);root.attachShadow({mode:'open'}).innerHTML='<textarea placeholder=请输入消息></textarea><button>发送</button>';", stage: 'success' },
@@ -126,6 +141,8 @@ const tests = [
   { name: '填写期间出现平台默认句仍发送真实文案', click: append(modal), afterInput: `writtenWidget.element.insertAdjacentHTML('beforeend',${JSON.stringify(officialMessage(reportedDefaultGreeting))});`, stage: 'success' },
 ];
 const sharedTests = [
+  { name: '共享快照选择官方按钮并暴露计数', script: `${append(officialModal.replace('<div class="im-ui-chat-input">', '<button>发送</button><div class="im-ui-chat-input">'))}const state=snapshotLiepinDelivery(document,{greeting});return state.sendReady&&state.readiness.officialSendButtons===1&&state.readiness.sendCandidates===1&&document.querySelector('[data-bossclaw-liepin-send="active"]').classList.contains('im-ui-basic-send-btn');` },
+  { name: '共享快照官方按钮禁用不使用其他按钮', script: `${append(officialModal.replace('class="im-ui-basic-send-btn"','class="im-ui-basic-send-btn" disabled').replace('<div class="im-ui-chat-input">', '<button>发送</button><div class="im-ui-chat-input">'))}const state=snapshotLiepinDelivery(document,{greeting});return !state.sendReady&&state.readiness.disabledOfficialSendButtons===1&&state.readiness.sendCandidates===0;` },
   { name: '共享快照只标记新会话', script: `${append(modal)}snapshotLiepinDelivery(document,{phase:'before'});const old=document.querySelector('textarea');const unchanged=snapshotLiepinDelivery(document);${append(modal.replace('招聘者甲','招聘者乙'))}const target=snapshotLiepinDelivery(document);return !unchanged.ready&&target.ready&&old.getAttribute('data-bossclaw-liepin-editor')==='previous'&&document.querySelectorAll('[data-bossclaw-liepin-editor="active"]').length===1&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===1;` },
   { name: '共享快照在选中后拒绝切换招聘者', script: `${append(modal)}snapshotLiepinDelivery(document,{phase:'before'});document.querySelector('.chat-header').textContent='招聘者乙';const selected=snapshotLiepinDelivery(document);document.querySelector('.chat-header').textContent='招聘者丙';return selected.ready&&snapshotLiepinDelivery(document).changed===true;` },
   { name: '共享快照遇到多个新会话不猜目标', script: `${append(modal+modal.replace('招聘者甲','招聘者乙'))}return !snapshotLiepinDelivery(document).ready&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===0;` },
@@ -181,7 +198,7 @@ for (let i = 0; i < tests.length; i++) {
   assert.equal(actual.clicked, expected.clicks ?? 1, expected.name);
   if (expected.review) assert.equal(result.needsReview, true, expected.name);
   if (expected.code) assert.equal(result.code, expected.code, expected.name);
-  if (expected.messageIncludes) assert.ok(result.message.includes(expected.messageIncludes), expected.name);
+  if (expected.messageIncludes) assert.ok((result.message||result.error||'').includes(expected.messageIncludes), `${expected.name}: ${JSON.stringify(result)}`);
   if (expected.stage === 'success') { assert.equal(result.greetingConfirmed, true, expected.name); assert.equal(actual.sends, 1, expected.name); }
   if (expected.sends !== undefined) assert.equal(actual.sends, expected.sends, expected.name);
   if (expected.writes !== undefined) assert.equal(actual.writes, expected.writes, expected.name);

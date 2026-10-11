@@ -355,7 +355,13 @@ class LiepinCollector(CollectorBase):
                 if state.get('editorText') == text and state.get('sendReady'): break
                 human_sleep(0.2, 0.2, 0.1)
             else:
-                return unconfirmed('猎聘输入或发送按钮未就绪，请人工核对草稿')
+                if state.get('editorText') != text:
+                    return unconfirmed(f'猎聘输入文字核对失败（应为 {len(text)} 字，读到 {len(state.get("editorText", ""))} 字），已保留草稿，请人工核对')
+                readiness = state.get('readiness') or {}
+                details = (f'官方按钮 {readiness.get("officialSendButtons", 0)}，'
+                           f'禁用 {readiness.get("disabledOfficialSendButtons", 0)}，'
+                           f'可用 {readiness.get("sendCandidates", 0)}')
+                return unconfirmed(f'猎聘文案已填入，但未找到唯一可用的发送按钮（{details}），已保留草稿，请人工核对')
             if state.get('matching') or state.get('incoming') or state.get('nonDefaultOutgoing'):
                 return unconfirmed('填写期间会话出现当前文案或实际沟通消息，已保留草稿，请人工核对')
             matches_before = state.get('matching', 0)

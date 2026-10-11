@@ -156,8 +156,19 @@ class LiepinDeliveryRegression(unittest.TestCase):
 
     def test_send_button_unavailable_does_not_click(self):
         self.page.state['sendReady'] = False
-        self.assertTrue(self.finish()['needsReview'])
+        self.page.state['readiness'] = dict(officialSendButtons=1, disabledOfficialSendButtons=1, sendCandidates=0)
+        result = self.finish()
+        self.assertTrue(result['needsReview'])
+        self.assertIn('文案已填入', result['message'])
+        self.assertIn('官方按钮 1，禁用 1，可用 0', result['message'])
         self.assertEqual(self.page.sends, 0)
+
+    def test_partial_input_never_sends_and_reports_character_counts(self):
+        self.page.after_input = {'editorText': GREETING[:-1]}
+        result = self.finish()
+        self.assertTrue(result['needsReview'])
+        self.assertIn(f'应为 {len(GREETING)} 字，读到 {len(GREETING)-1} 字', result['message'])
+        self.assertEqual((self.page.writes, self.page.sends), (1, 0))
 
     def test_changed_target_stops_after_one_send(self):
         self.page.changed = True
