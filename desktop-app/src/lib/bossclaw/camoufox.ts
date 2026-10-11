@@ -99,6 +99,8 @@ export interface ChatHistoryEntry {
 export interface CamoufoxChatResult {
   ok: boolean;
   sent?: boolean;
+  /** 发送结果未确认，停止队列，交人工核对，禁止自动重发。 */
+  needsReview?: boolean;
   code?: number;
   message?: string;
   method?: string;

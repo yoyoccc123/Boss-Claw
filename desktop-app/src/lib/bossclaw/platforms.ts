@@ -7,7 +7,7 @@ import { SAFETY_LIMITS } from './limits';
 
 export type { JobPlatform } from './types';
 
-/** 投递动作语义：boss=聊天文字气泡；liepin=App 预设招呼语自动发送；zhaopin/job51=投递简历按钮 */
+/** 投递动作语义：boss/liepin=发送招呼语并确认文字消息；zhaopin/job51=投递简历按钮 */
 export type DeliveryKind = 'chat' | 'greetAuto' | 'resume';
 
 /**
@@ -83,7 +83,7 @@ export const PLATFORM_META: Record<JobPlatform, PlatformMeta> = {
     domain: 'liepin.com',
     homeUrl: 'https://www.liepin.com',
     loginUrl: 'https://www.liepin.com/login/',
-    deliveryKind: 'greetAuto',
+    deliveryKind: 'chat',
     capabilities: ['collect', 'score', 'greet', 'deliver'],
     // 猎聘投递=点「聊一聊」即沟通，无网申概念（聊一聊不跳第三方）
     externalApplyHints: ['立即网申', '去网申', '前往申请', '申请职位'],
@@ -91,14 +91,14 @@ export const PLATFORM_META: Record<JobPlatform, PlatformMeta> = {
       open_chat: '打开沟通窗口',
       opened: '已打开沟通窗口',
       verify_chat_target: '核对招聘方',
-      fill_message: '等待平台打招呼',
-      send_message: '平台自动打招呼',
-      verify_message: '确认已打招呼',
+      fill_message: '填写招呼语',
+      send_message: '发送招呼语',
+      verify_message: '确认文字消息',
       send_resume: '发送简历附件',
       verify_result: '确认沟通结果',
       success: '沟通成功',
     },
-    dailyHint: '打招呼由猎聘 App 预设文案自动发送，需先在猎聘 App 设置招呼语',
+    dailyHint: '发送当前岗位的招呼语，确认聊天中的文字消息后才计为成功',
     chipKey: 'orange',
   },
   zhaopin: {

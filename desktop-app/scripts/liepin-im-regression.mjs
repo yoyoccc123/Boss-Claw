@@ -22,20 +22,41 @@ const injected = [
   section('async function platformApply', '// platform-apply：非 BOSS'),
   `const normLabelText = ${A.normLabelText.toString()};`,
   `const ADAPTERS = {labelHit: ${A.labelHit.toString()}, labelExactHit: ${A.labelExactHit.toString()}, LOGIN_WALL_TEXT_RE: ${A.LOGIN_WALL_TEXT_RE}};`,
-  IM.readLiepinImState.toString(), IM.hasNewLiepinConversation.toString(),
-  'const PLATFORM = "liepin"; const clickElement = async (el) => el.click();',
+  IM.readLiepinImState.toString(), IM.findNewLiepinConversation.toString(), IM.normalizeLiepinText.toString(), IM.readLiepinDeliveryState.toString(),
+  `const PLATFORM = "liepin";
+   let writtenWidget=null;
+   const trustedInput=async(_action,value)=>{
+    writes++; if(test.inputFail) return {ok:false};
+    writtenWidget=readLiepinImState(document).widgets.find(w=>w.editor && (w.editor.ownerDocument.activeElement===w.editor || w.editor.getRootNode().activeElement===w.editor));
+    if(!writtenWidget) return {ok:false}; const input=writtenWidget.editor;
+    if('value' in input) input.value=value; else input.textContent=value;
+    return {ok:true};
+   };
+   const clickElement=async(el)=>{
+    el.click(); if(!/^(发送|发送消息)$/.test(el.textContent.trim())) return;
+    sends++; const input=writtenWidget.editor;
+    if(!test.retainEditor) {if('value' in input) input.value='';else input.textContent='';}
+    if(test.noBubble) return;
+    const bubble=input.ownerDocument.createElement('div'); bubble.className=test.bubbleClass||'message-right'; bubble.style.width='250px';
+    bubble.textContent=test.bubbleText||greeting;
+    if(test.bubbleChild)bubble.insertAdjacentHTML('beforeend',test.bubbleChild);
+    const root=test.wrongWindow ? document.querySelector('.other-chat') : writtenWidget.element;
+    (root.nodeType===9 ? root.body : root).appendChild(bubble);
+    if(test.afterSend) eval(test.afterSend);
+   };`,
   'const waitFor = async (check) => { const until = Date.now()+700; do { const result = check(); if(result) return result; await new Promise(r=>setTimeout(r,20)); } while(Date.now()<until); return null; };',
 ].join('\n');
 
-const modal = '<div class="im-ui-chat-modal-container"><div class="chat-header">招聘者甲</div><textarea placeholder="请输入消息"></textarea></div>';
-const mount = '<div id="im-c-entry" style="width:0;height:0"><textarea style="position:absolute;top:60px;left:20px" placeholder="请输入消息"></textarea></div>';
+const greeting = '您好，我对该岗位很感兴趣，具备相关项目经验，希望进一步沟通。';
+const modal = '<div class="im-ui-chat-modal-container"><div class="chat-header">招聘者甲</div><textarea placeholder="请输入消息"></textarea><button>发送</button></div>';
+const mount = '<div id="im-c-entry" style="width:0;height:0"><textarea style="position:absolute;top:60px;left:20px" placeholder="请输入消息"></textarea><button style="position:absolute;top:120px;left:20px">发送</button></div>';
 const append = (html) => `document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(html)});`;
 const tests = [
   { name: '普通聊天窗口', click: append(modal), stage: 'success' },
   { name: '首个窗口隐藏，第二个可见', before: append(modal.replace('class="im-ui-chat-modal-container"', 'class="im-ui-chat-modal-container" style="display:none"')), click: append(modal), stage: 'success' },
   { name: '无尺寸挂载点的可见编辑区', click: append(mount), stage: 'success' },
-  { name: '开放 shadow root', click: "const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);root.attachShadow({mode:'open'}).innerHTML='<textarea placeholder=请输入消息></textarea>';", stage: 'success' },
-  { name: '同源 iframe 编辑区', click: "const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);const frame=document.createElement('iframe');frame.srcdoc='<textarea placeholder=请输入消息></textarea>';root.append(frame);", stage: 'success' },
+  { name: '开放 shadow root', click: "const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);root.attachShadow({mode:'open'}).innerHTML='<textarea placeholder=请输入消息></textarea><button>发送</button>';", stage: 'success' },
+  { name: '同源 iframe 编辑区', click: "const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);const frame=document.createElement('iframe');frame.srcdoc='<textarea placeholder=请输入消息></textarea><button>发送</button>';root.append(frame);", stage: 'success' },
   { name: '只有我的沟通入口', before: append('<div class="im-ui-basic-entry-title">我的沟通</div>'), stage: 'failed', review: true },
   { name: '隐藏窗口不算成功', click: append(modal.replace('class="im-ui-chat-modal-container"', 'class="im-ui-chat-modal-container" style="display:none"')), stage: 'failed', review: true },
   { name: '透明窗口不算成功', click: append(modal.replace('class="im-ui-chat-modal-container"', 'class="im-ui-chat-modal-container" style="opacity:0"')), stage: 'failed', review: true },
@@ -44,12 +65,45 @@ const tests = [
   { name: '无提示词的单行搜索框不算会话', click: append('<div id="im-c-entry"><input role="textbox"></div>'), stage: 'failed', review: true },
   { name: '旧会话没有切换', before: append(modal), stage: 'failed', review: true },
   { name: '旧窗口切换目标招聘者', before: append(modal), click: "document.querySelector('.chat-header').textContent='招聘者乙';", stage: 'success' },
-  { name: '按钮变为继续聊', click: "document.querySelector('.btn-main').textContent='继续聊';", stage: 'success' },
-  { name: '点击前已是继续聊，不重复点击', label: '继续聊', stage: 'skip', clicks: 0 },
+  { name: '仅按钮变为继续聊不算发送成功', click: "document.querySelector('.btn-main').textContent='继续聊';", stage: 'failed', review: true },
+  { name: '继续聊打开空会话，补发真实招呼语', label: '继续聊', click: append(modal), stage: 'success' },
   { name: '延迟创建聊天窗口', click: `setTimeout(()=>{${append(modal)}},150);`, stage: 'success' },
   { name: '安全验证优先于聊天成功', click: append(modal + '<div class="ant-modal">请完成安全验证</div>'), stage: 'risk', code: 35 },
   { name: '隐藏 iframe 不算成功', click: "const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);const frame=document.createElement('iframe');frame.style.display='none';frame.srcdoc='<textarea></textarea>';root.append(frame);", stage: 'failed', review: true },
   { name: '不可读取的 iframe 不猜成功', click: "const root=document.createElement('div');root.id='im-c-entry';document.body.append(root);const frame=document.createElement('iframe');frame.setAttribute('sandbox','');frame.srcdoc='<textarea></textarea>';root.append(frame);", stage: 'failed', review: true },
+  { name: '窗口打开但没有文字消息不算成功', click: append(modal), noBubble: true, stage: 'failed', review: true },
+  { name: '页面正文出现招呼语不算消息', before: append(`<p>${greeting}</p>`), click: append(modal), noBubble: true, stage: 'failed', review: true },
+  { name: '另一个窗口的消息不算成功', before: append('<div class="other-chat"></div>'), click: append(modal), wrongWindow: true, stage: 'failed', review: true },
+  { name: '输入框仍有文字不算已发送', click: append(modal), retainEditor: true, stage: 'failed', review: true },
+  { name: '招聘方同文消息不算我方发送', click: append(modal), bubbleClass: 'message-left incoming', stage: 'failed', review: true },
+  { name: '发送失败消息不算成功', click: append(modal), bubbleClass: 'message-right send-fail', stage: 'failed', review: true },
+  { name: '发送中消息不算成功', click: append(modal), bubbleClass: 'message-right sending', stage: 'failed', review: true },
+  { name: '前缀相同的其他消息不算成功', click: append(modal), bubbleText: greeting + '其他内容', stage: 'failed', review: true },
+  { name: '目标会话变化立即停止', click: append(modal), afterSend: "document.querySelector('.chat-header').textContent='招聘者丙';", stage: 'failed', review: true },
+  { name: '已有同文招呼语不重复发送', click: append(modal.replace('</textarea>', `</textarea><div class="message-right">${greeting}</div>`)), stage: 'skip', sends: 0, writes: 0 },
+  { name: '继续聊已有我方消息不重复发送', label: '继续聊', click: append(modal.replace('</textarea>', '</textarea><div class="message-right">以前的真实招呼语</div>')), stage: 'skip', sends: 0, writes: 0 },
+  { name: '已有草稿不覆盖', click: append(modal.replace('</textarea>', '用户尚未发送的草稿</textarea>')), stage: 'failed', review: true, sends: 0, writes: 0 },
+  { name: '真实输入失败不点击发送', click: append(modal), inputFail: true, stage: 'failed', review: true, sends: 0 },
+  { name: '没有发送按钮保留草稿', click: append(modal.replace('<button>发送</button>', '')), stage: 'failed', review: true, sends: 0 },
+  { name: '多个发送按钮拒绝猜测', click: append(modal.replace('<button>发送</button>', '<button>发送</button><button>发送</button>')), stage: 'failed', review: true, sends: 0 },
+  { name: '语义明确的单行消息框', click: append(modal.replace('<textarea placeholder="请输入消息"></textarea>', '<input type="text" placeholder="请输入消息">')), stage: 'success' },
+  { name: 'contenteditable 编辑器', click: append(modal.replace('<textarea placeholder="请输入消息"></textarea>', '<div contenteditable="true" style="width:200px;height:50px"></div>')), stage: 'success' },
+  { name: '空招呼语不点击聊一聊', greeting: '', stage: 'failed', clicks: 0, sends: 0, writes: 0 },
+  { name: '无法确认消息来自本人时不猜成功', click: append(modal), bubbleClass: 'message-unknown', stage: 'failed', review: true },
+  { name: '原文提及安全验证的业务经历不算风控', greeting: '您好，我参与过安全验证与验证码业务模块的开发，希望进一步沟通。', click: append(modal), stage: 'success' },
+  { name: '同一投递请求重复到达只发一次', click: append(modal), duplicateSame: true, stage: 'success' },
+  { name: '并发第二个投递请求被拒绝', click: append(modal), duplicateOther: true, stage: 'success' },
+  { name: '猎聘官方本人消息类确认发送', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-send', stage: 'success' },
+  { name: '猎聘官方招聘方消息类不算本人发送', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-receive', stage: 'failed', review: true },
+  { name: '猎聘官方发送中图标不算成功', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-send', bubbleChild: '<span class="im-ui-message-item-loadingicon im-ui-message-item-loadingicon-send" style="display:inline-block;width:16px;height:16px"></span>', stage: 'failed', review: true },
+  { name: '猎聘官方失败图标不算成功', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-send', bubbleChild: '<span class="im-ui-message-item-failed-icon im-ui-message-item-failed-icon-send" style="display:inline-block;width:16px;height:16px"></span>', stage: 'failed', review: true },
+  { name: '猎聘官方发送完成隐藏加载图标后确认', click: append(modal), bubbleClass: 'im-ui-message-item-body im-ui-message-item-send', bubbleChild: '<span class="im-ui-message-item-loadingicon im-ui-message-item-loadingicon-send" style="display:inline-block;width:16px;height:16px"></span>', afterSend: "setTimeout(()=>{document.querySelector('.im-ui-message-item-loadingicon').style.display='none';},150);", stage: 'success' },
+];
+const sharedTests = [
+  { name: '共享快照只标记新会话', script: `${append(modal)}snapshotLiepinDelivery(document,{phase:'before'});const old=document.querySelector('textarea');const unchanged=snapshotLiepinDelivery(document);${append(modal.replace('招聘者甲','招聘者乙'))}const target=snapshotLiepinDelivery(document);return !unchanged.ready&&target.ready&&old.getAttribute('data-bossclaw-liepin-editor')==='previous'&&document.querySelectorAll('[data-bossclaw-liepin-editor="active"]').length===1&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===1;` },
+  { name: '共享快照在选中后拒绝切换招聘者', script: `${append(modal)}snapshotLiepinDelivery(document,{phase:'before'});document.querySelector('.chat-header').textContent='招聘者乙';const selected=snapshotLiepinDelivery(document);document.querySelector('.chat-header').textContent='招聘者丙';return selected.ready&&snapshotLiepinDelivery(document).changed===true;` },
+  { name: '共享快照遇到多个新会话不猜目标', script: `${append(modal+modal.replace('招聘者甲','招聘者乙'))}return !snapshotLiepinDelivery(document).ready&&document.querySelectorAll('[data-bossclaw-liepin-send="active"]').length===0;` },
+  { name: '共享快照只认可本人完整文字气泡', script: `${append(modal)}const root=document.querySelector('.im-ui-chat-modal-container');root.insertAdjacentHTML('beforeend','<div class="message-left">'+greeting+'</div><div class="message-right">'+greeting+'</div>');const state=snapshotLiepinDelivery(document,{greeting});return state.matching===1&&state.outgoing===1;` },
 ];
 const temp = mkdtempSync(join(tmpdir(), 'bossclaw-liepin-im-test-'));
 const entry = join(temp, 'main.cjs');
@@ -68,9 +122,14 @@ app.whenReady().then(async()=>{
  try {
   for (const test of ${JSON.stringify(tests)}) {
    await win.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent('<style>textarea{width:200px;height:50px} .im-ui-chat-modal-container{width:300px;padding:10px}</style><a class="btn-main" data-selector="chat-chat">'+(test.label||'聊一聊')+'</a>'));
-   const script='(async()=>{let clicked=0;const results=[];const notify=(channel,data)=>{if(channel==="platform-apply-result")results.push(data);};'+${JSON.stringify(injected)}+String.fromCharCode(10)+(test.before||'')+String.fromCharCode(10)+'document.querySelector(".btn-main").addEventListener("click",()=>{clicked++;'+(test.click||'')+'});await platformApply({seq:"test",platform:"liepin"});return {clicked,results};})()';
+   const script='(async()=>{let clicked=0,writes=0,sends=0;const test='+JSON.stringify(test)+';const greeting='+JSON.stringify(test.greeting===undefined?${JSON.stringify(greeting)}:test.greeting)+';const results=[];const notify=(channel,data)=>{if(channel==="platform-apply-result")results.push(data);};'+${JSON.stringify(injected)}+String.fromCharCode(10)+(test.before||'')+String.fromCharCode(10)+'document.querySelector(".btn-main").addEventListener("click",()=>{clicked++;'+(test.click||'')+'});const task=platformApply({seq:"test",platform:"liepin",greeting});if(test.duplicateSame)await platformApply({seq:"test",platform:"liepin",greeting});if(test.duplicateOther)await platformApply({seq:"other",platform:"liepin",greeting});await task;return {clicked,writes,sends,results};})()';
    results.push({name:test.name,...await win.webContents.executeJavaScript(script)});
    fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify(results));
+  }
+  for(const test of ${JSON.stringify(sharedTests)}){
+   await win.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent('<style>textarea{width:200px;height:50px} .im-ui-chat-modal-container{width:300px;padding:10px}</style>'));
+   const script='(()=>{const greeting='+${JSON.stringify(JSON.stringify(greeting))}+';'+${JSON.stringify([IM.readLiepinImState, IM.normalizeLiepinText, IM.readLiepinDeliveryState, IM.snapshotLiepinDelivery].map(fn=>fn.toString()).join('\n'))}+String.fromCharCode(10)+test.script+'})()';
+   results.push({name:test.name,passed:await win.webContents.executeJavaScript(script)});
   }
   fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify(results));
  }catch(error){fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({error:error.stack}));}
@@ -81,18 +140,24 @@ const electron = process.env.BOSSCLAW_ELECTRON || require('electron');
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 new vm.Script(readFileSync(entry, 'utf8'), { filename: entry });
-const proc = spawnSync(electron, [entry], { env, windowsHide: true, timeout: 40000, encoding: 'utf8' });
+const proc = spawnSync(electron, [entry], { env, windowsHide: true, timeout: 60000, encoding: 'utf8' });
 assert.equal(proc.status, 0, proc.error?.message || proc.stderr);
 const results = JSON.parse(readFileSync(reportPath, 'utf8'));
 assert.ok(Array.isArray(results), results.error);
 for (let i = 0; i < tests.length; i++) {
   const expected = tests[i], actual = results[i];
-  assert.equal(actual.results.length, 1, `${expected.name}: 只能回传一次终态`);
-  assert.equal(actual.results[0].stage, expected.stage, `${expected.name}: ${JSON.stringify(actual.results[0])}`);
+  assert.equal(actual.results.length, expected.duplicateOther ? 2 : 1, `${expected.name}: 每个请求只能回传一次终态`);
+  const result = actual.results.find(result=>result.seq==='test');
+  if(expected.duplicateOther)assert.equal(actual.results.find(result=>result.seq==='other').needsReview,true);
+  assert.equal(result.stage, expected.stage, `${expected.name}: ${JSON.stringify(result)}`);
   assert.equal(actual.clicked, expected.clicks ?? 1, expected.name);
-  if (expected.review) assert.equal(actual.results[0].needsReview, true, expected.name);
-  if (expected.code) assert.equal(actual.results[0].code, expected.code, expected.name);
+  if (expected.review) assert.equal(result.needsReview, true, expected.name);
+  if (expected.code) assert.equal(result.code, expected.code, expected.name);
+  if (expected.stage === 'success') { assert.equal(result.greetingConfirmed, true, expected.name); assert.equal(actual.sends, 1, expected.name); }
+  if (expected.sends !== undefined) assert.equal(actual.sends, expected.sends, expected.name);
+  if (expected.writes !== undefined) assert.equal(actual.writes, expected.writes, expected.name);
 }
+for(let i=0;i<sharedTests.length;i++)assert.equal(results[tests.length+i]?.passed,true,sharedTests[i].name);
 
 // 运行真实工作台处理函数：未知结果要释放锁、保留标签、暂停队列；确认成功才计数。
 const wb = readFileSync(join(root, 'src/pages/Workbench.tsx'), 'utf8');
@@ -100,22 +165,25 @@ const start = wb.indexOf('  const deliverNonBoss = async');
 const end = wb.indexOf('  /** 通道 B：', start);
 const compiled = await transform(wb.slice(start, end) + '\nglobalThis.deliverNonBoss = deliverNonBoss;', { loader: 'ts' });
 for (const response of [{ ok: false, stage: 'failed', needsReview: true, error: '结果未确认', tabId: 'test' }, { ok: true, stage: 'success', tabId: 'test' }]) {
-  const calls = { closed: 0, paused: 0, delivered: 0, next: 0, released: 0, statuses: [] };
+  const calls = { closed: 0, paused: 0, delivered: 0, next: 0, released: 0, statuses: [], applyArgs: null };
+  const currentGreeting = greeting + '这是最新修改后的招呼语。';
   const context = vm.createContext({
     claimDelivery: () => true, releaseDelivery: () => calls.released++, setApplyStage: () => {}, addLog: () => {},
     awaitDeliveryGap: async () => {}, platformLabel: () => '猎聘',
-    webviewApi: { current: { platformApply: async () => response, closeTab: () => calls.closed++ } },
+    useDataStore: { getState: () => ({ pending: [{ id: 'test', deliveryGreeting: currentGreeting }] }) },
+    webviewApi: { current: { platformApply: async (...args) => {calls.applyArgs=args;return response;}, closeTab: () => calls.closed++ } },
     useAppStore: { getState: () => ({ autoAssist: true }) },
     handleDelivered: () => calls.delivered++, updatePending: (_id, data) => calls.statuses.push(data.status),
     recomputeStats: () => {}, pauseAssist: () => calls.paused++, requestRunNext: () => calls.next++,
   });
   vm.runInContext(compiled.code, context);
-  await context.deliverNonBoss({ id: 'test', job: { platform: 'liepin', title: '测试岗位' } }, 'https://www.liepin.com/job/1.shtml');
+  await context.deliverNonBoss({ id: 'test', deliveryGreeting: greeting, job: { platform: 'liepin', title: '测试岗位' } }, 'https://www.liepin.com/job/1.shtml');
   assert.equal(calls.released, 1);
+  assert.equal(calls.applyArgs[3], currentGreeting, '工作台必须传递最新招呼语');
   assert.equal(calls.closed, 0);
   assert.equal(calls.next, 0);
   assert.equal(calls.paused, response.ok ? 0 : 1);
   assert.equal(calls.delivered, response.ok ? 1 : 0);
   if (!response.ok) assert.deepEqual(calls.statuses, ['failed']);
 }
-console.log(`猎聘 IM 回归通过：${tests.length} 个真实 DOM 场景、2 个工作台结果处理场景。报告：${reportPath}`);
+console.log(`猎聘 IM 回归通过：${tests.length} 个真实 DOM 场景、${sharedTests.length} 个共享快照场景、2 个工作台结果处理场景。报告：${reportPath}`);

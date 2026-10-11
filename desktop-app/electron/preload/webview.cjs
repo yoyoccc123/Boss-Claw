@@ -23,7 +23,7 @@ const { ipcRenderer } = require('electron');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
-const { readLiepinImState, hasNewLiepinConversation } = require('./liepin-im.cjs');
+const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
 const OFFICE = require('./office-address.cjs');
 const COMPANY = require('./company-size.cjs');
 const { readOfficeAddress } = require('./office-address-reader.cjs');
@@ -3015,7 +3015,7 @@ ipcRenderer.on('webview-command', (_e, arg) => {
 
 // ===== 非 BOSS 平台投递（platform-apply）：猎聘/智联/51job 新标签页 DOM 投递 =====
 // 口径对齐 get_jobs / Auto-JobHunter / AgentMesh-JobAgent（多项目交叉验证）：
-//  - liepin greetAuto：点「聊一聊」即触发 App 预设招呼语（无需打字）；IM 会话打开=成功。
+//  - liepin chat：点「聊一聊」，输入并发送本岗位招呼语，确认新增本人文字消息后计成功。
 //  - zhaopin resume：点「投递」，投递弹层文本含「申请成功」=成功；「达到上限」→停。
 //  - job51 resume：点「投递」，成功弹层=成功；「需要到企业招聘平台单独申请」=站外网申→跳过。
 // 安全不变量：外部网申跳过、未确认不计成功、找不到目标→failed 交人工、绝不猜成功。
@@ -3075,7 +3075,18 @@ async function zhaopinContinueChat(spec) {
 }
 
 async function platformApply(args = {}) {
-  const { seq, job = {}, externalApplyHints = [] } = args;
+  if (platformApply.busy) {
+    if (String(platformApply.activeSeq) === String(args.seq)) return; // 同一 IPC 重复到达，保留首个流程的终态。
+    notify('platform-apply-result', { seq: args.seq, ok: false, stage: 'failed', needsReview: true, error: '本页面已有投递流程，已忽略重复请求，请人工核对' });
+    return;
+  }
+  platformApply.busy = true;
+  platformApply.activeSeq = args.seq;
+  try { await platformApplyOnce(args); } finally { platformApply.busy = false; }
+}
+
+async function platformApplyOnce(args = {}) {
+  const { seq, job = {}, externalApplyHints = [], greeting = '' } = args;
   const platform = String(args.platform || PLATFORM || 'boss');
   const fail = (stage, extra = {}) => notify('platform-apply-result', Object.assign({ seq, ok: false, stage }, extra));
   const ok = (extra = {}) => notify('platform-apply-result', Object.assign({ seq, ok: true, stage: 'success', method: 'dom' }, extra));
@@ -3092,7 +3103,7 @@ async function platformApply(args = {}) {
     }
 
     if (platform === 'liepin') {
-      // ===== 猎聘详情页「聊一聊」= 触发 App 预设招呼语自动发送，无需本机打字 =====
+      // ===== 猎聘详情页：打开目标会话 → 填写本岗位招呼语 → 发送 → 核对新增消息 =====
       //
       // 2026-10-01 真机源码取证（用户提供的 `岗位.txt` 详情页 HTML），纠正三处旧口径：
       //   ① **「聊一聊」是 <a> 不是 <button>** —— 主操作区
@@ -3108,7 +3119,9 @@ async function platformApply(args = {}) {
       //      岗位描述里出现这些词（风控/反欺诈岗）会被误判成风控并暂停引擎 —— 与智联分支同一教训，
       //      这里对齐智联：**只在风控类容器内**判定。
       //
-      // 安全不变量不变：已沟通/已投递 → 跳过；未确认 IM 打开 → failed 交人工；绝不猜成功。
+      // 窗口打开或按钮变「继续聊」只表示会话就绪，不能证明招呼语已发送。
+      const safeGreeting = normalizeLiepinText(greeting);
+      if (safeGreeting.length < 8) return fail('failed', { error: '猎聘招呼语为空或过短，已停止发送' });
       const btnSelectors = [
         // ① 主操作区「聊一聊」（真机 `<a class="btn-main" data-selector="chat-chat">`）
         'a.btn-main[data-selector="chat-chat"]',
@@ -3123,7 +3136,7 @@ async function platformApply(args = {}) {
         '.ant-btn-round',
         '.chat-btn-box button',
       ];
-      const chatLabels = ['聊一聊'];
+      const chatLabels = ['聊一聊', '继续聊', '继续沟通'];
 
       // 已沟通/已投递态：**只认操作区自身的按钮态**（专用选择器 + 精确文案），
       // 不做全页链接扫描（页脚/导航含「已投递」等词的链接会误判整条跳过）。
@@ -3137,7 +3150,8 @@ async function platformApply(args = {}) {
       const readAppliedState = () =>
         all(appliedSelectors.join(', ')).find((el) => visible(el) && ADAPTERS.labelExactHit(textOf(el), appliedLabels))
         || null;
-      if (readAppliedState()) {
+      const previousApplied = readAppliedState();
+      if (previousApplied && !ADAPTERS.labelExactHit(textOf(previousApplied), ['继续聊', '继续沟通'])) {
         return fail('skip', { message: '该岗位已沟通/已投递过，跳过（不重复打扰同一 HR）' });
       }
 
@@ -3153,7 +3167,7 @@ async function platformApply(args = {}) {
         return 'blocked';
       };
 
-      const btn = findPlatformAction(btnSelectors, chatLabels);
+      const btn = previousApplied || findPlatformAction(btnSelectors, chatLabels);
       if (!btn) {
         // 找不到入口时先看是不是被登录墙/风控拦了，给出可定位的原因而不是笼统「未找到」
         const blockEl = firstVisible([
@@ -3177,17 +3191,16 @@ async function platformApply(args = {}) {
       }
 
       const imBefore = readLiepinImState(document);
-      notify('apply-stage', { stage: 'send_message', label: '平台自动打招呼', platform });
+      notify('apply-stage', { stage: 'open_chat', label: '打开目标沟通窗口', platform });
       await clickElement(btn);
 
-      // 成功 = IM 会话打开（猎聘用 App 预设招呼语自动发送，无需本机输入）。
+      // 就绪 = 唯一的新会话且有真实可编辑输入框。
       // #im-c-entry 可能只是无尺寸挂载点；im-ui-basic-entry 是「我的沟通」入口。
       // 检查可见会话/输入区的点击前后变化，避免漏掉后面的窗口，也不把侧栏入口算成功。
       // 风控容器范围收窄：只在弹层/提示/校验类容器内查风控文案，不扫岗位描述正文。
       const RISK_SCOPE = [
-        '[class*="im-ui-chat-modal"]', '[class*="im-ui-basic"]',
         '.ant-modal', '.ant-drawer', '.ant-message', '.ant-notification',
-        '[class*="dialog"]', '[class*="toast"]', '[class*="message"]',
+        '[class*="dialog"]', '[class*="toast"]',
         '[class*="risk"]', '[class*="warning"]', '[class*="alert"]',
         '[class*="verify"]', '[class*="captcha"]', '[class*="waf"]', '[class*="geetest"]',
       ];
@@ -3196,6 +3209,7 @@ async function platformApply(args = {}) {
         if (firstVisible(['[class*="geetest"]', '[class*="waf"]', '[id*="captcha"]', '[class*="captcha"]'])) return true;
         for (const el of all(RISK_SCOPE.join(', '))) {
           if (!visible(el)) continue;
+          if (el.querySelector('textarea, [contenteditable]')) continue; // 编辑器/聊天正文里的业务词不是验证提示。
           const t = PLATFORM_NORM(textOf(el));
           if (t && ['安全验证', '请完成验证', '验证码', '行为异常', '操作频繁'].some((k) => t.includes(k))) return true;
         }
@@ -3203,10 +3217,7 @@ async function platformApply(args = {}) {
       };
       const imReady = await waitFor(() => {
         if (riskHit()) return 'risk';
-        const applied = readAppliedState();
-        if (applied && ADAPTERS.labelExactHit(textOf(applied), ['继续聊', '继续沟通', '已沟通', '已投递', '聊过了'])) return 'ok';
-        if (hasNewLiepinConversation(imBefore, readLiepinImState(document))) return 'ok';
-        return null;
+        return findNewLiepinConversation(imBefore, readLiepinImState(document));
       }, 15000, '猎聘 IM 会话窗口');
       if (imReady === 'risk') {
         return fail('risk', { code: 35, message: '点击「聊一聊」后检测到安全验证/风控提示，已暂停，请人工完成' });
@@ -3219,7 +3230,56 @@ async function platformApply(args = {}) {
           error: '点击「聊一聊」后未能确认目标会话，已保留页面并暂停投递，请人工核对聊天窗口及按钮状态',
         });
       }
-      return ok({ method: 'dom' });
+      const target = imReady;
+      const currentTarget = () => readLiepinImState(document).widgets.find((widget) => widget.element === target.element && widget.heading === target.heading && widget.editor);
+      const beforeSend = readLiepinDeliveryState(target, safeGreeting);
+      if (beforeSend.matching.length || beforeSend.outgoing.length) {
+        return fail('skip', { message: '目标会话已有已发送消息，已跳过，避免重复发送招呼语' });
+      }
+      if (beforeSend.editorText) {
+        return fail('failed', { needsReview: true, error: '猎聘输入框已有未发送草稿，已保留，请人工核对后发送' });
+      }
+      const input = target.editor;
+      input.scrollIntoView({ block: 'center' });
+      input.focus();
+      // 使用编辑器自身的 document/window，支持同源 iframe 与开放 shadow root。
+      if (input.matches('[contenteditable]')) {
+        const doc = input.ownerDocument, selection = doc.defaultView.getSelection();
+        const range = doc.createRange(); range.selectNodeContents(input); range.collapse(false);
+        selection.removeAllRanges(); selection.addRange(range);
+      }
+      notify('apply-stage', { stage: 'fill_message', label: '填写猎聘招呼语', platform });
+      if (riskHit()) return fail('risk', { code: 35, message: '猎聘输入前出现安全验证，已暂停' });
+      if (!currentTarget()) return fail('failed', { needsReview: true, error: '猎聘目标会话已变化，已停止发送，请人工核对' });
+      const inserted = await trustedInput('insertText', safeGreeting);
+      if (!inserted.ok) return fail('failed', { needsReview: true, error: '猎聘招呼语真实输入失败，已保留窗口，请人工核对' });
+      try {
+        input.dispatchEvent(new input.ownerDocument.defaultView.Event('input', { bubbles: true }));
+        input.dispatchEvent(new input.ownerDocument.defaultView.Event('change', { bubbles: true }));
+      } catch {}
+      const written = await waitFor(() => {
+        if (riskHit()) return 'risk';
+        const current = currentTarget();
+        if (!current) return 'changed';
+        const state = readLiepinDeliveryState(current, safeGreeting);
+        return state.editorText === safeGreeting && state.sendButton ? state : null;
+      }, 5000, '猎聘招呼语和发送按钮就绪');
+      if (written === 'risk') return fail('risk', { code: 35, message: '猎聘输入后出现安全验证，已暂停' });
+      if (!written || written === 'changed') return fail('failed', { needsReview: true, error: '猎聘输入文字或发送按钮未就绪，已保留草稿，请人工核对' });
+      const messageBefore = new Set(written.matching);
+      notify('apply-stage', { stage: 'send_message', label: '发送猎聘招呼语', platform });
+      await clickElement(written.sendButton);
+      notify('apply-stage', { stage: 'verify_message', label: '确认猎聘文字消息', platform });
+      const sent = await waitFor(() => {
+        if (riskHit()) return 'risk';
+        const current = currentTarget();
+        if (!current) return 'changed';
+        const state = readLiepinDeliveryState(current, safeGreeting);
+        return !state.editorText && state.matching.some((el) => !messageBefore.has(el)) ? 'sent' : null;
+      }, 10000, '猎聘招呼语文字确认');
+      if (sent === 'risk') return fail('risk', { code: 35, message: '猎聘发送后出现安全验证，已暂停，请人工核对' });
+      if (sent !== 'sent') return fail('failed', { needsReview: true, error: '猎聘招呼语发送结果未确认，已保留窗口并暂停，请人工核对；程序不会自动重发' });
+      return ok({ method: 'dom', greetingConfirmed: true });
     }
 
     if (platform === 'zhaopin') {
