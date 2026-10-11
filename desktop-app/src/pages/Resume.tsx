@@ -119,6 +119,8 @@ export default function Resume() {
   const profile = useDataStore((s) => s.profile);
   const profileDraft = useDataStore((s) => s.profileDraft);
   const setResumeText = useDataStore((s) => s.setResumeText);
+  const writingPreferences = useDataStore((s) => s.resumeWritingPreferences);
+  const setWritingPreferences = useDataStore((s) => s.setResumeWritingPreferences);
   const setProfile = useDataStore((s) => s.setProfile);
   const setProfileDraft = useDataStore((s) => s.setProfileDraft);
   const storeGreetingPrompt = useDataStore((s) => s.greetingPrompt);
@@ -507,6 +509,15 @@ export default function Resume() {
               className={'resume-src-input' + (text.trim() ? '' : ' resume-src-input--empty')}
               placeholder="在此粘贴简历正文，或点击右上角「重新导入」导入 PDF / DOCX / DOC / MD / TXT"
             />
+            <div style={{ marginTop: 12 }}>
+              <Typography.Text type="secondary">定制简历偏好（自动保存）</Typography.Text>
+              <Space wrap style={{ marginTop: 8 }}>
+                <Checkbox checked={!!writingPreferences.omitCourseList} onChange={e => setWritingPreferences({ ...writingPreferences, omitCourseList: e.target.checked })}>不列相关课程</Checkbox>
+                <Checkbox checked={!!writingPreferences.omitPatentPreparation} onChange={e => setWritingPreferences({ ...writingPreferences, omitPatentPreparation: e.target.checked })}>不列专利评估材料</Checkbox>
+                <Checkbox checked={!!writingPreferences.conciseRagLabel} onChange={e => setWritingPreferences({ ...writingPreferences, conciseRagLabel: e.target.checked })}>RAG 使用简写</Checkbox>
+                <Checkbox checked={!!writingPreferences.separateDevTools} onChange={e => setWritingPreferences({ ...writingPreferences, separateDevTools: e.target.checked })}>开发工具单独分组</Checkbox>
+              </Space>
+            </div>
           </Card>
 
         </Col>

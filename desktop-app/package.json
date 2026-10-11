@@ -1,6 +1,6 @@
 {
   "name": "bossclaw-desktop",
-  "version": "2.5.20",
+  "version": "2.5.21",
   "description": "BossClaw —— 面向求职者的本地 AI 投递助手",
   "private": true,
   "author": "YanQuan",
@@ -28,6 +28,7 @@
     "test:context-budget": "node scripts/context-budget-regression.mjs",
     "test:tailor-job": "node scripts/tailor-job-regression.mjs",
     "test:resume": "node scripts/resume-regression.mjs",
+    "test:resume-facts": "node scripts/resume-facts-regression.mjs",
     "test:tailor-batch": "node scripts/tailor-batch-regression.mjs",
     "test:workbench-filters": "node scripts/workbench-filters-regression.mjs",
     "test:liepin-im": "node scripts/liepin-im-regression.mjs",

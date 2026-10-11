@@ -336,7 +336,21 @@ function renderStandard(data: ResumeDocData, photoFirst = false): string {
 export function buildResumeHtml(data: ResumeDocData, templateId = 'personal'): string {
   const tplId = isKnownTemplate(templateId) ? templateId : 'personal';
   const tplCss = tplId === 'personal' ? TEMPLATE_CSS.focus.replace(/\.tpl-focus/g, '.tpl-personal') + `
-.tpl-personal .focus-overview .resume-section[data-section="selfEval"] { flex:1.5; }
+@page { size:A4; margin:8mm 10mm; }
+.tpl-personal { line-height:1.27; }
+.tpl-personal .focus-header { padding:3mm; margin-bottom:2mm; }
+.tpl-personal .resume-section { margin-bottom:1.5mm; }
+.tpl-personal .resume-section-body .exp-heading { margin:0; }
+.tpl-personal .resume-section-body .exp-meta { margin:0.4mm 0; }
+.tpl-personal .para-block p { margin:0; }
+.tpl-personal .resume-section[data-section="projects"] .exp-block { padding:1mm 2.5mm; margin-bottom:1mm; }
+.tpl-personal ul.bullets li { margin-bottom:0.4mm; }
+.tpl-personal .focus-overview { margin-bottom:2mm; }
+.tpl-personal .focus-overview .resume-section { padding:1.5mm; }
+.tpl-personal .focus-overview { display:block; }
+.tpl-personal .focus-overview .resume-section + .resume-section { border-left:0; border-top:1px solid #cdd8ec; }
+.tpl-personal .focus-overview .resume-section[data-section="skills"] .resume-section-body { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1mm 4mm; }
+.tpl-personal .focus-overview .resume-line { break-inside:avoid; margin:0; }
 .tpl-personal .resume-section[data-section="skills"] .resume-line:nth-child(4n+2) { color:#7547bc; }
 .tpl-personal .resume-section[data-section="skills"] .resume-line:nth-child(4n+3) { color:#287946; }
 .tpl-personal .resume-section[data-section="skills"] .resume-line:nth-child(4n) { color:#b46b13; }
