@@ -87,6 +87,11 @@ function normalizeLiepinText(text) {
   return String(text || '').replace(/[\u200b\u200c\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// 用户实际页面中的猎聘默认句；只认完整模板，不把“您好/感兴趣”等泛化文案当默认句。
+function isLiepinDefaultGreeting(text) {
+  return /^您好[！!，,。]?\s*我对贵公司发布的.{1,240}岗位很感兴趣[，,。]\s*期待进一步了解[。.!！]?$/.test(normalizeLiepinText(text));
+}
+
 /** 只在选中的会话里定位发送和消息；输入框、草稿、其他窗口与页面正文都不能证明已发送。 */
 function readLiepinDeliveryState(widget, greeting) {
   const { element: root, editor } = widget;
@@ -115,7 +120,13 @@ function readLiepinDeliveryState(widget, greeting) {
   const needle = normalizeLiepinText(greeting);
   const matching = [];
   const outgoing = [];
-  for (const el of query('div, p, span, li, [data-message-id]')) {
+  const received = [];
+  // 官方消息行的正文在 normal-message-wrapper 的首个子节点，旁边的头像/已读状态不是消息正文。
+  const officialRows = query('.im-ui-message-item-send, .im-ui-message-item-receive');
+  const officialContents = officialRows.map((row) => row.querySelector('.im-ui-message-item-normal-message-wrapper')?.firstElementChild || row);
+  const fallbackContents = query('div, p, span, li, [data-message-id]')
+    .filter((el) => !el.closest('.im-ui-message-item-send, .im-ui-message-item-receive'));
+  for (const el of new Set([...officialContents, ...fallbackContents])) {
     if (!shown(el) || el === editor || el.contains(editor) || editor?.contains(el)) continue;
     if (el.closest('button, a, [role="button"], textarea, [contenteditable], [role="textbox"], [class*="header"], [class*="title"]')) continue;
     const content = text(el);
@@ -135,14 +146,19 @@ function readLiepinDeliveryState(widget, greeting) {
         || Array.from(node.querySelectorAll('[class*="im-ui-message-item-loadingicon"]')).some((icon) => shown(icon));
       node = node.parentElement;
     }
-    if (incoming || failed || pending) continue;
+    if (failed || pending) continue;
+    if (incoming) { if (!own) received.push(el); continue; }
     if (own) outgoing.push(el);
     if (own && needle && content === needle) matching.push(el);
   }
   const innermost = (items) => items.filter((el) => !items.some((other) => other !== el && el.contains(other)));
+  const sent = innermost(outgoing);
   return {
     sendButton, editorText: normalizeLiepinText(editor?.value ?? editor?.innerText ?? ''),
-    matching: innermost(matching), outgoing: innermost(outgoing),
+    matching: innermost(matching), outgoing: sent,
+    defaultOutgoing: sent.filter((el) => isLiepinDefaultGreeting(text(el))),
+    nonDefaultOutgoing: sent.filter((el) => !isLiepinDefaultGreeting(text(el))),
+    incoming: innermost(received),
   };
 }
 
@@ -170,7 +186,9 @@ function snapshotLiepinDelivery(doc, { greeting = '', phase = 'target' } = {}) {
   for (const widget of widgets) for (const button of widget.element.querySelectorAll('[data-bossclaw-liepin-send]')) button.removeAttribute('data-bossclaw-liepin-send');
   if (delivery.sendButton) delivery.sendButton.setAttribute('data-bossclaw-liepin-send', 'active');
   return { ready: true, heading: target.heading, editorText: delivery.editorText, matching: delivery.matching.length,
-    outgoing: delivery.outgoing.length, sendReady: !!delivery.sendButton };
+    outgoing: delivery.outgoing.length, defaultOutgoing: delivery.defaultOutgoing.length,
+    nonDefaultOutgoing: delivery.nonDefaultOutgoing.length, incoming: delivery.incoming.length,
+    sendReady: !!delivery.sendButton };
 }
 
-module.exports = { readLiepinImState, hasNewLiepinConversation, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState, snapshotLiepinDelivery };
+module.exports = { readLiepinImState, hasNewLiepinConversation, findNewLiepinConversation, normalizeLiepinText, isLiepinDefaultGreeting, readLiepinDeliveryState, snapshotLiepinDelivery };
