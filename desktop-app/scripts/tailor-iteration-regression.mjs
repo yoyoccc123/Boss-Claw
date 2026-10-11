@@ -39,8 +39,9 @@ const draft = (text = '参与知识库项目。', after = 72) => ({
 });
 const nodeBundle = join(temporary, 'logic.cjs');
 await bundle("export * from './src/lib/bossclaw/jobAssistant'; export * from './src/lib/bossclaw/tailorBatch';", nodeBundle, 'node');
-const { tailorForJob, appendTailorSupplement, normalizeAiMatch, upsertTailorHistory, finalizeJdPoints, normalizeTailorDoc, writeTailorPointSupplement, createTailorBatch, runTailorBatch } = require(nodeBundle);
+const { tailorForJob, recheckTailorResult, appendTailorSupplement, normalizeAiMatch, upsertTailorHistory, finalizeJdPoints, normalizeTailorDoc, writeTailorPointSupplement, createTailorBatch, runTailorBatch } = require(nodeBundle);
 const calls = [];
+const cacheMetas = [];
 const checkProjectWriting = (request) => {
   const system = request.filter(m => m.role === 'system').map(m => m.content).join('\n');
   for (const required of ['课程设计、竞赛、个人原型、开源复现/二次开发', '输入→处理/接口/工具→输出或存储', '离线测试不能写成线上效果', '参考材料只借鉴表达方法']) {
@@ -48,8 +49,9 @@ const checkProjectWriting = (request) => {
   }
 };
 let replies = [];
-globalThis.__modelHook = async (messages) => {
+globalThis.__modelHook = async (messages, _model, _options, cacheMeta) => {
   calls.push(messages);
+  cacheMetas.push(cacheMeta);
   const next = replies.shift();
   if (next instanceof Error) throw next;
   assert.ok(next, '模型调用数量超出预期');
@@ -64,7 +66,7 @@ const one = appendTailorSupplement(undefined, '  负责文档切分，测试30�
 assert.equal(one[0].text, '负责文档切分，测试30条问题。');
 const reviewedDoc = draft('负责文档切分并测试30条问题。').resume;
 reviewedDoc.projects[0].bullets[0].source = one[0].text;
-replies = [draft(one[0].text, 80), { resume: reviewedDoc, matchScore: { before: 67, after: 84 } }];
+replies = [draft(one[0].text, 80), { resume: reviewedDoc, jdPoints: [{ point: '检索测试', layer: 'duty', verdict: 'covered', evidence: '最终正文保留30条测试问题' }], matchScore: { before: 67, after: 84 } }];
 const second = await tailorForJob(job, resume, profile, model, undefined, '导入的文件经历', { supplements: one, previousResult: first });
 assert.equal(second.aiMatch.after, 84, '评分必须对应回审后的文档');
 assert.equal(second.previousScore, 72);
@@ -86,8 +88,49 @@ for (const request of calls.slice(-2)) {
 assert.deepEqual(one, [{ text: '负责文档切分，测试30条问题。', createdAt: 1 }], '不能修改上一版补充');
 assert.deepEqual(appendTailorSupplement(two, '  '), two);
 assert.equal(normalizeAiMatch({ before: 'bad', after: 80 }), null);
-replies = [draft(), { resume: draft('不同的最终正文').resume }];
-assert.equal((await tailorForJob(job, resume, profile, model)).aiMatch, null, '正文已修订但无评分时不能展示旧稿分数');
+replies = [draft(), { resume: draft('不同的最终正文').resume }, new Error('模拟复核不可用')];
+const pendingResult = await tailorForJob(job, resume, profile, model);
+assert.equal(pendingResult.aiMatch, null, '正文已修订但无评分时不能展示旧稿分数');
+assert.ok(pendingResult.jdPoints.every(p => p.statusVerified === false), '补查失败保留待复核');
+assert.equal(pendingResult.doc.projects[0].bullets[0].text, '不同的最终正文', '补查失败保留已完成正文');
+assert.ok(pendingResult.warning.includes('复核要点'));
+const assessment = { jdPoints: [{ id: 'p1', verdict: 'addable', evidence: '事实支持检索测试，但最终正文未具体说明' }], matchScore: { before: 60, after: 70 } };
+replies = [draft(), { resume: draft('不同的最终正文').resume }, assessment];
+const repairStart = calls.length;
+const repaired = await tailorForJob(job, resume, profile, model);
+assert.equal(calls.length - repairStart, 3, '缺少完整回审时自动补查一次');
+assert.equal(repaired.jdPoints[0].statusVerified, true);
+assert.equal(repaired.jdPoints[0].verdict, 'addable', '完成复核不等于全部已体现');
+assert.deepEqual(repaired.aiMatch, assessment.matchScore);
+assert.equal(repaired.doc.projects[0].bullets[0].text, '不同的最终正文');
+assert.equal(repaired.warning, undefined);
+const recheckInput = { result: { ...second, jdPoints: [...second.jdPoints, { point: '至少3个月全职实习', layer: 'must', verdict: 'missing', evidence: '原文没有确认时间' }], warning: '复检修改了正文但未返回有效评分' }, job, resumeText: resume, profile, model, extraMaterials: '本人参与接口测试' };
+const completeAssessment = { jdPoints: [{ id: 'p2', verdict: 'missing', evidence: '本人未确认全职实习时长' }, { id: 'p1', verdict: 'covered', evidence: '最终项目已明确30条测试问题' }], matchScore: { before: 60, after: 78 }, resume: draft('不应采纳的新经历').resume };
+replies = [completeAssessment];
+const rechecked = await recheckTailorResult(recheckInput);
+assert.equal(cacheMetas.at(-1).ttlMs, 0, '不复用未经业务校验的复核缓存，重试可重新请求');
+assert.deepEqual(rechecked.jdPoints.map(p => [p.point, p.layer, p.verdict, p.statusVerified]), [['检索测试', 'duty', 'covered', true], ['至少3个月全职实习', 'must', 'missing', true]], '稳定ID对应原清单顺序，真实缺口保留');
+for (const field of ['doc', 'rewrites', 'coverLetter', 'supplements', 'previousScore']) assert.equal(rechecked[field], recheckInput.result[field], `只复核不改动${field}`);
+assert.equal(rechecked.warning, undefined);
+const recheckPrompt = calls.at(-1).map(m => m.content).join('\n');
+for (const text of [one[0].text, '本人参与接口测试', '愿望不能当作已具备事实', '最终正文（只读）']) assert.ok(recheckPrompt.includes(text), `复核请求缺少：${text}`);
+for (const invalid of [
+  { ...completeAssessment, jdPoints: completeAssessment.jdPoints.slice(0, 1) },
+  { ...completeAssessment, jdPoints: [completeAssessment.jdPoints[0], completeAssessment.jdPoints[0]] },
+  { ...completeAssessment, jdPoints: [{ ...completeAssessment.jdPoints[0], id: 'p9' }, completeAssessment.jdPoints[1]] },
+  { ...completeAssessment, jdPoints: [{ ...completeAssessment.jdPoints[0], evidence: '' }, completeAssessment.jdPoints[1]] },
+  ...['invalid', '', true, [], -1, 101].map(before => ({ ...completeAssessment, matchScore: { before, after: 78 } })), new Error('服务失败'),
+]) {
+  replies = [invalid];
+  const before = JSON.stringify(recheckInput.result), start = calls.length;
+  await assert.rejects(() => recheckTailorResult(recheckInput));
+  assert.equal(calls.length - start, 1, '不完整复核不无限重试');
+  assert.equal(JSON.stringify(recheckInput.result), before, '复核失败不修改原结果');
+}
+const legacy = { ...recheckInput.result, jdPoints: recheckInput.result.jdPoints.map(({ statusVerified, ...p }) => p) };
+replies = [completeAssessment];
+assert.ok((await recheckTailorResult({ ...recheckInput, result: legacy })).jdPoints.every(p => p.statusVerified), '旧记录可只复核恢复状态');
+console.log('PASS: 缺失最终要点/评分自动补查，稳定ID、只读正文、真实缺口、旧记录复核与失败保留。');
 const historyItem = (id, company, result) => ({ id, jobId: id, company, job, jobTitle: job.title, jobDesc: job.description, createdAt: 1, result });
 const saved = upsertTailorHistory([historyItem('a', '示例甲公司', first), historyItem('b', '示例乙公司', first)], historyItem('a', '示例甲公司', third));
 assert.equal(saved.length, 2);
@@ -180,13 +223,20 @@ const profile=${JSON.stringify(profile)}, job=${JSON.stringify(job)}, coverLette
 const base=${JSON.stringify(draft())};
 base.jdPoints=[{point:'了解数据库表设计',layer:'must',verdict:'addable',evidence:'项目用MySQL存储数据但未写明表设计'}];
 base.jdPoints.push({point:'核心插件及 Web 模块开发',layer:'duty',verdict:'missing',evidence:'未提供插件开发经历'});
-const test:any=window; test.modelCalls=[]; test.failModel=false; test.pdfFiles=[];
+const test:any=window; test.modelCalls=[]; test.failModel=false; test.allowRecheck=false; test.pdfFiles=[];
 test.__modelHook=async(messages:any[])=>{
  test.modelCalls.push(messages); await new Promise(r=>setTimeout(r,80)); if(test.failModel) throw new Error('离线模拟服务失败');
+ if(messages[0].content.startsWith('你是简历最终正文复核员')) {
+   if(!test.allowRecheck) throw new Error('模拟首次补查未完成');
+   return {jdPoints:[{id:'p2',verdict:'missing',evidence:'本人未提供插件开发经历'},{id:'p1',verdict:'addable',evidence:'本人了解表设计但最终正文未写明'}],matchScore:{before:60,after:76}};
+ }
  if(messages[0].content.startsWith('你是求职者的简历编辑')) return {text:'参与 Web 接口模块开发，没有插件开发经历。',missingDetails:['你使用了哪个 Web 框架？']};
  const rounds=[...messages[1].content.matchAll(/【第(\\d+)轮用户补充】/g)].map((m:any)=>Number(m[1]));
  const round=Math.max(0,...rounds); const score=72+round*8;
- if(messages[0].content.startsWith('你是资深招聘方')) return {jdPoints:base.jdPoints,matchScore:{before:60,after:score}};
+ if(messages[0].content.startsWith('你是资深招聘方')) {
+   if(!round && messages[1].content.includes('示例乙公司')) return {resume:{projects:[{heading:'知识库项目',meta:'Python',bullets:[{text:'乙公司最终正文',source:'参与知识库项目。'}]}]}};
+   return {jdPoints:base.jdPoints,matchScore:{before:60,after:score}};
+ }
  const output=JSON.parse(JSON.stringify(base)); output.matchScore.after=score;
  if(round) output.resume.projects[0].bullets[0]={text:'第'+round+'轮补充已纳入知识库项目',source:round===1?'补充甲：文档切分与30条测试问题。':'补充乙：负责检索效果评估。'};
  if(round) output.resume.skills.push({text:'了解数据库表设计',source:'了解数据库表设计'});
@@ -223,7 +273,7 @@ const runUi = async function () {
   };
   await wait(() => button('开始批量生成'), '批量入口'); button('开始批量生成').click();
   await wait(() => history().length === 2, '生成两个岗位');
-  check(history().every(h => h.result.aiMatch.after === 72), '初始评分');
+  check(history().find(h => h.jobId === 'a').result.aiMatch.after === 72 && history().find(h => h.jobId === 'b').result.aiMatch === null, '初始评分与未完成复核的本地估算');
   button('查看结果', document.querySelector('.tailor-batch-card')).click();
   await wait(() => document.querySelector('#tailor-supplement-text'), '补充文本框');
   check(button('补充并重新生成').disabled, '空输入不可提交');
@@ -314,6 +364,30 @@ const runUi = async function () {
   [...document.querySelectorAll('.tailor-point-row')].find(b => b.textContent.includes('核心插件及 Web 模块开发')).click();
   await wait(() => pointField(), '另一岗位要点');
   check(pointField().value === '' && history().find(h => h.jobId === 'b').result.supplements.length === 0, '另一岗位不带入补充或草稿');
+  pointModal().querySelector('.ant-modal-close').click();
+  await wait(() => button('复核要点'), '旧结果可只复核');
+  fill(document.querySelector('#tailor-supplement-text'), '未提交草稿不能作为事实');
+  const oldB = history().find(h => h.jobId === 'b').result, oldA = JSON.stringify(history().find(h => h.jobId === 'a').result);
+  window.allowRecheck = true; window.failModel = true; button('复核要点').click();
+  await wait(() => document.querySelector('#tailor-supplement-text').disabled, '复核失败开始');
+  await wait(() => !document.querySelector('#tailor-supplement-text').disabled, '复核失败结束');
+  check(JSON.stringify(history().find(h => h.jobId === 'b').result) === JSON.stringify(oldB), '复核失败保留旧记录');
+  check(document.querySelector('#tailor-supplement-text').value === '未提交草稿不能作为事实', '复核失败保留未提交草稿');
+  window.failModel = false; const recheckCalls = window.modelCalls.length;
+  button('复核要点').click(); button('复核要点').click();
+  button('查看结果', document.querySelectorAll('.tailor-batch-card .ant-list-item')[0]).click();
+  await wait(() => document.querySelector('#tailor-supplement-text').disabled, '复核锁');
+  await wait(() => history().find(h => h.jobId === 'b').result.jdPoints.every(p => p.statusVerified), '复核完成保存');
+  await wait(() => !document.querySelector('#tailor-supplement-text').disabled, '复核结束');
+  const newB = history().find(h => h.jobId === 'b').result;
+  check(window.modelCalls.length - recheckCalls === 1, '复核重复点击只请求一次且不重写');
+  check(newB.aiMatch.after === 76 && newB.jdPoints[1].verdict === 'missing', '复核更新评分并保留真实缺口');
+  check(JSON.stringify(newB.doc) === JSON.stringify(oldB.doc) && newB.coverLetter === oldB.coverLetter, '只复核保留最终正文与招呼语');
+  check(JSON.stringify(history().find(h => h.jobId === 'a').result) === oldA && history().length === 2, '复核保留公司身份与另一岗位结果');
+  check(document.querySelector('#tailor-supplement-text').value === '未提交草稿不能作为事实' && !window.modelCalls.at(-1)[1].content.includes('未提交草稿不能作为事实'), '复核保留草稿且不当作事实');
+  check(!button('复核要点') && document.querySelector('.tailor-stat-tags').textContent.replace(/\s/g, '').includes('不具备1'), '复核成功移除待复核入口并显示实质判定');
+  [...document.querySelectorAll('.tailor-point-row')].find(b => b.textContent.includes('核心插件及 Web 模块开发')).click();
+  await wait(() => pointField(), '复核后详情');
   document.querySelector('.tailor-point-detail-modal').scrollIntoView({ block: 'center' });
   await new Promise(r => setTimeout(r, 3500));
   return checks;

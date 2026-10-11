@@ -19,7 +19,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useDataStore } from '@/store/useDataStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useAppStore } from '@/store/useAppStore';
-import { appendTailorSupplement, tailorForJob, writeTailorPointSupplement, type TailorJdPoint, type TailorResult } from '@/lib/bossclaw/jobAssistant';
+import { appendTailorSupplement, recheckTailorResult, tailorForJob, writeTailorPointSupplement, type TailorJdPoint, type TailorResult } from '@/lib/bossclaw/jobAssistant';
 import { computeMatchScore, extractJdKeywords } from '@/lib/bossclaw/resumeMatch';
 import { stableProfileView } from '@/lib/bossclaw/matching';
 import { cleanJobDescription, jdLooksNoisy } from '@/lib/bossclaw/jdCleaner';
@@ -572,6 +572,25 @@ export default function JobAssistant() {
     }
   };
 
+  const onRecheck = async () => {
+    if (!tailor || generationLock.current || exporting) return;
+    generationLock.current = true;
+    setGenerating(true);
+    try {
+      const job: JobMeta = { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim() };
+      const r = await recheckTailorResult({ result: tailor, job, resumeText, profile, model: config.model, extraMaterials: await resolveMaterialsText() });
+      setTailor(r);
+      if (batchResultId) setBatchItems((items) => items.map((item) => item.id === batchResultId ? { ...item, result: r } : item));
+      recordHistory({ jobId: importId || historyJobId, company: job.company, job, jobTitle: jobTitle.trim(), jobDesc: jobDesc.trim() }, r);
+      message.success('已按现有正文复核要点与评分');
+    } catch (error) {
+      message.error('复核失败：' + getErrorMessage(error));
+    } finally {
+      generationLock.current = false;
+      setGenerating(false);
+    }
+  };
+
   const onHelpWritePoint = async (point: TailorJdPoint, text: string) => {
     if (generationLock.current || exporting) throw new Error('请等待当前操作完成');
     generationLock.current = true;
@@ -616,7 +635,7 @@ export default function JobAssistant() {
   };
 
   const showBatchResult = (item: TailorBatchItem) => {
-    if (generating || !item.result) return;
+    if (generationLock.current || generating || !item.result) return;
     setImportId(item.id);
     setImportedJob(item.job);
     setImportedSource(item.source);
@@ -630,7 +649,7 @@ export default function JobAssistant() {
   };
 
   const onLoadHistory = (h: TailorHistoryItem) => {
-    if (generating) return;
+    if (generationLock.current || generating) return;
     setImportId(undefined);
     setImportedJob(h.job || { title: h.jobTitle, description: h.jobDesc, company: h.company });
     setImportedSource(null);
@@ -884,6 +903,7 @@ export default function JobAssistant() {
           supplementText={supplementDraft}
           onSupplementChange={setSupplementDraft}
           onRegenerate={() => void onGenerate(supplementDraft)}
+          onRecheck={() => void onRecheck()}
           onHelpWritePoint={onHelpWritePoint}
           onSupplementPoint={(point, text) => onGenerate(`【岗位要点：${point.point}】\n${text}`, false)}
           regenerating={generating}
