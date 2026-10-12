@@ -17,6 +17,7 @@
 import type { Profile } from './types';
 import type { TailorResult, TailorResumeDoc } from './jobAssistant';
 import { buildLocalTailorDoc } from './jobAssistant';
+import { resumeDisplayText, type ResumeWritingPreferences } from './resumeWriting';
 
 // ===== 输出数据结构（与具体输出格式解耦：PDF / 其他格式共用） =====
 /** 内容块（教育/实习/工作/项目共用）：首行标题 + 元信息行 + 要点 */
@@ -117,12 +118,12 @@ export interface ResumeSectionMeta {
 
 export const RESUME_SECTION_META: ResumeSectionMeta[] = [
   { id: 'education', title: '教育经历', kind: 'blocks', default: true, hint: '学校 + 专业 | 学历 + 时间（原文事实）' },
+  { id: 'honors', title: '个人荣誉', kind: 'lines', default: true, hint: '获奖与证书（原文事实）' },
+  { id: 'selfEval', title: '自我评价', kind: 'paragraph', default: true, hint: '自我评价段落' },
+  { id: 'skills', title: '专业技能', kind: 'lines', default: true, hint: '按 AI 依 JD 归类的分组技能，一组一行' },
   { id: 'internships', title: '实习经历', kind: 'blocks', default: true, hint: '实习经历要点，按岗位相关性重排' },
   { id: 'works', title: '工作经历', kind: 'blocks', default: true, hint: '正式工作经历要点（无则不输出该模块）' },
   { id: 'projects', title: '项目经历', kind: 'blocks', default: true, hint: '项目名称 / 技术栈 / 量化要点' },
-  { id: 'skills', title: '专业技能', kind: 'lines', default: true, hint: '按 AI 依 JD 归类的分组技能，一组一行' },
-  { id: 'honors', title: '个人荣誉', kind: 'lines', default: true, hint: '获奖与证书（原文事实）' },
-  { id: 'selfEval', title: '自我评价', kind: 'paragraph', default: true, hint: '自我评价段落' },
 ];
 
 /** 模块 id → 中文标题（顺序即最终渲染顺序） */
@@ -166,7 +167,8 @@ export function buildResumeDocData(
   profile: Profile | null,
   tailor: TailorResult | null,
   contactOverride?: Partial<ResumeDocContact>,
-  selectedIds?: string[]
+  selectedIds?: string[],
+  writingPreferences?: ResumeWritingPreferences
 ): ResumeDocData {
   const extracted = extractContactInfo(resumeText, targetTitleFromProfile(profile));
   const contact: ResumeDocContact = {
@@ -177,23 +179,25 @@ export function buildResumeDocData(
   };
 
   const doc: TailorResumeDoc = tailor?.doc ?? buildLocalTailorDoc(profile);
+  const display = (text: string) => resumeDisplayText(text, writingPreferences || tailor?.writingPreferences || {});
 
   /** 按模块 id 生成模块；没有内容的模块返回 null（空模块整块不输出） */
   const buildModule = (id: string): ResumeDocModule | null => {
     if (id === 'education' || id === 'internships' || id === 'works' || id === 'projects') {
-      const blocks = toBlocks(doc[id]);
-      return blocks.length ? { id, title: MODULE_TITLES[id], kind: 'blocks', blocks } : null;
+      const blocks = toBlocks(doc[id]).map(block => ({ ...block, heading: display(block.heading), meta: display(block.meta), bullets: block.bullets.map(display) }));
+      const title = id === 'internships' && !doc.works.length ? '工作经历' : MODULE_TITLES[id];
+      return blocks.length ? { id, title, kind: 'blocks', blocks } : null;
     }
     if (id === 'skills') {
-      const lines = (doc.skills || []).map((s) => clean(s?.text)).filter(Boolean);
+      const lines = (doc.skills || []).map((s) => display(clean(s?.text))).filter(Boolean);
       return lines.length ? { id, title: MODULE_TITLES.skills, kind: 'lines', lines } : null;
     }
     if (id === 'honors') {
-      const lines = (doc.honors || []).map(clean).filter(Boolean);
+      const lines = (doc.honors || []).map(clean).map(display).filter(Boolean);
       return lines.length ? { id, title: MODULE_TITLES.honors, kind: 'lines', lines } : null;
     }
     if (id === 'selfEval') {
-      const text = clean(doc.selfEval?.text);
+      const text = display(clean(doc.selfEval?.text));
       return text ? { id, title: MODULE_TITLES.selfEval, kind: 'paragraph', lines: [text] } : null;
     }
     return null;
