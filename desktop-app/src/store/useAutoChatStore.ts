@@ -25,6 +25,7 @@ import { getErrorMessage } from '@/lib/bossclaw/helpers';
 import { generateReply } from '@/lib/bossclaw/greetings';
 import { storedResumeForJob } from '@/lib/bossclaw/resumeRoutingRuntime';
 import { selectResumeImages } from '@/lib/bossclaw/resumeVariants';
+import { normalizeJobDetailMetadata, resolveJobDetailUrl, isZhaopinCardFragment, ZHAOPIN_LINK_ERROR } from '@/lib/bossclaw/jobDetailLink';
 import { rerankPending } from '@/lib/bossclaw/priority';
 import { platformEnabled, platformLabel, platformPriority, platformSupports } from '@/lib/bossclaw/platforms';
 import { claimDelivery, isDeliveryClaimed, releaseDelivery } from '@/lib/bossclaw/deliveryLock';
@@ -240,6 +241,13 @@ async function aiReplyAndSend(args: {
 async function chatJob(item: PendingItem): Promise<ChatJobOutcome> {
   const { updatePending } = useDataStore.getState();
   const { addLog, addChatLog } = useRuntimeLogsStore.getState();
+  if (item.job.platform === 'zhaopin' && (!resolveJobDetailUrl(item.job) || isZhaopinCardFragment(item.job))) {
+    updatePending(item.id, { status: 'failed', error: ZHAOPIN_LINK_ERROR, linkIncomplete: true, retryable: false });
+    addLog('error', `${item.job.title || '智联岗位'}：${ZHAOPIN_LINK_ERROR}`);
+    return 'failed';
+  }
+  const job = normalizeJobDetailMetadata(item.job);
+  if (job !== item.job) { updatePending(item.id, { job }); item = { ...item, job }; }
   const cfg = useSettingsStore.getState().config;
   const title = cleanTitle(item.job?.title);
   const company = item.job?.company || '';

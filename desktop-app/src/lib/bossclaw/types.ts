@@ -441,6 +441,8 @@ export type PendingStatus =
   | 'ignored';
 
 export interface PendingItem {
+  /** Missing verified platform detail URL; re-collect before queueing again. */
+  linkIncomplete?: boolean;
   id: string;
   runId?: string;
   job: JobMeta;

@@ -15,6 +15,7 @@
 搜索·投递·登录三段骨架统一由 `base.CollectorBase` 提供（对齐 BossHunter 分层）。
 """
 import re
+from urllib.parse import urlparse
 
 from .base import CollectorBase
 from .common import DAILY_LIMIT_RE, human_sleep, log
@@ -103,6 +104,13 @@ def format_jobs(raw: list, keyword: str = '', page: int = 0) -> list:
         jid = j.get('number') or j.get('jobId') or ''
         if not jid:
             continue
+        url = str(j.get('positionURL') or j.get('positionUrl') or '').strip()
+        parsed_url = urlparse(url)
+        number = re.sub(r'\.html?$', '', str(jid).strip(), flags=re.I)
+        if not (parsed_url.scheme in ('http', 'https')
+                and parsed_url.hostname in ('www.zhaopin.com', 'zhaopin.com')
+                and re.fullmatch(r'/jobdetail/[A-Za-z]{2,4}\d+J\d+\.html?', parsed_url.path)):
+            url = f'https://www.zhaopin.com/jobdetail/{number}.htm' if re.fullmatch(r'[A-Za-z]{2,4}\d+J\d+', number) else ''
         out.append(JobCandidate(
             platform=PLATFORM,
             jobId=str(jid),
@@ -117,7 +125,7 @@ def format_jobs(raw: list, keyword: str = '', page: int = 0) -> list:
             bossTitle=j.get('hrTitle') or '',
             companySize=j.get('companySize') or j.get('companySizeName') or '',
             companyType=j.get('companyType') or '',
-            url=j.get('positionURL') or j.get('positionUrl') or '',
+            url=url,
             sourceKeyword=str(keyword or ''),
             sourcePage=int(page or 0),
         ))

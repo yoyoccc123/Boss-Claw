@@ -100,9 +100,8 @@ const PLATFORM_CARD_SELECTORS = Object.freeze({
     'a[href*="/a/"]',
   ],
   zhaopin: [
-    '[class*="joblist-box"] a',
-    '[class*="joblist"] a',
-    '[class*="job-card"]',
+    '.job-card',
+    '.joblist-box__item',
     'a[href*="/jobdetail/"]',
   ],
   job51: [
@@ -120,7 +119,7 @@ const PLATFORM_CARD_CONTAINER_SELECTOR = Object.freeze({
   // 猎聘：必须显式列出**驼峰**容器 —— `[class*="job-card"]` 不匹配 `jobCardPcContainer`，
   // 缺它会让 closest() 越过卡片本身、一路吸附到外层列表容器（整页塌成 1 条候选）。
   liepin: 'div[class*="jobCardPcContainer"], li, [class*="job-card"], [class*="joblist"], [class*="jobItem"], [class*="job-list"]',
-  zhaopin: 'li, [class*="job-card"], [class*="joblist"], [class*="jobItem"], [class*="job-list"]',
+  zhaopin: '.job-card, .joblist-box__item, [class*="jobItem"], li',
   job51: 'li, [class*="job-card"], [class*="joblist"], [class*="jobItem"], [class*="job-list"]',
 });
 
@@ -357,6 +356,12 @@ function zhaopinJobNumber(raw) {
   const token = (m ? m[1] : s).replace(/\.html?$/i, '').trim();
   // 只接受平台岗位编号形态（CC…J… / CCL…），避免把哈希兜底 id（f…）当 number 去打接口
   return /^[A-Za-z]{2,4}\d+J\d+$/.test(token) ? token : '';
+}
+
+/** Canonical detail page, never a search URL or a synthetic fallback ID. */
+function zhaopinJobPageUrl(raw) {
+  const number = zhaopinJobNumber(raw);
+  return number ? `https://www.zhaopin.com/jobdetail/${number}.htm` : '';
 }
 
 /** 详情接口 URL（按 number 取） */
@@ -903,6 +908,7 @@ module.exports = {
   ZHAOPIN_JOB_DETAIL_API,
   PLATFORM_DETAIL_API_FILL,
   zhaopinJobNumber,
+  zhaopinJobPageUrl,
   zhaopinJobDetailUrl,
   jdHtmlToText,
   toStringTags,
