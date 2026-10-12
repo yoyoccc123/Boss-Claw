@@ -79,6 +79,11 @@ try {
   assert.ok(ids.indexOf('honors') === ids.indexOf('education') + 1);
   assert.ok(ids.indexOf('internships') < ids.indexOf('projects'));
   assert.equal(withWork.projects[0].heading, '智能相册 | 课程设计', '导出显示调整不能改写历史原始正文');
+  const originals = Array.from({ length: 4 }, (_, i) => ({ heading: `原项目${i + 1}`, meta: '2026.05｜课程设计｜Python', bullets: Array.from({ length: 4 }, (_, j) => `原项目${i + 1}的原始描述${j + 1}。`) }));
+  const originalText = `项目经历\n${originals.flatMap(p => [p.heading, p.meta, ...p.bullets]).join('\n')}\n教育背景\n示例大学`;
+  const protectedExport = buildResumeDocData(originalText, null, { doc: historical }, {}, ['projects'], { preserveProjectText: true, hideCourseDesignLabel: true });
+  assert.deepEqual(protectedExport.modules[0].blocks, originals.map(p => ({ ...p, meta: '2026.05｜Python' })), '历史导出也能恢复全部原始项目及完整要点');
+  assert.equal(historical.projects.length, 5, '恢复导出不能修改旧生成记录');
   assert.ok(buildResumeHtml(data, 'unknown').includes('class="tpl-personal"'));
   console.log('PASS resume: 精简上限/来源、技能去重、历史兼容、个人模板与六套可选模板顺序与转义。');
 } finally {

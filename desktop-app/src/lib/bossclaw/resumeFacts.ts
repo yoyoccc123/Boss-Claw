@@ -70,6 +70,20 @@ function projectAnchors(facts: string) {
   return anchors;
 }
 
+/** Keep applicant project wording verbatim; only explicitly requested label hiding applies. */
+export function originalResumeProjects(facts: string, preferences: ResumeWritingPreferences = {}): TailorResumeDoc['projects'] {
+  const lines = facts.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const start = lines.findIndex(line => /^(?:项目经历|项目经验|项目实践)$/.test(line));
+  const sectionEnd = /^(?:其他技术实践|教育背景|教育经历|个人荣誉|荣誉证书|工作经历|实习经历|专业技能|个人简介|自我评价|经历补充|【.*】)$/;
+  const end = start >= 0 ? lines.findIndex((line, index) => index > start && sectionEnd.test(line)) : -1;
+  const section = start >= 0 ? lines.slice(start + 1, end >= 0 ? end : lines.length).join('\n') : facts;
+  return projectAnchors(section).map(anchor => ({
+    heading: resumeDisplayText(anchor.heading, preferences),
+    meta: resumeDisplayText(anchor.meta, preferences),
+    bullets: anchor.text.split('\n').map(line => line.trim()).filter(Boolean).map(source => ({ text: resumeDisplayText(source, preferences), source })),
+  }));
+}
+
 export function enforceResumeFacts(doc: TailorResumeDoc, facts: string, preferences: ResumeWritingPreferences = {}): { doc: TailorResumeDoc; corrections: string[] } {
   const corrections: string[] = [];
   const anchors = projectAnchors(facts);
@@ -124,9 +138,12 @@ export function enforceResumeFacts(doc: TailorResumeDoc, facts: string, preferen
     const text = afterTitle >= 0 ? lines[afterTitle + 1] : lines.find(line => /本科|在读|在校|专业/.test(line) && line.length > 20);
     selfEval = text && !excluded(text) ? { text: preferred(text), source: text } : { text: '', source: '' };
   }
+  const originalProjects = preferences.preserveProjectText ? originalResumeProjects(facts, preferences) : [];
+  const projects = originalProjects.length ? originalProjects : blocks(doc.projects, '项目').slice(0,
+    !preferences.preserveProjectText && preferences.preferTwoProjectsWithExperience && (doc.internships.length || doc.works.length) ? 2 : doc.projects.length);
   return {
     doc: { ...doc, education: blocks(doc.education, '教育'), internships: blocks(doc.internships, '实习'), works: blocks(doc.works, '工作'),
-      projects: blocks(doc.projects, '项目').slice(0, preferences.preferTwoProjectsWithExperience && (doc.internships.length || doc.works.length) ? 2 : doc.projects.length), skills, selfEval, honors: doc.honors.filter(line => !excluded(line)).map(preferred) },
+      projects, skills, selfEval, honors: doc.honors.filter(line => !excluded(line)).map(preferred) },
     corrections: [...new Set(corrections)],
   };
 }

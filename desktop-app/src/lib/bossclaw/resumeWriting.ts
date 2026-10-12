@@ -18,6 +18,7 @@ export interface ResumeWritingPreferences {
   separateDevTools?: boolean;
   hideCourseDesignLabel?: boolean;
   preferTwoProjectsWithExperience?: boolean;
+  preserveProjectText?: boolean;
 }
 
 /** Presentation only: keep the factual project origin without printing this label. */
@@ -33,9 +34,9 @@ export function resumePreferenceRule(preferences: ResumeWritingPreferences = {})
     preferences.conciseRagLabel && 'RAG 技能统一写作 RAG，不写“RAG 场景检索”。',
     preferences.separateDevTools && 'Git、GitHub、Gitee归入开发工具组，不能放在AI技能组；AI组仅列模型/检索/工具调用等已有事实。',
     preferences.hideCourseDesignLabel && '投递正文不输出“课程设计”字样；可以省略该标签，但不得因此改成企业任职、商业项目或生产交付。',
-    preferences.preferTwoProjectsWithExperience && '已有工作或实习经历时，优先完整保留公司、岗位、日期与本人职责，精选最多2个相关项目，每个最多3条；工作/实习不能塞进项目或简介代替正式经历模块。',
+    preferences.preserveProjectText && '本人要求保留项目原文：保留全部项目的名称、日期、技术栈、顺序和每条描述，不改写、不量化、不删减，不按岗位改换项目。此要求优先于项目数量、条数和篇幅限制；仍可按本人要求隐藏“课程设计”标签。',
+    !preferences.preserveProjectText && preferences.preferTwoProjectsWithExperience && '已有工作或实习经历时，优先完整保留公司、岗位、日期与本人职责，精选最多2个相关项目，每个最多3条；工作/实习不能塞进项目或简介代替正式经历模块。',
     '个人简介使用2-3个完整短句，突出专业基础、实际工作/项目动作与验证，每句独立换行；不要重复身份。',
-    '项目量化优先采用原文已有的功能数量、端数、模型版本数和已记录的测试数量。可对原文逐项列出的功能类别计数，明确这是功能范围；不能推算数据量、性能、用户规模或提升比例。',
   ].filter(Boolean);
   return rules.length ? `\n【本人已保存的简历表达偏好（仅编辑要求，不是经历事实）】\n${rules.join('\n')}` : '';
 }
