@@ -77,11 +77,20 @@ export function originalResumeProjects(facts: string, preferences: ResumeWriting
   const sectionEnd = /^(?:其他技术实践|教育背景|教育经历|个人荣誉|荣誉证书|工作经历|实习经历|专业技能|个人简介|自我评价|经历补充|【.*】)$/;
   const end = start >= 0 ? lines.findIndex((line, index) => index > start && sectionEnd.test(line)) : -1;
   const section = start >= 0 ? lines.slice(start + 1, end >= 0 ? end : lines.length).join('\n') : facts;
-  return projectAnchors(section).map(anchor => ({
-    heading: resumeDisplayText(anchor.heading, preferences),
-    meta: resumeDisplayText(anchor.meta, preferences),
-    bullets: anchor.text.split('\n').map(line => line.trim()).filter(Boolean).map(source => ({ text: resumeDisplayText(source, preferences), source })),
+  const rows = section.split('\n');
+  const briefProject = (line: string) => /^其他项目实践[：:]\s*\S/.test(line);
+  const blocks = projectAnchors(rows.filter(line => !briefProject(line)).join('\n')).map(anchor => ({
+    position: rows.includes(anchor.heading) ? rows.indexOf(anchor.heading) : rows.indexOf(anchor.meta),
+    block: {
+      heading: resumeDisplayText(anchor.heading, preferences),
+      meta: resumeDisplayText(anchor.meta, preferences),
+      bullets: anchor.text.split('\n').map(line => line.trim()).filter(Boolean).map(source => ({ text: resumeDisplayText(source, preferences), source })),
+    },
   }));
+  rows.forEach((line, position) => {
+    if (briefProject(line)) blocks.push({ position, block: { heading: resumeDisplayText(line, preferences), meta: '', bullets: [] } });
+  });
+  return blocks.sort((a, b) => a.position - b.position).map(item => item.block);
 }
 
 export function enforceResumeFacts(doc: TailorResumeDoc, facts: string, preferences: ResumeWritingPreferences = {}): { doc: TailorResumeDoc; corrections: string[] } {

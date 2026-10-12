@@ -87,6 +87,13 @@ try {
   assert.deepEqual(preserved, originalProjects.map(p => ({ ...p, meta: '2026.05｜Python' })), '保留原文优先于AI改写、项目上限和要点上限，且不串入下个模块');
   const preservedLocal = await tailorForJob({ title: 'Python实习', description: 'Python' }, preservedFacts, { summary, facts: { projects: [] } }, {}, undefined, undefined, { writingPreferences: protectedPreferences });
   assert.deepEqual(preservedLocal.doc.projects, preserved, '画像缺少项目时本地兜底也须从原文恢复全部项目');
+  const brief = '其他项目实践：3D 装修交互原型（Three.js / 大模型 API / ASR）。';
+  const briefFacts = preservedFacts.replace('其他技术实践\n', brief + '\n其他技术实践\n');
+  const withBrief = enforceResumeFacts(withInternship.doc, briefFacts, protectedPreferences).doc.projects;
+  assert.deepEqual(withBrief.slice(0, 4), preserved, '单行项目不能混入前一个项目的要点');
+  assert.deepEqual(withBrief[4], { heading: brief, meta: '', bullets: [] }, '其他项目实践作为一行独立保存，原文保护不丢失');
+  const middleBriefFacts = preservedFacts.replace('原项目2\n', brief + '\n原项目2\n');
+  assert.deepEqual(enforceResumeFacts(withInternship.doc, middleBriefFacts, protectedPreferences).doc.projects.map(p => p.heading), ['原项目1', brief, '原项目2', '原项目3', '原项目4'], '相同技术栈的项目也必须尊重单行项目所在位置');
   const finalDoc = normalizeTailorDoc({ skills: [{ text: '了解数据库表设计', source: '了解数据库表设计' }, { text: '实践RAG和大模型API', source: skill }], selfEval: { text: summary, source: summary } });
   const points = ['了解数据库表设计', '了解大模型与 Embedding', '一年以上深度学习学习研究'].map(point => ({ point, layer: 'must', verdict: 'covered', evidence: '旧判定' }));
   const result = { doc: finalDoc, jdPoints: points, supplements: [], aiMatch: null };
