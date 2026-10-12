@@ -6,6 +6,8 @@
  * - 底部整宽区块：AI 打招呼语提示词（工作台定制：提示词正文 + 打招呼语预览）
  */
 import { useRef, useState, useEffect } from 'react';
+import ResumeVariantsPanel from '@/components/ResumeVariantsPanel';
+import { profileForResume } from '@/lib/bossclaw/resumeVariants';
 import {
   Alert,
   Button,
@@ -114,11 +116,21 @@ const bridgeFallback = async (file: File, name: string) => {
 };
 
 export default function Resume() {
-  const resumeText = useDataStore((s) => s.resumeText);
-  const resumeFileName = useDataStore((s) => s.resumeFileName);
+  const originalResumeText = useDataStore((s) => s.resumeText);
+  const originalResumeFileName = useDataStore((s) => s.resumeFileName);
+  const resumeVariants = useDataStore(s => s.resumeVariants);
+  const defaultVariantId = useDataStore(s => s.defaultResumeVariantId);
+  const [editorVariantId, setEditorVariantId] = useState(defaultVariantId || resumeVariants[0]?.id || '');
+  const editorVariant = resumeVariants.find(v => v.id === editorVariantId) || resumeVariants.find(v => v.id === defaultVariantId) || resumeVariants[0];
+  const resumeText = editorVariant?.text ?? originalResumeText;
+  const resumeFileName = editorVariant?.fileName ?? originalResumeFileName;
   const profile = useDataStore((s) => s.profile);
   const profileDraft = useDataStore((s) => s.profileDraft);
   const setResumeText = useDataStore((s) => s.setResumeText);
+  const saveEditedResume = (value: string, fileName?: string) => {
+    if (editorVariant) useDataStore.getState().upsertResumeVariant({ ...editorVariant, text: value, fileName: fileName ?? editorVariant.fileName, updatedAt: Date.now() });
+    else setResumeText(value, fileName);
+  };
   const writingPreferences = useDataStore((s) => s.resumeWritingPreferences);
   const setWritingPreferences = useDataStore((s) => s.setResumeWritingPreferences);
   const setProfile = useDataStore((s) => s.setProfile);
@@ -233,6 +245,7 @@ export default function Resume() {
       name: `${desenBaseName()}-脱敏-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.jpeg`,
       data: desenImg.jpeg,
       createdAt: Date.now(),
+      resumeVariantId: editorVariant?.id,
     });
     message.success('已存入「图片简历（投递附件）」，可在自动沟通中随打招呼语一并发送');
   };
@@ -281,7 +294,7 @@ export default function Resume() {
       setWarnings([]);
       const result = await parseResumeFile(file, bridgeFallback);
       setText(result.text);
-      setResumeText(result.text, file.name);
+      saveEditedResume(result.text, file.name);
       setMethod(result.method);
       setWarnings(result.warnings || []);
       if (!isReadableResumeText(result.text)) {
@@ -354,7 +367,7 @@ export default function Resume() {
       // 保存用户编辑的提示词到 store（工作台岗位分析 / 定制简历求职信共用）
       const trimmed = customPrompt.trim();
       setGreetingPromptStore(trimmed && trimmed !== DEFAULT_ANALYZE_GREETING_INSTRUCTIONS ? trimmed : '');
-      const p = useDataStore.getState().profile;
+      const p = editorVariant ? profileForResume({ ...editorVariant, text }, useDataStore.getState().profile) : useDataStore.getState().profile;
       const job: JobMeta = { title: testJobTitle.trim() || '测试岗位', description: testJobDesc.trim(), company: '' };
       // 复用工作台同一分析链路（同提示词、同校验），保证预览与工作台真实生成一致
       const analysis = await analyzeJob(job, p, text, config, config.model, trimmed || undefined);
@@ -452,12 +465,24 @@ export default function Resume() {
       )}
 
       {/* 顶部双栏：简历原文 | 职业画像 —— 两卡等高、底边对齐 */}
+      <ResumeVariantsPanel selectedId={editorVariant?.id || ''} onSelect={id => {
+        if (id && id !== editorVariant?.id && textRef.current !== lastSyncedTextRef.current) saveEditedResume(textRef.current);
+        const variant = useDataStore.getState().resumeVariants.find(v => v.id === id);
+        if (variant) {
+          setEditorVariantId(id); setText(variant.text); lastSyncedTextRef.current = variant.text;
+          setDesenAiText(null); setDesenImg(null); setPreviewGreeting(''); setPreviewMeta(null);
+        } else if (!id) {
+          setEditorVariantId(''); setText(originalResumeText); lastSyncedTextRef.current = originalResumeText;
+          setDesenAiText(null); setDesenImg(null); setPreviewGreeting(''); setPreviewMeta(null);
+        }
+      }} />
       <Row gutter={[16, 16]} className="resume-row">
         <Col xs={24} lg={12}>
           <Card size="small" className="resume-card"
             title={
               <Space size={6} wrap>
                 <FileTextOutlined style={{ color: 'var(--brand)', marginRight: 6 }} />简历原文
+                {editorVariant && <Tag color="blue">{editorVariant.name}</Tag>}
                 {method && <Tag color="blue">{methodLabel[method] || method}</Tag>}
                 {resumeFileName && <Tag>{resumeFileName}</Tag>}
               </Space>
@@ -466,7 +491,7 @@ export default function Resume() {
               <Space size={8} wrap>
                 <Button icon={<PictureOutlined />} loading={desenBusy} onClick={openDesen}
                   disabled={!text.trim()}>脱敏转图片</Button>
-                <Button onClick={() => { setResumeText(text, resumeFileName); message.success('原文已保存'); }}>保存原文</Button>
+                <Button onClick={() => { saveEditedResume(text, resumeFileName); message.success('当前版本原文已保存'); }}>保存原文</Button>
                 <Button icon={<UploadOutlined />} onClick={() => fileRef.current?.click()}>
                   {text.trim() ? '重新导入' : '导入文件'}
                 </Button>

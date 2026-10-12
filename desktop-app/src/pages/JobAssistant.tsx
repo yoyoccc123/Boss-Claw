@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import { useShallow } from 'zustand/react/shallow';
 import { useDataStore } from '@/store/useDataStore';
+import { resolveResumeForJob } from '@/lib/bossclaw/resumeVariants';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useAppStore } from '@/store/useAppStore';
 import { appendTailorSupplement, recheckTailorResult, tailorForJob, writeTailorPointSupplement, type TailorJdPoint, type TailorResult } from '@/lib/bossclaw/jobAssistant';
@@ -118,8 +119,8 @@ const formatTime = (ts: number) => {
 
 export default function JobAssistant() {
   const pending = useDataStore(useShallow((s) => s.pending));
-  const profile = useDataStore((s) => s.profile);
-  const resumeText = useDataStore((s) => s.resumeText);
+  const resumeData = useDataStore(useShallow(s => ({ resumeText: s.resumeText, profile: s.profile, resumeWritingPreferences: s.resumeWritingPreferences,
+    resumeVariants: s.resumeVariants, defaultResumeVariantId: s.defaultResumeVariantId, autoResumeRouting: s.autoResumeRouting })));
   const setGreetings = useDataStore((s) => s.setGreetings);
   const config = useSettingsStore(useShallow((s) => s.config));
   const activeRoute = useAppStore((s) => s.activeRoute);
@@ -135,6 +136,10 @@ export default function JobAssistant() {
   const [jobDesc, setJobDesc] = useState('');
   const [importId, setImportId] = useState<string | undefined>(undefined);
   const [importedJob, setImportedJob] = useState<JobMeta | null>(null);
+  const [variantChoice, setVariantChoice] = useState('');
+  const effectiveResume = useMemo(() => resolveResumeForJob(resumeData, { ...importedJob, title: jobTitle, description: jobDesc }, variantChoice), [resumeData, importedJob, jobTitle, jobDesc, variantChoice]);
+  const resumeText = effectiveResume.source.text;
+  const profile = effectiveResume.source.profile;
   const [importedSource, setImportedSource] = useState<'description' | 'card' | 'metadata' | null>(null);
   const importableJobs = useMemo(() => listTailorJobs(pending, importId, workbenchFilters), [pending, importId, workbenchFilters]);
   // 从工作台导入的岗位分析分（AI 优先），用于匹配分数展示；AI 未配置时回退本地计算
@@ -165,6 +170,7 @@ export default function JobAssistant() {
     const input = buildTailorJobInput(p.job);
     setImportId(p.id);
     setImportedJob(input.job);
+    setVariantChoice(input.job.resumeVariantId || '');
     setImportedSource(input.source);
     setImportedScore(p.analysis?.scoreSource === 'local' ? null : p.analysis?.score ?? null);
     setJobTitle(input.jobTitle);
@@ -374,7 +380,7 @@ export default function JobAssistant() {
     setExportBatch([]);
     setExportReport(null);
     setExportTailor(result);
-    const c = extractContactInfo(resumeText, title);
+    const c = extractContactInfo(result.resumeSource?.text ?? resumeData.resumeText, title);
     exportForm.setFieldsValue({
       name: c.name,
       phone: c.phone,
@@ -414,7 +420,7 @@ export default function JobAssistant() {
         const empty: string[] = [];
         exportBatch.forEach((item, index) => {
           if (!batchJobIncluded(item)) return;
-          const data = buildResumeDocData(resumeText, profile, item.result!, { ...values, targetTitle: item.jobTitle }, orderedIds, useDataStore.getState().resumeWritingPreferences);
+          const data = buildResumeDocData(resumeData.resumeText, resumeData.profile, item.result!, { ...values, targetTitle: item.jobTitle }, orderedIds, item.result!.writingPreferences || resumeData.resumeWritingPreferences);
           if (!data.modules.length) { empty.push(item.jobTitle); return; }
           if (photo) data.photo = photo;
           files.push({ fileName: batchPdfFileName(values.name, item.jobTitle, item.job.company || '', index), html: buildResumeHtml(data, templateId) });
@@ -437,7 +443,7 @@ export default function JobAssistant() {
         else message.warning(`已保存 ${written.length} 份${failed.length ? `，${failed.length} 份失败` : ''}${r.canceled ? '，剩余文件已停止导出' : ''}`);
         return;
       }
-      const data = buildResumeDocData(resumeText, profile, exportTailor, values, orderedIds, useDataStore.getState().resumeWritingPreferences);
+      const data = buildResumeDocData(resumeData.resumeText, resumeData.profile, exportTailor, values, orderedIds, exportTailor.writingPreferences || resumeData.resumeWritingPreferences);
       if (!data.modules.length) {
         message.warning('没有可导出的模块内容，请至少勾选一个有内容的模块');
         return;
@@ -491,6 +497,7 @@ export default function JobAssistant() {
     if (!id) {
       setImportId(undefined);
       setImportedJob(null);
+      setVariantChoice('');
       setImportedSource(null);
       setImportedScore(null);
       setJobTitle('');
@@ -537,7 +544,7 @@ export default function JobAssistant() {
     generationLock.current = true;
     setGenerating(true);
     try {
-      const job: JobMeta = { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim() };
+      const job: JobMeta = { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim(), resumeVariantId: variantChoice || undefined };
       // 经历补充材料每次调用前现读磁盘（不缓存内容），随定制与要点判定一并送入 AI
       const extraText = await resolveMaterialsText();
       const supplements = appendTailorSupplement(tailor?.supplements, supplement || '');
@@ -548,7 +555,7 @@ export default function JobAssistant() {
         config.model,
         useDataStore.getState().greetingPrompt || undefined,
         extraText || undefined,
-        { supplements, previousResult: tailor || undefined, writingPreferences: useDataStore.getState().resumeWritingPreferences }
+        { supplements, previousResult: tailor || undefined, resumeSource: tailor ? tailor.resumeSource || resolveResumeForJob({ ...resumeData, resumeVariants: [] }).source : effectiveResume.source, writingPreferences: effectiveResume.source.writingPreferences }
       );
       // 迭代失败保留上一版和待提交文本，用户可以直接重试。
       if (tailor && r.method === 'local') {
@@ -578,7 +585,7 @@ export default function JobAssistant() {
     setGenerating(true);
     try {
       const job: JobMeta = { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim() };
-      const r = await recheckTailorResult({ result: tailor, job, resumeText, profile, model: config.model, extraMaterials: await resolveMaterialsText() });
+      const r = await recheckTailorResult({ result: tailor, job, resumeText: resumeData.resumeText, profile: resumeData.profile, model: config.model, extraMaterials: await resolveMaterialsText() });
       setTailor(r);
       if (batchResultId) setBatchItems((items) => items.map((item) => item.id === batchResultId ? { ...item, result: r } : item));
       recordHistory({ jobId: importId || historyJobId, company: job.company, job, jobTitle: jobTitle.trim(), jobDesc: jobDesc.trim() }, r);
@@ -599,7 +606,7 @@ export default function JobAssistant() {
       const extraMaterials = await resolveMaterialsText();
       return await writeTailorPointSupplement({
         point, text, job: { ...importedJob, title: jobTitle.trim(), description: jobDesc.trim() },
-        resumeText, profile, model: config.model, extraMaterials, supplements: tailor?.supplements, writingPreferences: useDataStore.getState().resumeWritingPreferences,
+        resumeText: tailor?.resumeSource?.text ?? (tailor ? resumeData.resumeText : resumeText), profile: tailor?.resumeSource ? tailor.resumeSource.profile : tailor ? resumeData.profile : profile, model: config.model, extraMaterials, supplements: tailor?.supplements, writingPreferences: tailor?.resumeSource?.writingPreferences || tailor?.writingPreferences || effectiveResume.source.writingPreferences,
       });
     } finally {
       generationLock.current = false;
@@ -619,7 +626,9 @@ export default function JobAssistant() {
     try {
       await runTailorBatch(batchItems, async (item) => {
         const extra = await resolveMaterialsText();
-        return tailorForJob(item.job, resumeText, profile, config.model, useDataStore.getState().greetingPrompt || undefined, extra || undefined, { writingPreferences: useDataStore.getState().resumeWritingPreferences });
+        const currentJob = { ...(useDataStore.getState().pending.find(p => p.id === item.id)?.job || item.job), resumeVariantId: item.job.resumeVariantId };
+        const { source } = resolveResumeForJob(useDataStore.getState(), currentJob);
+        return tailorForJob(currentJob, source.text, source.profile, config.model, useDataStore.getState().greetingPrompt || undefined, extra || undefined, { resumeSource: source, writingPreferences: source.writingPreferences });
       }, {
         shouldStop: () => batchStop.current,
         shouldSkip: (item) => batchJobIncluded(item) ? undefined : '已被工作台筛选排除或移除',
@@ -638,6 +647,7 @@ export default function JobAssistant() {
     if (generationLock.current || generating || !item.result) return;
     setImportId(item.id);
     setImportedJob(item.job);
+    setVariantChoice(item.job.resumeVariantId || '');
     setImportedSource(item.source);
     setImportedScore(null);
     setJobTitle(item.jobTitle);
@@ -652,6 +662,7 @@ export default function JobAssistant() {
     if (generationLock.current || generating) return;
     setImportId(undefined);
     setImportedJob(h.job || { title: h.jobTitle, description: h.jobDesc, company: h.company });
+    setVariantChoice(h.job?.resumeVariantId || '');
     setImportedSource(null);
     setImportedScore(null);
     setJobTitle(h.jobTitle);
@@ -673,7 +684,9 @@ export default function JobAssistant() {
   const onSaveCoverLetter = () => {
     if (!tailor?.coverLetter) return;
     setGreetings([tailor.coverLetter, ...(useDataStore.getState().greetings || [])]);
-    message.success('已存入打招呼语列表（可在「自动沟通」中选用）');
+    const item = useDataStore.getState().pending.find(p => p.id === importId);
+    if (item) useDataStore.getState().updatePending(item.id, { deliveryGreeting: tailor.coverLetter, job: { ...item.job, resumeVariantId: tailor.resumeSource?.id || item.job.resumeVariantId } });
+    message.success(item ? '已用于该工作台岗位，并存入打招呼语列表' : '已存入打招呼语列表');
   };
 
   const batchReady = batchItems.filter((item) => item.result && batchJobIncluded(item)).length;
@@ -719,10 +732,18 @@ export default function JobAssistant() {
           <List size="small" dataSource={batchItems} pagination={batchItems.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
             renderItem={(item) => (
               <List.Item actions={[
+                <Select key="version" aria-label={`批量岗位简历版本：${item.jobTitle}`} style={{ minWidth: 180 }} size="small" value={item.job.resumeVariantId || ''} disabled={generating || exporting}
+                  options={[{ value: '', label: '按岗位自动选择' }, ...resumeData.resumeVariants.map(v => ({ value: v.id, label: v.name }))]}
+                  onChange={id => {
+                    setBatchItems(items => items.map(b => b.id === item.id ? { ...b, job: { ...b.job, resumeVariantId: id || undefined }, result: undefined, status: 'queued' } : b));
+                    const pendingItem = useDataStore.getState().pending.find(p => p.id === item.id);
+                    if (pendingItem) useDataStore.getState().updatePending(item.id, { job: { ...pendingItem.job, resumeVariantId: id || undefined } });
+                    if (importId === item.id) { setVariantChoice(id); setImportedJob({ ...item.job, resumeVariantId: id || undefined }); setTailor(null); setImportedScore(null); setSupplementDraft(''); }
+                  }} />,
                 <Button key="view" size="small" disabled={!item.result || generating} onClick={() => showBatchResult(item)}>查看结果</Button>,
                 <Button key="pdf" size="small" disabled={!item.result || generating} onClick={() => openExport(item.result!, item.jobTitle)}>导出 PDF</Button>,
               ]}>
-                <List.Item.Meta title={<Space wrap><span>{item.jobTitle || '未命名岗位'} · {item.job.company || '未知公司'}</span><Tag color={item.status === 'done' ? 'green' : item.status === 'failed' ? 'red' : item.status === 'local' ? 'orange' : undefined}>{batchLabels[item.status]}</Tag></Space>}
+                <List.Item.Meta title={<Space wrap><span>{item.jobTitle || '未命名岗位'} · {item.job.company || '未知公司'}</span><Tag>{item.result?.resumeSource?.name || resolveResumeForJob(resumeData, item.job).source.name}</Tag><Tag color={item.status === 'done' ? 'green' : item.status === 'failed' ? 'red' : item.status === 'local' ? 'orange' : undefined}>{batchLabels[item.status]}</Tag></Space>}
                   description={item.error || item.result?.warning || (item.source !== 'description' ? '仅保存岗位摘要或基本信息，采集完整要求后适配更准确' : undefined)} />
               </List.Item>
             )} />
@@ -730,6 +751,25 @@ export default function JobAssistant() {
       )}
 
       <Card size="small" style={{ marginBottom: 16 }} title={<Space><FileTextOutlined style={{ color: 'var(--brand)' }} />岗位信息</Space>}>
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Text strong>简历版本</Text>
+          <Select aria-label="岗位简历版本" value={variantChoice} disabled={generating || exporting} style={{ minWidth: 230 }} options={[{ value: '', label: '按岗位自动选择' }, ...resumeData.resumeVariants.map(v => ({ value: v.id, label: v.name }))]}
+            onChange={id => {
+              setVariantChoice(id); setTailor(null); setSupplementDraft(''); setImportedScore(null);
+              setBatchResultId(undefined); setHistoryJobId(undefined);
+              if (importId) {
+                const item = useDataStore.getState().pending.find(p => p.id === importId);
+                if (item) {
+                  const job = { ...item.job, resumeVariantId: id || undefined };
+                  useDataStore.getState().updatePending(importId, { job });
+                  setImportedJob(job);
+                  setBatchItems(items => items.map(b => b.id === importId ? { ...b, job: { ...b.job, resumeVariantId: id || undefined }, result: undefined, status: 'queued' } : b));
+                }
+              }
+            }} />
+          <Tag color="blue">{tailor ? tailor.resumeSource?.name || '原简历（旧记录）' : effectiveResume.source.name}</Tag>
+          <Text type="secondary">{tailor?.resumeSource ? '本次结果采用的版本' : effectiveResume.reason}</Text>
+        </Space>
         <Space size={12} wrap style={{ marginBottom: 12, width: '100%' }}>
           <Select
             placeholder={importableJobs.length ? '选择工作台岗位，无需粘贴' : '暂无岗位，请先到工作台采集或加入任务'}

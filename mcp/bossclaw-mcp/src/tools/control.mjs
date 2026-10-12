@@ -186,11 +186,11 @@ export const controlTools = [
       '  - patchConfig: { patch: {...} }（仅允许修改已存在且非 model/pausedUntil/platforms 的字段）\n' +
       '  - setPlatform: { platform: "boss"|"liepin"|"zhaopin"|"job51", enabled?, dailyTarget?, priority? }\n' +
       '  - backupNow: {}｜restoreBackup: {}｜addLog: { level, msg }｜clearLogs: {}｜engineStatus: {}（只读探测两套隐身引擎）\n' +
-      '  - 业务数据：dataSetResume{text,fileName?}｜dataSetProfile{profile}｜dataSetDirectionPlan{plan}｜dataSetGreetings{items}｜' +
+      '  - 业务数据：dataSetResume{text,fileName?,resumeVariantId?}（缺省更新默认基础简历，指定ID更新对应版本）｜dataSetProfile{profile}｜dataSetDirectionPlan{plan}｜dataSetGreetings{items}｜' +
       'dataSetGreetingPrompt{prompt}｜dataSetCommunicationInfo{info}｜dataPendingAdd{item}｜dataPendingUpdate{id,patch}｜' +
       'dataTaskRunUpdate{id,patch}｜dataAddChatLog{entry}｜scheduleAdd{entry}｜scheduleUpdate{id,patch}｜scheduleRemove{id}｜scheduleToggle{id,enabled}\n' +
-      '  - AI 按需生成（复用工作台定制提示词链路；未配置 API Key 时若 agent 在线则转由 bossclaw_agent_* 代答，否则回落本地规则；较长耗时）：aiAnalyzeJob{job,resumeText?,customGreetingPrompt?}｜' +
-      'aiTailorResume{job,greetingInstructions?}\n' +
+      '  - AI 按需生成（复用工作台定制提示词链路；按岗位选择基础简历，resumeVariantId可手动指定；未配置 API Key 时回落本地规则；较长耗时）：aiAnalyzeJob{job,resumeVariantId?,resumeText?,customGreetingPrompt?}｜' +
+      'aiTailorResume{job,resumeVariantId?,greetingInstructions?}\n' +
       '  - agent 代答（常规用法请走专用工具 bossclaw_agent_tasks / bossclaw_agent_submit / bossclaw_agent_cancel）：' +
       'agentTasks{waitMs?,includeMessages?,limit?}｜agentSubmit{id,content}｜agentCancel{id,reason?}\n' +
       '  - 浏览器只读探索（webview 引擎可用）：browserSearch{query,city?,page?,pageSize?}｜browserOpenJob{url,tabId?}｜' +
@@ -204,7 +204,7 @@ export const controlTools = [
       '  - 完整数据读取：appDataFull{sections?,maxPending?,maxLogs?}（sections 见描述；不含 base64）\n' +
       '  - 队列与任务：pendingApprove{id|ids} / pendingReject{id|ids} / pendingRerank / pendingPromote{ids?}（只升 approved→approved_queue）/ pendingRemove{id} / taskStage{id,direct:next|prev|阶段}（不改 status 为 success）\n' +
       '  - 模块级（简历中心/定制简历/方向/任务）：profileRebuild{ }（重建职业画像）｜' +
-      'resumeTailor{job, saveTo?:none|greetings|resume}（定制简历；saveTo 缺省 none 仅返回不落盘，resume 会追加定制章节到简历）｜' +
+      'resumeTailor{job,resumeVariantId?,saveTo?:none|greetings|resume}（按岗位选版定制；saveTo 缺省 none 仅返回，resume 会追加到选中的基础简历）｜' +
       'greetingsAppend{items}｜directionPlanRebuild{ }｜directionItem{id,patch{enabled?,priority?}}｜tasksGenerate{ }（按方向重建任务卡片，不投递；**保留 cr_ 采集任务**，与首页「新建任务」同口径）\n' +
       '  - 数据统计导出（**只读**，与统计页同源口径）：statsExport{range?:"7d"|"30d"|"all", kind?:"summary"|"detail"|"report"}\n' +
       '    （返回 filename 与 content 文本，不落盘、不弹保存对话框 —— 落盘必须由人工在应用内完成；detail 已剔除会话 token 与招呼语正文）\n' +

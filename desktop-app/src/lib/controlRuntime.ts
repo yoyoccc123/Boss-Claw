@@ -18,6 +18,8 @@ import { electronApi } from '@/lib/electronApi';
 import { PLATFORM_IDS, platformEnabled, type JobPlatform } from '@/lib/bossclaw/platforms';
 import { SAFETY_LIMITS, isLockedOut, effectiveDailyCap, enabledSentCount, cooldownRemaining } from '@/lib/bossclaw/safety';
 import { analyzeJob } from '@/lib/bossclaw/matching';
+import { storedResumeForJob } from '@/lib/bossclaw/resumeRoutingRuntime';
+import { profileForResume } from '@/lib/bossclaw/resumeVariants';
 import { tailorForJob } from '@/lib/bossclaw/jobAssistant';
 import { buildProfile } from '@/lib/bossclaw/profile';
 import { mergeTargetLocationsWith, syncTargetLocationsOnStart } from '@/lib/bossclaw/targetLocationSync';
@@ -306,10 +308,14 @@ const handlers: Record<string, Handler> = {
     },
 
   // ---- 业务数据管理（直接读写 store）----
-  dataSetResume: ({ text, fileName }) => {
+  dataSetResume: ({ text, fileName, resumeVariantId }) => {
     const next = String(text ?? '');
-    const prev = useDataStore.getState().resumeText;
-    useDataStore.getState().setResumeText(next, fileName !== undefined ? String(fileName) : undefined);
+    const data = useDataStore.getState();
+    const variant = data.resumeVariants.find(v => v.id === (resumeVariantId || data.defaultResumeVariantId));
+    if (resumeVariantId && !variant) return { applied: false, message: '指定简历版本不存在' };
+    const prev = variant?.text || data.resumeText;
+    if (variant) data.upsertResumeVariant({ ...variant, text: next, fileName: fileName !== undefined ? String(fileName) : variant.fileName, updatedAt: Date.now() });
+    else data.setResumeText(next, fileName !== undefined ? String(fileName) : undefined);
     return { applied: true, message: `已保存简历（${next.length} 字）`, previous: { length: prev.length }, next: { length: next.length } };
   },
   dataSetProfile: ({ profile }) => {
@@ -386,32 +392,38 @@ const handlers: Record<string, Handler> = {
   },
 
   // ---- AI 按需生成（复用工作台定制提示词链路；未配置 API Key 时该链路回退本地规则，不转交 agent；长耗时）----
-  aiAnalyzeJob: async ({ job, resumeText, customGreetingPrompt }) => {
+  aiAnalyzeJob: async ({ job, resumeText, resumeVariantId, customGreetingPrompt }) => {
     if (!job || typeof job !== 'object') return { applied: false, message: '缺少岗位对象 job（含 title/company/salary/location/description 等字段）' };
     const cfg = useSettingsStore.getState().config;
     const data = useDataStore.getState();
+    const { source } = storedResumeForJob(job as JobMeta, String(resumeVariantId || '') || undefined);
+    if (resumeText !== undefined) {
+      source.text = String(resumeText); source.id = undefined; source.name = '指定原文';
+      source.profile = profileForResume({ id: 'explicit', name: source.name, kind: 'general', text: source.text, fileName: '', updatedAt: Date.now() }, data.profile);
+    }
     const out = await analyzeJob(
       job as JobMeta,
-      data.profile,
-      resumeText !== undefined ? String(resumeText) : data.resumeText,
+      source.profile,
+      resumeText !== undefined ? String(resumeText) : source.text,
       cfg,
       cfg.model,
-      customGreetingPrompt !== undefined ? String(customGreetingPrompt) : undefined
+      customGreetingPrompt !== undefined ? String(customGreetingPrompt) : data.greetingPrompt || undefined
     );
-    return { applied: true, message: 'AI 岗位分析完成（含决策/分数/打招呼语）', next: out };
+    return { applied: true, message: 'AI 岗位分析完成（含决策/分数/打招呼语）', next: { ...out, resumeVariantId: source.id, resumeVariantName: source.name } };
   },
-  aiTailorResume: async ({ job, greetingInstructions }) => {
+  aiTailorResume: async ({ job, resumeVariantId, greetingInstructions }) => {
     if (!job || typeof job !== 'object') return { applied: false, message: '缺少岗位对象 job' };
     const cfg = useSettingsStore.getState().config;
     const data = useDataStore.getState();
+    const { source } = storedResumeForJob(job as JobMeta, String(resumeVariantId || '') || undefined);
     const out = await tailorForJob(
       job as JobMeta,
-      data.resumeText,
-      data.profile,
+      source.text,
+      source.profile,
       cfg.model,
-      greetingInstructions !== undefined ? String(greetingInstructions) : undefined,
+      greetingInstructions !== undefined ? String(greetingInstructions) : data.greetingPrompt || undefined,
       undefined,
-      { writingPreferences: data.resumeWritingPreferences }
+      { resumeSource: source, writingPreferences: source.writingPreferences }
     );
     return { applied: true, message: 'AI 定制简历/求职信完成', next: out };
   },
@@ -686,7 +698,11 @@ const handlers: Record<string, Handler> = {
     const maxP = Math.min(Math.max(Number(maxPending) || 100, 1), 500);
     const maxL = Math.min(Math.max(Number(maxLogs) || 200, 1), 500);
     const sectionsOut: Record<string, unknown> = {};
-    if (want('resume')) sectionsOut.resume = { present: !!data.resumeText, chars: data.resumeText.length, fileName: data.resumeFileName, text: data.resumeText };
+    if (want('resume')) {
+      const { source } = storedResumeForJob({});
+      sectionsOut.resume = { present: !!source.text, chars: source.text.length, fileName: data.resumeVariants.find(v => v.id === source.id)?.fileName || data.resumeFileName, text: source.text,
+        defaultResumeVariantId: data.defaultResumeVariantId, autoResumeRouting: data.autoResumeRouting, variants: data.resumeVariants };
+    }
     if (want('profile')) sectionsOut.profile = { present: !!data.profile, value: data.profile };
     if (want('directionPlan')) sectionsOut.directionPlan = { present: !!data.directionPlan, value: data.directionPlan };
     if (want('greetings')) sectionsOut.greetings = data.greetings || [];
@@ -804,7 +820,7 @@ const handlers: Record<string, Handler> = {
   profileRebuild: async () => {
     const cfg = useSettingsStore.getState().config;
     const data = useDataStore.getState();
-    const text = (data.resumeText || '').trim();
+    const text = storedResumeForJob({}).source.text.trim();
     if (!text) return { applied: false, message: '尚未导入简历，无法生成职业画像' };
     const profile = await buildProfile(text, cfg.model);
     // 目标城市同源：重建后新推断出的城市补进设置页（只补不删，与简历中心「生成画像」同口径）
@@ -824,11 +840,12 @@ const handlers: Record<string, Handler> = {
     return { applied: true, message: '已追加打招呼语', previous: { count: prev }, next: { count: after } };
   },
 
-  resumeTailor: async ({ job, saveTo }) => {
+  resumeTailor: async ({ job, resumeVariantId, saveTo }) => {
     if (!job || typeof job !== 'object') return { applied: false, message: '缺少岗位对象 job（含 title/company/description 等）' };
     const cfg = useSettingsStore.getState().config;
     const data = useDataStore.getState();
-    const out = await tailorForJob(job as JobMeta, data.resumeText, data.profile, cfg.model, data.greetingPrompt || undefined, undefined, { writingPreferences: data.resumeWritingPreferences });
+    const { source } = storedResumeForJob(job as JobMeta, String(resumeVariantId || '') || undefined);
+    const out = await tailorForJob(job as JobMeta, source.text, source.profile, cfg.model, data.greetingPrompt || undefined, undefined, { resumeSource: source, writingPreferences: source.writingPreferences });
     const save = String(saveTo || 'none');
     if (save === 'greetings' && out.coverLetter?.trim()) {
       data.setGreetings([...data.greetings, out.coverLetter.trim()]);
@@ -841,7 +858,9 @@ const handlers: Record<string, Handler> = {
       ].filter(Boolean).join('\n');
       const jm = job as JobMeta;
       const label = `${jm.title || jm.company || '该岗位'}`;
-      data.setResumeText(`${data.resumeText.trim()}\n\n== 岗位定制版本（${label}）==\n${block}`, data.resumeFileName);
+      const variant = data.resumeVariants.find(v => v.id === source.id);
+      if (variant) data.upsertResumeVariant({ ...variant, text: `${variant.text.trim()}\n\n== 岗位定制版本（${label}）==\n${block}`, updatedAt: Date.now() });
+      else data.setResumeText(`${data.resumeText.trim()}\n\n== 岗位定制版本（${label}）==\n${block}`, data.resumeFileName);
     }
     return {
       applied: true,

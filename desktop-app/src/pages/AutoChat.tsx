@@ -10,7 +10,7 @@
  */
 import { useEffect, useState, useMemo, useCallback, useRef, useLayoutEffect } from 'react';
 import {
-  Alert, Button, Card, Input, InputNumber, Space, Switch, Tag, Tooltip, Typography, Upload, message, Progress,
+  Alert, Button, Card, Input, InputNumber, Select, Space, Switch, Tag, Tooltip, Typography, Upload, message, Progress,
 } from 'antd';
 import {
   MessageOutlined, QrcodeOutlined,
@@ -72,6 +72,7 @@ export default function AutoChat() {
   const clearChatLogs = useRuntimeLogsStore((s) => s.clearChatLogs);
   const recomputeStats = useDataStore((s) => s.recomputeStats);
   const imageResumes = useDataStore(useShallow((s) => s.imageResumes));
+  const resumeVariants = useDataStore(s => s.resumeVariants);
   const addImageResume = useDataStore((s) => s.addImageResume);
   const removeImageResume = useDataStore((s) => s.removeImageResume);
   const storeCommunicationInfo = useDataStore((s) => s.communicationInfo);
@@ -638,6 +639,9 @@ export default function AutoChat() {
                 {imageResumes.map((r: ImageResume) => (
                   <div key={r.id} className="image-resume-card">
                     <img src={r.data} alt={r.name} />
+                    <Select aria-label={`附件版本：${r.name}`} style={{ position: 'absolute', bottom: 4, left: 4, right: 4, zIndex: 3 }} size="small" value={r.resumeVariantId || ''}
+                      options={[{ value: '', label: '未绑定版本' }, ...resumeVariants.map(v => ({ value: v.id, label: v.name }))]}
+                      onChange={id => useDataStore.getState().setImageResumes(useDataStore.getState().imageResumes.map(image => image.id === r.id ? { ...image, resumeVariantId: id || undefined } : image))} />
                     <div className="ir-overlay">
                       <span className="ir-name-overlay">{r.name}</span>
                       <Button
@@ -666,6 +670,7 @@ export default function AutoChat() {
                   </Upload>
                 )}
               </div>
+              {resumeVariants.length > 0 && <Typography.Text type="secondary">只发送当前岗位版本绑定的图片；未绑定图片不会随两版简历自动发送。平台在线简历仍使用平台保存的内容。</Typography.Text>}
             </div>
           </Card>
 

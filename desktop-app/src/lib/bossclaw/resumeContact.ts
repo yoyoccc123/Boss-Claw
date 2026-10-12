@@ -171,6 +171,11 @@ export function buildResumeDocData(
   selectedIds?: string[],
   writingPreferences?: ResumeWritingPreferences
 ): ResumeDocData {
+  if (tailor?.resumeSource) {
+    resumeText = tailor.resumeSource.text;
+    profile = tailor.resumeSource.profile;
+    writingPreferences = tailor.resumeSource.writingPreferences;
+  }
   const extracted = extractContactInfo(resumeText, targetTitleFromProfile(profile));
   const contact: ResumeDocContact = {
     name: clean(contactOverride?.name ?? extracted.name),
