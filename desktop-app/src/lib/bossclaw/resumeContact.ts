@@ -18,6 +18,7 @@ import type { Profile } from './types';
 import type { TailorResult, TailorResumeDoc } from './jobAssistant';
 import { buildLocalTailorDoc } from './jobAssistant';
 import { resumeDisplayText, type ResumeWritingPreferences } from './resumeWriting';
+import { originalResumeProjects } from './resumeFacts';
 
 // ===== 输出数据结构（与具体输出格式解耦：PDF / 其他格式共用） =====
 /** 内容块（教育/实习/工作/项目共用）：首行标题 + 元信息行 + 要点 */
@@ -178,8 +179,11 @@ export function buildResumeDocData(
     targetTitle: clean(contactOverride?.targetTitle ?? extracted.targetTitle),
   };
 
-  const doc: TailorResumeDoc = tailor?.doc ?? buildLocalTailorDoc(profile);
-  const display = (text: string) => resumeDisplayText(text, writingPreferences || tailor?.writingPreferences || {});
+  const savedDoc: TailorResumeDoc = tailor?.doc ?? buildLocalTailorDoc(profile);
+  const preferences = writingPreferences || tailor?.writingPreferences || {};
+  const preservedProjects = preferences.preserveProjectText ? originalResumeProjects(resumeText, preferences) : [];
+  const doc: TailorResumeDoc = preservedProjects.length ? { ...savedDoc, projects: preservedProjects } : savedDoc;
+  const display = (text: string) => resumeDisplayText(text, preferences);
 
   /** 按模块 id 生成模块；没有内容的模块返回 null（空模块整块不输出） */
   const buildModule = (id: string): ResumeDocModule | null => {

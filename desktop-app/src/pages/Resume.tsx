@@ -517,7 +517,8 @@ export default function Resume() {
                 <Checkbox checked={!!writingPreferences.conciseRagLabel} onChange={e => setWritingPreferences({ ...writingPreferences, conciseRagLabel: e.target.checked })}>RAG 使用简写</Checkbox>
                 <Checkbox checked={!!writingPreferences.separateDevTools} onChange={e => setWritingPreferences({ ...writingPreferences, separateDevTools: e.target.checked })}>开发工具单独分组</Checkbox>
                 <Checkbox checked={!!writingPreferences.hideCourseDesignLabel} onChange={e => setWritingPreferences({ ...writingPreferences, hideCourseDesignLabel: e.target.checked })}>不显示“课程设计”</Checkbox>
-                <Checkbox checked={!!writingPreferences.preferTwoProjectsWithExperience} onChange={e => setWritingPreferences({ ...writingPreferences, preferTwoProjectsWithExperience: e.target.checked })}>有工作经历时精选两个项目</Checkbox>
+                <Checkbox checked={!!writingPreferences.preserveProjectText} onChange={e => setWritingPreferences({ ...writingPreferences, preserveProjectText: e.target.checked, ...(e.target.checked ? { preferTwoProjectsWithExperience: false } : {}) })}>保留项目原文</Checkbox>
+                <Checkbox disabled={!!writingPreferences.preserveProjectText} checked={!!writingPreferences.preferTwoProjectsWithExperience && !writingPreferences.preserveProjectText} onChange={e => setWritingPreferences({ ...writingPreferences, preferTwoProjectsWithExperience: e.target.checked })}>有工作经历时精选两个项目</Checkbox>
               </Space>
             </div>
           </Card>

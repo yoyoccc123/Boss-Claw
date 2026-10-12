@@ -80,6 +80,13 @@ try {
   assert.equal(withInternship.doc.projects.length, 2);
   assert.ok(!withInternship.doc.projects[0].heading.includes('课程设计'));
   assert.equal(withInternship.doc.internships[0].bullets[0].text, project, '精简项目不能删掉公司经历');
+  const originalProjects = Array.from({ length: 4 }, (_, i) => ({ heading: `原项目${i + 1}`, meta: '2026.05｜课程设计｜Python', bullets: Array.from({ length: 4 }, (_, j) => ({ text: `原项目${i + 1}的原始描述${j + 1}。`, source: `原项目${i + 1}的原始描述${j + 1}。` })) }));
+  const preservedFacts = `个人简介\n${summary}\n项目经历\n${originalProjects.flatMap(p => [p.heading, p.meta, ...p.bullets.map(b => b.text)]).join('\n')}\n其他技术实践\n这条不属于最后一个项目。`;
+  const protectedPreferences = { preserveProjectText: true, preferTwoProjectsWithExperience: true, hideCourseDesignLabel: true };
+  const preserved = enforceResumeFacts(withInternship.doc, preservedFacts, protectedPreferences).doc.projects;
+  assert.deepEqual(preserved, originalProjects.map(p => ({ ...p, meta: '2026.05｜Python' })), '保留原文优先于AI改写、项目上限和要点上限，且不串入下个模块');
+  const preservedLocal = await tailorForJob({ title: 'Python实习', description: 'Python' }, preservedFacts, { summary, facts: { projects: [] } }, {}, undefined, undefined, { writingPreferences: protectedPreferences });
+  assert.deepEqual(preservedLocal.doc.projects, preserved, '画像缺少项目时本地兜底也须从原文恢复全部项目');
   const finalDoc = normalizeTailorDoc({ skills: [{ text: '了解数据库表设计', source: '了解数据库表设计' }, { text: '实践RAG和大模型API', source: skill }], selfEval: { text: summary, source: summary } });
   const points = ['了解数据库表设计', '了解大模型与 Embedding', '一年以上深度学习学习研究'].map(point => ({ point, layer: 'must', verdict: 'covered', evidence: '旧判定' }));
   const result = { doc: finalDoc, jdPoints: points, supplements: [], aiMatch: null };
