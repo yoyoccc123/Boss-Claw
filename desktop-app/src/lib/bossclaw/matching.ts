@@ -19,6 +19,7 @@ import { buildSchoolDisclosureRule, hasSchoolMention, resolveSchoolTier } from '
 import { allocateContextBudget, fitContextToTokens } from './contextBudget';
 import { prepareContextText } from './oversizedContext';
 import type { Decision } from './types';
+import { experienceFirstGreeting, pickGreetingOpening, GREETING_PREVIEW_RULE } from './greetingPreview';
 
 /**
  * 启用「AI 整体分 × AI 维度加权分」融合所需的**最小 AI 维度覆盖度**（审查 #3）。
@@ -138,7 +139,7 @@ function pickRealAward(facts: ProfileFacts | undefined): string {
 // 本地确定性主人打招呼语兜底模板：以真实简历事实为骨架（身份/技能/荣誉），
 // 不再出现「我是教育经历」这类把表单小标题当身份、或「有相关项目实践」这种凭空捏造的表述。
 // 校名披露口径与 AI 路径一致（schoolTier.ts）：非 985/211 院校不写校名，只留专业/学历。
-export function fallbackApplicantGreeting(job: JobMeta, profile: Profile | null): string {
+export function fallbackApplicantGreeting(job: JobMeta, profile: Profile | null, resumeText = ''): string {
   const title = String(job?.title || '该岗位').trim();
   const skills = normalizeStringList(profile?.facts?.skills, 30);
   const education = normalizeStringList(profile?.facts?.education, 8);
@@ -151,15 +152,17 @@ export function fallbackApplicantGreeting(job: JobMeta, profile: Profile | null)
   const relevant = pickRelevantSkills(skills, job, 3);
   const showSkills = relevant.length ? relevant : skills.slice(0, 3);
   const award = pickRealAward(profile?.facts);
+  const opening = pickGreetingOpening(job, profile, resumeText);
 
   const body: string[] = [];
   if (identity) body.push(`我是${identity}`);
-  if (showSkills.length) body.push(`熟悉${showSkills.join('、')}`);
+  if (opening) body.push(opening.source);
+  else if (showSkills.length) body.push(`相关技能包括${showSkills.join('、')}`);
   if (award) body.push(`曾获${award}`);
   const parts = [`您好，我想应聘贵公司的${title}岗位。`];
   if (body.length) parts.push(`${body.join('，')}。`);
   parts.push('对该岗位的工作内容很感兴趣，希望有机会进一步沟通，谢谢。');
-  return clampGreetingText(parts.join('').replace(/。{2,}/g, '。'), GREETING_MAX_CHARS);
+  return clampGreetingText(experienceFirstGreeting(parts.join('').replace(/。{2,}/g, '。'), job, profile, resumeText), GREETING_MAX_CHARS);
 }
 
 // 入队门槛默认值：用户未在设置页配置「最低入队分」时的兜底（与 defaults.minQueueScore 一致）。
@@ -277,7 +280,7 @@ export function stableProfileView(profile: Profile): Record<string, unknown> {
   };
 }
 
-export function normalizeApplicantGreeting(result: any, job: JobMeta, profile: Profile | null): string {
+export function normalizeApplicantGreeting(result: any, job: JobMeta, profile: Profile | null, resumeText = ''): string {
   const raw = String(result?.greeting || '').trim();
   // 反向过滤：明确是招聘方口吻的招呼语（如"看到你的简历""欢迎进一步沟通""我们团队""候选人"等），
   // 一律用本地模板兜底——对齐 AGENTS.md 安全不变量（不得让 AI 用招聘方语气联系招聘方）。
@@ -285,12 +288,12 @@ export function normalizeApplicantGreeting(result: any, job: JobMeta, profile: P
   // 求职者口吻校验放宽：覆盖"我想应聘/我希望应聘/我对...岗位...感兴趣/想进一步了解/
   // 希望进一步沟通/希望和您聊聊/对该岗位感兴趣/我对...感兴趣/期望加入/可到岗/可实习"
   // 等常见自然表达。LLM 不一定严格遵守 prompt 的"以"我想应聘"开头"，只要不是招聘方口吻即可放行。
-  const applicantVoice = /我想应聘|我希望应聘|我对.{0,30}(岗位|职位|这份|这个|该).{0,15}(感兴趣|有兴趣)|我对.{0,30}(感兴趣|有兴趣)|想进一步了解|希望进一步沟通|希望和您(聊聊|沟通|交流)|希望加入|对该.{0,10}感兴趣|期望加入|期待加入|期望.{0,5}加入.{0,8}贵公司|我.{0,5}(适合|符合|胜任)|可实习|可到岗|面试.{0,5}到岗|期待.{0,5}(回复|联系|沟通)/.test(raw);
-  if (!raw || reversed || !applicantVoice) return fallbackApplicantGreeting(job, profile);
+  const applicantVoice = /我想应聘|我希望应聘|我(?:做过|参与|完成|写过|实践|是|有|独立)|我对.{0,30}(岗位|职位|这份|这个|该).{0,15}(感兴趣|有兴趣)|我对.{0,30}(感兴趣|有兴趣)|想进一步了解|希望进一步沟通|希望和您(聊聊|沟通|交流)|希望加入|对该.{0,10}感兴趣|期望加入|期待加入|期望.{0,5}加入.{0,8}贵公司|我.{0,5}(适合|符合|胜任)|可实习|可到岗|面试.{0,5}到岗|期待.{0,5}(回复|联系|沟通|交流)/.test(raw);
+  if (!raw || reversed || !applicantVoice) return fallbackApplicantGreeting(job, profile, resumeText);
   // 校名披露兜底（见 schoolTier.ts）：本地核验简历院校不属于 985/211 时，AI 仍写出院校名称
   // （含编造出的校名）即视为违规 → 回退本地模板，绝不把「双非校名」或幻觉校名外泄给 HR。
   if (!resolveSchoolTier(normalizeStringList(profile?.facts?.education, 8)).allowSchoolName && hasSchoolMention(raw)) {
-    return fallbackApplicantGreeting(job, profile);
+    return fallbackApplicantGreeting(job, profile, resumeText);
   }
   // 关键：AI 生成的打招呼语常含换行/制表符（LLM 输出习惯分段）。
   // BOSS 聊天框按 Enter 发送，多行文本会导致「只发前半句 / 发送被拒 / 气泡确认失败」。
@@ -310,20 +313,20 @@ export async function settleGreetingLength(
   current: string,
   opts: { job: JobMeta; profile: Profile | null; resumeText: string; model: AppConfig['model']; greetingInstruction: string }
 ): Promise<string> {
-  const text = String(current || '');
+  const text = experienceFirstGreeting(current, opts.job, opts.profile, opts.resumeText);
   if (isGreetingLengthOk(text.length)) return text;
   // 本地兜底模板（受控、字数固定且合规，不触发重试以免空转）
-  if (text === fallbackApplicantGreeting(opts.job, opts.profile)) return text;
+  if (text === fallbackApplicantGreeting(opts.job, opts.profile, opts.resumeText)) return text;
   let best = text;
   let prevLen = text.length;
   for (let attempt = 1; attempt <= GREETING_MAX_RETRY; attempt++) {
     try {
       const generated = await generateGreetingOnce({ ...opts, attempt, prevLen });
-      const candidate = normalizeApplicantGreeting({ greeting: generated }, opts.job, opts.profile);
+      const candidate = experienceFirstGreeting(normalizeApplicantGreeting({ greeting: generated }, opts.job, opts.profile, opts.resumeText), opts.job, opts.profile, opts.resumeText);
       // 命中合格区间 → 采用
       if (isGreetingLengthOk(candidate.length)) return candidate;
       // 生成无效、被回退到本地模板 → 受控模板，不再无谓重试
-      if (candidate === fallbackApplicantGreeting(opts.job, opts.profile)) return candidate;
+      if (candidate === fallbackApplicantGreeting(opts.job, opts.profile, opts.resumeText)) return candidate;
       // 有效但不合格 → 记下继续按新字数重试
       best = candidate;
       prevLen = candidate.length;
@@ -354,7 +357,7 @@ async function generateGreetingOnce(opts: {
   const schoolRule = buildSchoolDisclosureRule(
     resolveSchoolTier(normalizeStringList(opts.profile?.facts?.education, 8), opts.resumeText)
   );
-  const system = `你是求职者本人的第一人称打招呼语助手，不是招聘方。只能引用简历与职业画像中的真实事实；不得承诺薪资、到岗时间、面试时间或不存在的能力。\n\n${opts.greetingInstruction}${schoolRule}`;
+  const system = `你是求职者本人的第一人称打招呼语助手，不是招聘方。只能引用简历与职业画像中的真实事实；不得承诺薪资、到岗时间、面试时间或不存在的能力。\n\n${opts.greetingInstruction}${schoolRule}\n${GREETING_PREVIEW_RULE}`;
   // 与 analyzeJob 共用同一段上下文预算分配（口径统一，前缀缓存结构一致）
   const parts = await buildAnalyzeContextParts({
     job: opts.job,
@@ -402,7 +405,7 @@ export async function analyzeJob(
   const schoolRule = buildSchoolDisclosureRule(
     resolveSchoolTier(normalizeStringList(profile?.facts?.education, 8), resumeText)
   );
-  const systemPrompt = buildAnalyzeSystemPrompt() + jobAnalysisRules + greetingsSkill + schoolRule;
+  const systemPrompt = buildAnalyzeSystemPrompt() + jobAnalysisRules + greetingsSkill + schoolRule + '\n' + GREETING_PREVIEW_RULE;
   // 打招呼语统一口径全文（供长度不达标时的独立重写再生成复用）：技能正文 > 简历中心输入框内容 > 内置默认。
   const greetingInstruction = greetingsSkill || inputGreeting || DEFAULT_ANALYZE_GREETING_INSTRUCTIONS;
   // 本地确定性多维匹配（deal-breaker 硬约束 + 可解释维度 + 兜底分），先于 AI 计算：
@@ -433,7 +436,7 @@ export async function analyzeJob(
       gaps: fallbackGaps,
       risks: [],
       reason: hardReason,
-      greeting: fallbackApplicantGreeting(job, profile),
+      greeting: fallbackApplicantGreeting(job, profile, resumeText),
       scoreSource: 'local' as const,
       dimensions: local.dimensions,
     } as JobAnalysis;
@@ -480,7 +483,7 @@ ${untrustedJobSection(parts.jobJson)}${localAnchorSection}`,
       { maxTokens: 3200 }, // 含 reason/greeting/五维 evidence，较默认下限放宽防截断
       { scope: 'job-analysis' }
     );
-    result.greeting = await settleGreetingLength(normalizeApplicantGreeting(result, job, profile), {
+    result.greeting = await settleGreetingLength(normalizeApplicantGreeting(result, job, profile, resumeText), {
       job,
       profile,
       resumeText,
@@ -512,7 +515,7 @@ ${untrustedJobSection(parts.jobJson)}${localAnchorSection}`,
       reason: local.evidence.length
         ? `本地规则分析：${local.evidence.slice(0, 2).join('；')}。`
         : '本地规则分析：岗位与画像关联度较低。',
-      greeting: fallbackApplicantGreeting(job, profile),
+      greeting: fallbackApplicantGreeting(job, profile, resumeText),
       scoreSource: 'local' as const,
       dimensions: local.dimensions,
     };

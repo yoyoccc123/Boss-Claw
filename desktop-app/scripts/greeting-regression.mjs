@@ -25,7 +25,8 @@ async function loadGreetingModule() {
     stdin: {
       contents: [
         "export * from './src/lib/bossclaw/schoolTier.ts';",
-        "export { fallbackApplicantGreeting } from './src/lib/bossclaw/matching.ts';",
+        "export { fallbackApplicantGreeting, normalizeApplicantGreeting, settleGreetingLength } from './src/lib/bossclaw/matching.ts';",
+        "export * from './src/lib/bossclaw/greetingPreview.ts';",
       ].join('\n'),
       resolveDir: root,
       sourcefile: 'greeting-regression-entry.ts',
@@ -53,7 +54,7 @@ function check(name, actual, expected) {
 }
 
 const { mod, cleanup } = await loadGreetingModule();
-const { resolveSchoolTier, hasSchoolMention, buildSchoolDisclosureRule, fallbackApplicantGreeting } = mod;
+const { resolveSchoolTier, hasSchoolMention, buildSchoolDisclosureRule, fallbackApplicantGreeting, normalizeApplicantGreeting, settleGreetingLength, pickGreetingOpening, experienceFirstGreeting, GREETING_PREVIEW_RULE } = mod;
 
 // ===== 一、院校层级判定（resolveSchoolTier）=====
 check('985：北京大学 → 允许写校名', resolveSchoolTier(['北京大学 计算机科学与技术 本科']).allowSchoolName, true);
@@ -103,6 +104,48 @@ const profileWith985 = {
   hardConstraints: { degree: '本科', employmentTypes: ['实习'], experience: '在校' },
 };
 check('985 兜底模板保留校名', /北京大学/.test(fallbackApplicantGreeting(job, profileWith985)), true);
+
+// ===== 五、真实经验进入前十字，旧固定开头、缺经历与重复处理 =====
+const rawFacts = '个人简介\n人工智能本科生。\nPython 实验\n独立编写 Python 键鼠自动化脚本，进行图像控制实验。\nAI助手\n参与大模型 API 集成；在项目中实践 LangChain、RAG 与 FastAPI 接口，完成功能集成和验证。\n视觉项目\n完成 YOLOv5 模型训练和检测效果验证。\n参与Flask系统原型设计和订单模块测试。';
+const openingCases = [
+  {title:'Python自动化实习生',description:'Python脚本',expected:'Python'},
+  {title:'RAG知识库实习生',description:'RAG检索',expected:'RAG'},
+  {title:'视觉算法实习生',description:'YOLO目标检测',expected:'YOLO'},
+  {title:'后端实习生',description:'Flask原型',expected:'Flask'},
+  {title:'FastAPI后端实习生',description:'FastAPI接口',expected:'FastAPI'},
+  {title:'AI应用实习生',description:'大模型API集成',expected:'大模型'},
+  {title:'软件测试实习生',description:'功能测试',expected:'测试'},
+];
+for(const sample of openingCases){
+ const old=`您好，我想应聘贵公司的${sample.title}岗位。我参与过项目实践，希望和您进一步沟通。`;
+ const rewritten=experienceFirstGreeting(old,sample,profileWithDoubleNon,rawFacts);
+ check(`${sample.title}的前十字带相关经验`,Array.from(rewritten).slice(0,10).join('').includes(sample.expected),true);
+ check(`${sample.title}不以寒暄开头`,/^您好|^我想应聘/.test(rewritten),false);
+ check(`${sample.title}保留已有正文`,rewritten.includes('我参与过项目实践'),true);
+ check(`${sample.title}处理两次结果稳定`,experienceFirstGreeting(rewritten,sample,profileWithDoubleNon,rawFacts),rewritten);
+ const opening=pickGreetingOpening(sample,profileWithDoubleNon,rawFacts);
+ check(`${sample.title}开头引文来自实际素材`,!!opening&&rawFacts.includes(opening.source),true);
+}
+const noExperience={title:'Java开发实习生',description:'Java后端'};
+const emptyGreeting=experienceFirstGreeting('您好，我想应聘贵公司的Java开发实习生岗位。我希望进一步沟通。',noExperience,null,'技能：Java');
+check('只有技能名不能编造开发经历',/做过|写过|参与|实践/.test(emptyGreeting),false);
+check('无经历时开头保留应聘方向',emptyGreeting.startsWith('应聘Java开发实习生。'),true);
+check('无经历时处理两次结果稳定',experienceFirstGreeting(emptyGreeting,noExperience,null,'技能：Java'),emptyGreeting);
+check('计划不作为已有经验',pickGreetingOpening({title:'RAG实习生',description:'RAG'},null,'计划学习RAG并完成项目实践。'),null);
+check('尚未完成的集成不写成做过',pickGreetingOpening({title:'AI应用实习生',description:'大模型API'},null,'未完成大模型 API 集成。'),null);
+check('技能列表不冒充项目实践',pickGreetingOpening({title:'视觉实习生',description:'OpenCV'},null,'视觉：OpenCV、YOLO、数据标注与训练。'),null);
+check('原始资料优先，画像虚构项目不能当经历',pickGreetingOpening({title:'RAG实习生',description:'RAG'},{facts:{projects:['完成RAG项目实践']}},'我只学习过Java。'),null);
+check('本地兜底也用真实经验开头',fallbackApplicantGreeting(openingCases[0],profileWithDoubleNon,rawFacts).slice(0,10).includes('Python'),true);
+check('本地兜底不增加熟悉程度',fallbackApplicantGreeting(job,profileWithDoubleNon).includes('熟悉React'),false);
+const longOld='您好，我想应聘贵公司的RAG知识库实习生岗位。我在项目中实践LangChain、RAG与FastAPI接口，完成相关功能集成和验证。'+ '我希望进一步沟通岗位的具体任务与项目职责。'.repeat(5);
+const normalized=normalizeApplicantGreeting({greeting:longOld},openingCases[1],profileWithDoubleNon,rawFacts);
+const settled=await settleGreetingLength(normalized,{job:openingCases[1],profile:profileWithDoubleNon,resumeText:rawFacts,model:{},greetingInstruction:'以您好开头'});
+check('最终长度检查不会恢复旧开头',settled.slice(0,10).includes('RAG'),true);
+check('最终结果单行且不超过250字',!settled.includes('\n')&&settled.length<=250,true);
+check('招聘方口吻仍回退',normalizeApplicantGreeting({greeting:'看到你的简历，欢迎加入我们团队。'},openingCases[0],profileWithDoubleNon,rawFacts).slice(0,10).includes('Python'),true);
+const experienceVoice='做过RAG项目。我参与过接口集成和功能验证，期待进一步交流。';
+check('经验开头和自然交流邀请通过第一人称检查',normalizeApplicantGreeting({greeting:experienceVoice},openingCases[1],profileWithDoubleNon,rawFacts),experienceVoice);
+check('新规则明确覆盖旧固定开头',GREETING_PREVIEW_RULE.includes('优先于旧技能'),true);
 
 cleanup();
 
