@@ -29,6 +29,7 @@ import { allocateContextBudget, estimateTokens, fitContextToTokens, resolveConte
 import { prepareContextText } from './oversizedContext';
 import { DEFAULT_ANALYZE_GREETING_INSTRUCTIONS } from './prompts';
 import { PROJECT_WRITING_RULE, resumePreferenceRule, type ResumeWritingPreferences } from './resumeWriting';
+import { GREETING_PREVIEW_RULE } from './greetingPreview';
 import { enforceResumeFacts, hasFactQuote, pointProofIsSpecific, resumeBodyText, unsupportedClaim } from './resumeFacts';
 import { auditResumeFacts } from './resumeFactAudit';
 import { buildSchoolDisclosureRule, hasSchoolMention, resolveSchoolTier } from './schoolTier';
@@ -221,7 +222,7 @@ const TAILOR_OUTPUT_EXAMPLE = `{
     "在 XX 商城项目中负责订单管理模块，用 React + TypeScript 完成页面开发与状态管理，支撑下单到售后全流程交互",
     "在 XX 科技实习期间参与商家后台页面开发，配合后端完成接口联调并优化首屏渲染表现"
   ],
-  "coverLetter": "您好，我想应聘贵公司的前端开发实习生岗位。我是计算机科学与技术专业在读本科生，做过基于 React + TypeScript 的商城订单管理模块，负责页面开发与状态管理；对岗位的工程化与性能优化方向很感兴趣，希望有机会进一步沟通，谢谢。",
+  "coverLetter": "React订单模块做过。我参与过基于 React + TypeScript 的商城订单管理模块，负责页面开发与状态管理；我是计算机科学与技术专业在读本科生，想应聘贵公司的前端开发实习生岗位，对岗位的工程化与性能优化方向很感兴趣，希望有机会进一步沟通，谢谢。",
   "skillGaps": ["Kubernetes：岗位要求容器编排与集群运维，简历与画像未体现相关经历，建议补充实操项目"],
   "suggestions": ["把商城项目的首屏优化数据前置到经历第一条", "在技能区补充 Jest 单元测试能力", "摘要中明确写出期望的前端工程化方向"],
   "resume": {
@@ -355,7 +356,7 @@ export function buildReviewSystemPrompt(schoolRule = ''): string {
 2. ATS 关键词覆盖：关键词仅可表达原文已确认的能力，不能用同领域经历推导新能力。逐句审阅摘要、面板亮点与求职信，删除只有项目技术栈、画像推导或JD能支持的个人实现/熟练程度声明。未知能力归入缺口，不为匹配度补造。
 3. 结构与可排版性：resume 模块齐全且**没有编造出来的空壳模块**（没内容的模块必须是空数组/空对象，不得出现「暂无」「待补充」等占位文字）；projects 只保留按 JD 相关性排序的最多 3 个项目，每项最多 3 条要点，事实不足时不凑数；bullets 每条建议 40-70 字、不得超过 80 字。skills 合并同义项，最多 4 组，同一技能不跨组重复；技术栈放 meta，经历要点写具体贡献。
 4. 精简与证据：tailoredSummary 与 resume.selfEval.text 为同一段 60-90 字简介，开头点明身份，删除重复技能清单和无事例自评；tailoredExperiences 2-4 条、一条不超过 80 字。没有明确测试口径或用户/业务数据时，删除「毫秒级响应」「显著提升使用粘性」「大幅提升效率」等效果词，即使原文有这些笼统说法也只保留具体功能与实现。量化只提炼有证据的原始数字，严禁编造或推算。
-5. 求职信口吻：coverLetter 必须求职者第一人称（以「您好，我想应聘贵公司的{岗位名}」开头），全文 120-250 字（含标点，建议约 150 字，与 greetings.ts::GREETING_LENGTH_RULE 同口径）、单行不换行；项目亮点必须精炼（只挑 1-2 个与岗位最相关的真实项目/技能、禁止罗列技术栈清单）；严禁招聘方口吻（「看到你的简历」「你的经历很匹配我们」「欢迎进一步沟通」「我们团队」「候选人」等），不得承诺薪资、到岗时间、面试时间。**校名披露（只约束 coverLetter，简历正文 resume 中的学校名照抄原文不受此限）**：${schoolRule ? schoolRule.trim() : '院校名称只有简历院校属于 985/211 时才允许写出，其余院校一律不出现任何院校名称或层级字样，只写学历/专业/年级。'}
+5. 求职信口吻：coverLetter 必须求职者第一人称（前10字优先展示真实相关经验），全文 120-250 字（含标点，建议约 150 字，与 greetings.ts::GREETING_LENGTH_RULE 同口径）、单行不换行；项目亮点必须精炼（只挑 1-2 个与岗位最相关的真实项目/技能、禁止罗列技术栈清单）；严禁招聘方口吻（「看到你的简历」「你的经历很匹配我们」「欢迎进一步沟通」「我们团队」「候选人」等），不得承诺薪资、到岗时间、面试时间。**校名披露（只约束 coverLetter，简历正文 resume 中的学校名照抄原文不受此限）**：${schoolRule ? schoolRule.trim() : '院校名称只有简历院校属于 985/211 时才允许写出，其余院校一律不出现任何院校名称或层级字样，只写学历/专业/年级。'}
 6. 建议可执行性：suggestions 3-5 条、基于简历与 JD 的真实差距、每条不超过 40 字。
 7. **能力描述语保真（重点复查项）**：逐条比对 resume.skills 与各模块 bullet 的 text / 同条 source，**原文中的「精通 / 熟练 / 熟悉 / 掌握 / 擅长 / 了解 / 具备…能力 / 沉淀」等描述语是否被保留**？凡是「原文有描述语、text 里却压成了无修饰的技能罗列」（如 source「前端：熟悉 React、TypeScript，沉淀通用组件库」被改成 text「前端：React、TypeScript、通用组件库」），**必须在 resume 中把描述语按 source 原文补回**（可同义替换，不得升级为「精通」），并在 reviewNote 里说明补回了哪几条；同时检查有没有反向错误——把原文的「了解」写成「精通」这类**凭空升级**，也要改回原文强度。
 
@@ -379,7 +380,7 @@ function isApplicantVoice(text: string): boolean {
   const raw = String(text || '').trim();
   if (!raw) return false;
   const reversed = /看到你的简历|你的简历|很匹配我们|匹配我们|欢迎.*进一步沟通|期待你加入我们|候选人|我们团队|我们公司|我们这边|团队主要涉及|你很匹配|方便的话来聊聊|期待与你/i.test(raw);
-  const applicantVoice = /我想应聘|我希望应聘|我对.{0,30}(岗位|职位|这份|这个|该).{0,15}(感兴趣|有兴趣)|想进一步了解|希望进一步沟通|希望和您(聊聊|沟通|交流)|希望加入|对该.{0,10}感兴趣|期望加入|期待加入|可实习|可到岗|您好/i.test(raw);
+  const applicantVoice = /我想应聘|我希望应聘|我(?:做过|参与|完成|写过|实践|是|有|独立)|我对.{0,30}(岗位|职位|这份|这个|该).{0,15}(感兴趣|有兴趣)|想进一步了解|希望进一步沟通|希望和您(聊聊|沟通|交流)|希望加入|对该.{0,10}感兴趣|期望加入|期待加入|期待.{0,5}交流|可实习|可到岗|您好/i.test(raw);
   return !reversed && applicantVoice;
 }
 
@@ -852,7 +853,7 @@ export async function tailorForJob(
       highlightedSkills: doc.skills.map(line => line.text),
       tailoredSummary: doc.selfEval.text,
       tailoredExperiences: doc.projects.map(block => `${block.heading}：${block.bullets[0]?.text || block.meta}`),
-      coverLetter: fallbackApplicantGreeting(job, profile),
+      coverLetter: fallbackApplicantGreeting(job, profile, resumeText),
       skillGaps: [],
       suggestions: buildLocalSuggestions(keywordAnalysis, job.description || '', resumeHasQuantifiedEvidence(resumeText)),
       doc,
@@ -938,7 +939,7 @@ export async function tailorForJob(
     const coverHasSchoolIssue = (text: string) => !schoolTier.allowSchoolName && hasSchoolMention(text);
     const result: any = await cachedCallModel(
       [
-        { role: 'system', content: buildTailorSystemPrompt(greetingInstructions, schoolRule) + skillInstructionsFor('assistant') + '\n' + PROJECT_WRITING_RULE + preferenceInstructions + (supplementCtx ? '\n' + ITERATION_RULE : '') },
+        { role: 'system', content: buildTailorSystemPrompt(greetingInstructions, schoolRule) + skillInstructionsFor('assistant') + '\n' + PROJECT_WRITING_RULE + preferenceInstructions + (supplementCtx ? '\n' + ITERATION_RULE : '') + '\n' + GREETING_PREVIEW_RULE },
         {
           role: 'user',
           content: `职业画像：${profileCtx}
@@ -981,7 +982,7 @@ export async function tailorForJob(
     try {
       const review: any = await cachedCallModel(
         [
-          { role: 'system', content: buildReviewSystemPrompt(schoolRule) + skillInstructionsFor('assistant') + '\n' + PROJECT_WRITING_RULE + preferenceInstructions + (supplementCtx ? '\n' + ITERATION_RULE : '') },
+          { role: 'system', content: buildReviewSystemPrompt(schoolRule) + skillInstructionsFor('assistant') + '\n' + PROJECT_WRITING_RULE + preferenceInstructions + (supplementCtx ? '\n' + ITERATION_RULE : '') + '\n' + GREETING_PREVIEW_RULE },
           {
             role: 'user',
             content: `职业画像：${profileCtx}\n简历原文：${resumeCtx}${extraCtx ? `\n经历补充材料：\n${extraCtx}` : ''}${iterationCtx}
