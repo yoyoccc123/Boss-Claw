@@ -27,6 +27,7 @@ import { LogConsole } from '@/components/LogConsole';
 import { rerankPending, promoteApprovedToQueue } from '@/lib/bossclaw/priority';
 import { resolveQueueMinScore } from '@/lib/bossclaw/matching';
 import { analyzeJobWithResume, storedResumeForJob } from '@/lib/bossclaw/resumeRoutingRuntime';
+import { resolveJobDetailUrl, normalizeJobDetailMetadata, isZhaopinCardFragment, ZHAOPIN_LINK_ERROR } from '@/lib/bossclaw/jobDetailLink';
 import { fitLevelLabel } from '@/lib/bossclaw/fitLevel';
 import { isLocationExcluded } from '@/lib/bossclaw/locationFilter';
 import { isCompanyExcluded } from '@/lib/bossclaw/companyFilter';
@@ -714,6 +715,10 @@ export default function Workbench() {
   const onApprove = (id: string, greeting?: string) => {
     const latestPending = useDataStore.getState().pending;
     const target = latestPending.find((p) => p.id === id);
+    if (target?.job.platform === 'zhaopin' && (!resolveJobDetailUrl(target.job) || isZhaopinCardFragment(target.job))) {
+      updatePending(id, { linkIncomplete: true, error: ZHAOPIN_LINK_ERROR });
+      message.warning(ZHAOPIN_LINK_ERROR); return;
+    }
     let finalGreeting = String(greeting ?? target?.deliveryGreeting ?? target?.analysis?.greeting ?? '').trim();
     if (!finalGreeting) {
       const fallback = pickGreetingForJob(target?.job, useDataStore.getState().greetings || []);
@@ -724,7 +729,7 @@ export default function Workbench() {
       }
     }
     if (!finalGreeting) { message.warning('请先填写求职招呼语，再确认沟通'); return; }
-    const next = rerankPending(pending.map((p) => (p.id === id ? { ...p, deliveryGreeting: finalGreeting, status: 'approved_queue' as const, approvedAt: p.approvedAt || Date.now() } : p)), useSettingsStore.getState().config);
+    const next = rerankPending(latestPending.map((p) => (p.id === id ? { ...p, job: normalizeJobDetailMetadata(p.job), linkIncomplete: false, error: '', deliveryGreeting: finalGreeting, status: 'approved_queue' as const, approvedAt: p.approvedAt || Date.now() } : p)), useSettingsStore.getState().config);
     setPending(next);
     addLog('info', '已批准并加入「投递中」队列，将按匹配分与平台优先级投递');
     // 只在引擎已运行时续跑；同时刻可能有多个岗位被批准，runNext 内部有重入锁（runNextLock/runNextQueued）
@@ -737,9 +742,11 @@ export default function Workbench() {
     // 批量确认走同一口径：直接入队。逐个校验招呼语——无招呼语者**不入队**（保持待确认），
     // 与单个「批准」的「无招呼语则拒绝批准」一致，不做静默兜底。
     const noGreeting: string[] = [];
+    const noLink: string[] = [];
     const approvedIds = new Set(
       waiting
         .filter((p) => {
+          if (p.job.platform === 'zhaopin' && (!resolveJobDetailUrl(p.job) || isZhaopinCardFragment(p.job))) { noLink.push(p.job.title || p.id); return false; }
           const g = String(p.deliveryGreeting || p.analysis?.greeting || '').trim();
           if (!g) { noGreeting.push(p.job?.title || p.id); return false; }
           return true;
@@ -747,12 +754,12 @@ export default function Workbench() {
         .map((p) => p.id)
     );
     if (!approvedIds.size) {
-      message.warning('待确认岗位均无求职招呼语，请先补充后再批量确认');
-      addLog('warn', `批量确认未执行：${noGreeting.length} 个岗位缺少招呼语`);
+      message.warning(noLink.length ? '部分岗位缺少详情链接，请重新采集补齐；其余岗位缺少招呼语' : '待确认岗位均无求职招呼语，请先补充后再批量确认');
+      addLog('warn', `批量确认未执行：${noLink.length} 个岗位缺少详情链接，${noGreeting.length} 个岗位缺少招呼语`);
       return;
     }
     const next = rerankPending(
-      pending.map((p) => (approvedIds.has(p.id) ? { ...p, status: 'approved_queue' as const, approvedAt: Date.now() } : p)),
+      pending.map((p) => (approvedIds.has(p.id) ? { ...p, job: normalizeJobDetailMetadata(p.job), linkIncomplete: false, error: '', status: 'approved_queue' as const, approvedAt: Date.now() } : p)),
       useSettingsStore.getState().config,
     );
     setPending(next);
@@ -761,6 +768,7 @@ export default function Workbench() {
       message.warning(`${noGreeting.length} 个岗位因缺少招呼语未入队，仍留在「待确认」`);
       addLog('warn', `以下岗位缺少招呼语，未入队：${noGreeting.slice(0, 5).join('、')}${noGreeting.length > 5 ? ` 等 ${noGreeting.length} 个` : ''}`);
     }
+    if (noLink.length) { message.warning(`${noLink.length} 个岗位因缺少详情链接未入队，请重新采集补齐`); addLog('warn', `缺少详情链接，未入队：${noLink.slice(0, 5).join('、')}`); }
     if (useAppStore.getState().autoAssist) requestRunNext();
   };
 
@@ -839,9 +847,9 @@ export default function Workbench() {
   };
 
   const onRetryAllFailed = () => {
-    const retryable = pending.filter((p) => p.status === 'failed' && !p.riskBlocked);
-    if (!retryable.length) { message.info('没有可重试的失败任务'); return; }
-    setPending(pending.map((p) => (p.status === 'failed' && !p.riskBlocked ? { ...p, status: 'approved_queue' as const, retryCount: (p.retryCount || 0) + 1, error: '', riskBlocked: false, approvedAt: Date.now() } : p)));
+    const retryable = pending.filter((p) => p.status === 'failed' && !p.riskBlocked && !p.linkIncomplete);
+    if (!retryable.length) { message.info(pending.some(p => p.linkIncomplete) ? '缺少详情链接的岗位需重新采集补齐后再确认' : '没有可重试的失败任务'); return; }
+    setPending(pending.map((p) => (p.status === 'failed' && !p.riskBlocked && !p.linkIncomplete ? { ...p, status: 'approved_queue' as const, retryCount: (p.retryCount || 0) + 1, error: '', riskBlocked: false, approvedAt: Date.now() } : p)));
     addLog('info', `已重新投递 ${retryable.length} 个失败任务`);
     recomputeStats();
     startDelivery();
@@ -937,7 +945,9 @@ export default function Workbench() {
 
   // ===== 岗位入库（去重 -> 活跃度/猎头/城市过滤 -> AI 分析 -> 入队）=====
   const ingestJob = useCallback(async (job: any): Promise<boolean> => {
-    const url = String(job?.url || '').trim();
+    job = normalizeJobDetailMetadata(job);
+    if (isZhaopinCardFragment(job)) { addSkipLogOnce('warn', `忽略智联不完整卡片：${job.title || '未识别岗位名'}`); return false; }
+    const url = resolveJobDetailUrl(job);
     const jobId = String(job?.jobId || url.match(/job_detail\/([^/.?#]+)/)?.[1] || '').trim();
     const cfg = useSettingsStore.getState().config;
     const data = useDataStore.getState();
@@ -955,8 +965,12 @@ export default function Workbench() {
           sameJobSoft(job, p.job)
       );
     if (existing) {
-      if (job.address || job.companySize) data.updatePending(existing.id, { job: { ...existing.job,
-        address: job.address || existing.job.address, companySize: job.companySize || existing.job.companySize } });
+      const repairLink = job.platform === 'zhaopin' && url && jobId && jobId.toLowerCase() === String(existing.job.jobId || '').toLowerCase() && url !== String(existing.job.url || '').trim();
+      if (job.address || job.companySize || repairLink) data.updatePending(existing.id, {
+        job: { ...existing.job, ...(repairLink ? { ...job, resumeVariantId: existing.job.resumeVariantId } : {}),
+          address: job.address || existing.job.address, companySize: job.companySize || existing.job.companySize },
+        ...(existing.linkIncomplete && repairLink ? { status: 'pending', linkIncomplete: false, error: '', retryable: true } : {}),
+      });
       return false;
     }
     // 本次会话去重：同一岗位无论入库还是被过滤跳过，都不重复 analyze/打日志（采集滚动常重复扫到同一卡片）
@@ -2277,7 +2291,7 @@ export default function Workbench() {
     // 不再记忆「最近点击批准的那个」：原 preferIdRef 是单值 ref，连点多个批准只会记最后一个，
     // 反而让先批准的被无理由后置，属于伪优先级，已移除。
     const ranked = rerankPending(useDataStore.getState().pending, useSettingsStore.getState().config);
-    const candidate = ranked.find((p) => p.status === 'approved_queue' && !isDeliveryClaimed(p.id, p.job?.platform));
+    let candidate = ranked.find((p) => p.status === 'approved_queue' && !isDeliveryClaimed(p.id, p.job?.platform));
     if (!candidate) {
       if (visualActiveRef.current || cfxActiveRef.current) return;
       if (useSettingsStore.getState().config.executionMode === 'auto' && !searchTriggered.current) {
@@ -2295,8 +2309,19 @@ export default function Workbench() {
     lastApplyStageRef.current = '';
     setApplyStage('queued');
     addLog('info', `按匹配优先级投递：${candidate.job?.title || '岗位'}（AI ${candidate.analysis?.score || 0} 分）`);
-    const url = String(candidate.job?.url || '').trim();
+    const url = resolveJobDetailUrl(candidate.job);
+    if (candidate.job.platform === 'zhaopin' && (!url || isZhaopinCardFragment(candidate.job))) {
+      updatePending(candidate.id, { status: 'failed', error: ZHAOPIN_LINK_ERROR, linkIncomplete: true, retryable: false });
+      addLog('error', `该岗位信息不完整，暂不投递：${candidate.job.title || '智联岗位'}（${ZHAOPIN_LINK_ERROR}）`);
+      setActiveId(null); setApplyStage(null); recomputeStats();
+      if (useAppStore.getState().autoAssist) requestRunNext();
+      return;
+    }
     if (!url) { pauseAssist('岗位缺少详情链接，无法投递'); return; }
+    if (candidate.job.url !== url) {
+      candidate = { ...candidate, job: { ...candidate.job, url } };
+      updatePending(candidate.id, { job: candidate.job, linkIncomplete: false });
+    }
 
     // 预检（冷却/每日上限）：不通过就别白开页面。
     // 岗位间隔节流不在这里等 —— 已挪到打开标签页之后，与页面加载并行（见各通道函数内）。

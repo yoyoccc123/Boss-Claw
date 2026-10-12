@@ -1652,7 +1652,16 @@ function collectCards(quiet = false) {
   // 有效性过滤：内容长度合理 + 是真实岗位卡
   const valid = uniq.filter((el) => {
     const content = textOf(el);
-    if (!content || content.length > 900) return false;
+    if (!content || (content.length > 900 && !(PLATFORM === 'zhaopin' && el.matches?.('.job-card, .joblist-box__item')))) return false;
+    if (PLATFORM === 'zhaopin') {
+      // Broad job-card prefix matches also find salary/content/ad fragments.
+      // Require a real title node; loading cards will be considered on the next scan.
+      const anchor = el.matches?.(LINK_SELECTOR) ? el : el.querySelector?.(LINK_SELECTOR);
+      const title = zhaopinTitleFromCard(el) || textOf(anchor);
+      if (!title || SALARY_WHOLE_RE.test(title)) return false;
+      const identity = cardIdentity(el);
+      if (!identity.href && !identity.company) return false;
+    }
     // 必须是真实岗位卡：含 job_detail 链接（智联无锚点变体则认主进程标注的详情 URL）
     // 或薪资文本（含「元」后缀，如智联「9000-10000元」——排除筛选栏 / 无关 li）
     return Boolean(el.querySelector?.(LINK_SELECTOR))
@@ -1813,6 +1822,20 @@ function pickFromCard(card, selectorCandidates) {
 }
 
 // 卡片身份（对齐 job-claw-main cardIdentity，多选择器候选 + 行兜底）
+function zhaopinTitleFromCard(card) {
+  const nodes = FIELD_SELECTORS.title.map(selector => card.querySelector(selector)).filter(Boolean);
+  // Vue may keep the complete title only in a child's aria-label while the wrapper is empty/clamped.
+  for (const node of nodes) {
+    const title = String(node.getAttribute('aria-label') || node.getAttribute('title') || '').trim();
+    if (title && !SALARY_WHOLE_RE.test(title)) return title;
+  }
+  for (const node of nodes) {
+    const title = textOf(node);
+    if (title && !SALARY_WHOLE_RE.test(title)) return title;
+  }
+  return '';
+}
+
 function cardIdentity(card) {
   const anchor = card.querySelector(LINK_SELECTOR);
   // 智联无 jobdetail 锚点的渲染变体（标题为 span 而非 a）：主进程按 __INITIAL_STATE__
@@ -1820,7 +1843,8 @@ function cardIdentity(card) {
   const href = anchor?.href || card.getAttribute?.('data-bossclaw-jobdetail') || '';
   // 行兜底必须取**原始行**（见 rawLines 注释）：压平后的 textOf 只会给出「整卡一行」
   const cardLines = rawLines(card);
-  const title = pickFromCard(card, FIELD_SELECTORS.title)
+  const title = (PLATFORM === 'zhaopin' ? zhaopinTitleFromCard(card) : '')
+    || pickFromCard(card, FIELD_SELECTORS.title)
     || textOf(anchor)
     || cardLines[0]
     || '';

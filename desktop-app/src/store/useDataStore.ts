@@ -17,6 +17,7 @@ import { DEFAULT_STATS, DEFAULT_PROFILE, DEFAULT_PROFILE_DRAFT, DEFAULT_DIRECTIO
 import { cleanCompanyName } from '@/lib/bossclaw/jobDisplay';
 import type { ResumeWritingPreferences } from '@/lib/bossclaw/resumeWriting';
 import type { ResumeVariant } from '@/lib/bossclaw/resumeVariants';
+import { normalizeJobDetailMetadata, repairZhaopinPending, ZHAOPIN_LINK_ERROR } from '@/lib/bossclaw/jobDetailLink';
 
 /** 达标岗位本地缓存上限：最多保留最近 N 天（按日期分组）的达标岗位数据，超出自动清理更早几天的数据，防止 localStorage 撑爆。
  *  实测按每天约 460 个达标岗位、叠加图片简历+导入文件后，保留 7 天（≈3200 条）仍能把整 store 稳定在 5MB 配额约 60% 以内；90 天会随累计溢出。 */
@@ -282,6 +283,7 @@ export const useDataStore = create<DataState>()(
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted as Partial<DataState> : {};
         return { ...current, ...saved,
+          pending: Array.isArray(saved.pending) ? repairZhaopinPending(saved.pending) : current.pending,
           resumeVariants: (Array.isArray(saved.resumeVariants) ? saved.resumeVariants : []).filter(v => v && typeof v.id === 'string' && typeof v.name === 'string' && typeof v.text === 'string'),
           defaultResumeVariantId: typeof saved.defaultResumeVariantId === 'string' ? saved.defaultResumeVariantId : '',
           autoResumeRouting: saved.autoResumeRouting !== false,
@@ -401,9 +403,10 @@ export function makePendingItem(
   runId: string
 ): PendingItem {
   // 清洗公司名：剔除采集把地名误当公司名的脏数据（如「深圳·南山区·科技园」）
-  const cleanedJob: JobMeta = job.company
-    ? { ...job, company: cleanCompanyName(job.company) ?? job.company }
-    : job;
+  const normalizedJob = normalizeJobDetailMetadata(job);
+  const cleanedJob: JobMeta = normalizedJob.company
+    ? { ...normalizedJob, company: cleanCompanyName(normalizedJob.company) ?? normalizedJob.company }
+    : normalizedJob;
   return {
     id: runId,
     runId,
@@ -413,5 +416,6 @@ export function makePendingItem(
     status: 'pending',
     createdAt: Date.now(),
     retryCount: 0,
+    ...(cleanedJob.platform === 'zhaopin' && !cleanedJob.url ? { linkIncomplete: true, error: ZHAOPIN_LINK_ERROR } : {}),
   };
 }
