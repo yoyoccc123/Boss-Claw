@@ -114,6 +114,7 @@ export interface TailorSupplement {
 }
 
 export interface TailorIterationInput {
+  resumeSource?: import('./resumeVariants').ResumeSourceSnapshot;
   supplements?: TailorSupplement[];
   previousResult?: TailorResult;
   writingPreferences?: ResumeWritingPreferences;
@@ -403,6 +404,7 @@ export interface TailorReviewMeta {
 }
 
 export interface TailorResult {
+  resumeSource?: import('./resumeVariants').ResumeSourceSnapshot;
   writingPreferences?: ResumeWritingPreferences;
   /** 随历史快照保存的多轮补充；老记录没有此字段。 */
   supplements?: TailorSupplement[];
@@ -587,7 +589,9 @@ export async function recheckTailorResult(input: {
   result: TailorResult; job: JobMeta; resumeText: string; profile: Profile | null;
   model: AppConfig['model']; extraMaterials?: string;
 }): Promise<TailorResult> {
-  const { result, job, resumeText, profile, model } = input;
+  const { result, job, model } = input;
+  const resumeText = result.resumeSource?.text ?? input.resumeText;
+  const profile = result.resumeSource ? result.resumeSource.profile : input.profile;
   if (!model?.apiKey) throw new Error('请先在设置中配置 AI');
   if (!result.jdPoints.length) throw new Error('当前结果没有可复核的岗位要点');
   const system = `你是简历最终正文复核员。只核对已有正文，禁止改写简历、求职信或增加要点。
@@ -827,6 +831,11 @@ export async function tailorForJob(
   extraMaterials?: string,
   iteration?: TailorIterationInput
 ): Promise<TailorResult> {
+  const resumeSource = JSON.parse(JSON.stringify(iteration?.resumeSource || {
+    name: '原简历', text: resumeText, profile, writingPreferences: iteration?.writingPreferences || {},
+  })) as import('./resumeVariants').ResumeSourceSnapshot;
+  resumeText = resumeSource.text;
+  profile = resumeSource.profile;
   // ===== 本地确定性匹配分析（不依赖 AI；仅作 AI 不可用时的兜底展示） =====
   const { keywords, weights } = extractJdKeywords(job.description || '', profile);
   const keywordAnalysis = analyzeJdKeywords(job.description || '', resumeText, profile, keywords);
@@ -834,7 +843,7 @@ export async function tailorForJob(
   const beforeScore = computeMatchScore(keywords, weights, `${resumeText}\n${profileBlob}`);
 
   const extra = String(extraMaterials || '').trim();
-  const writingPreferences = iteration?.writingPreferences || {};
+  const writingPreferences = resumeSource.writingPreferences;
   const preferenceInstructions = resumePreferenceRule(writingPreferences);
   const supplements = (iteration?.supplements || []).filter((s) => s.text?.trim());
   const supplementText = supplements.map((s, i) => `【第${i + 1}轮用户补充】\n${s.text}`).join('\n\n');
@@ -850,6 +859,7 @@ export async function tailorForJob(
   const localFallback = (warning: string): TailorResult => {
     const doc = enforceResumeFacts(buildLocalTailorDoc(profile), [resumeText, extra, supplementText].filter(Boolean).join('\n\n'), writingPreferences).doc;
     return {
+      resumeSource,
       highlightedSkills: doc.skills.map(line => line.text),
       tailoredSummary: doc.selfEval.text,
       tailoredExperiences: doc.projects.map(block => `${block.heading}：${block.bullets[0]?.text || block.meta}`),
@@ -1096,6 +1106,7 @@ export async function tailorForJob(
 
     const finalResult: TailorResult = {
       ...draft,
+      resumeSource,
       writingPreferences,
       doc: finalDoc,
       supplements,

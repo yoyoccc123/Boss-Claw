@@ -23,6 +23,8 @@ import { batchRestDelayMs } from '@/lib/bossclaw/activityWindow';
 import { cleanTitle } from '@/lib/bossclaw/jobDisplay';
 import { getErrorMessage } from '@/lib/bossclaw/helpers';
 import { generateReply } from '@/lib/bossclaw/greetings';
+import { storedResumeForJob } from '@/lib/bossclaw/resumeRoutingRuntime';
+import { selectResumeImages } from '@/lib/bossclaw/resumeVariants';
 import { rerankPending } from '@/lib/bossclaw/priority';
 import { platformEnabled, platformLabel, platformPriority, platformSupports } from '@/lib/bossclaw/platforms';
 import { claimDelivery, isDeliveryClaimed, releaseDelivery } from '@/lib/bossclaw/deliveryLock';
@@ -165,12 +167,13 @@ async function aiReplyAndSend(args: {
     errorDetail: hrMessage ? `HR 消息：${hrPreview}` : '',
   });
 
+  const { source: replySource } = storedResumeForJob(item.job);
   const reply = await generateReply({
     hrMessage,
     chatHistory: hrHistory,
     jobTitle: item.job?.title || '',
-    resumeText: useDataStore.getState().resumeText,
-    profile: useDataStore.getState().profile,
+    resumeText: replySource.text,
+    profile: replySource.profile,
     communicationInfo: useDataStore.getState().communicationInfo,
     model: useSettingsStore.getState().config.model,
   });
@@ -288,14 +291,15 @@ async function chatJob(item: PendingItem): Promise<ChatJobOutcome> {
       addChatLog({ level: 'warn', stage: 'system', jobId, jobTitle: title, company, msg: '⏹ 已取消发送（用户已停止），岗位保留待下次恢复' });
       return 'stop';
     }
+    const { source } = storedResumeForJob(item.job);
     const resumeImages: { name: string; data: string }[] = canAttach && cfg.sendResumeImage
-      ? (useDataStore.getState().imageResumes as ImageResume[]).map((r) => ({ name: r.name, data: r.data }))
+      ? selectResumeImages(useDataStore.getState().imageResumes as ImageResume[], source).map((r) => ({ name: r.name, data: r.data }))
       : [];
     const baseOpts = {
       os: cfg.camoufox?.os,
       platform,
       url: item.job?.url || '',
-      sendResumeImage: canAttach && Boolean(cfg.sendResumeImage),
+      sendResumeImage: canAttach && Boolean(cfg.sendResumeImage) && resumeImages.length > 0,
       sendOnlineResume: canAttach && Boolean(cfg.sendOnlineResume),
       attachmentDelaySeconds: Math.max(0, Number(cfg.attachmentDelaySeconds) || 4),
       recruiterName: item.job?.recruiterName || '',
@@ -643,12 +647,13 @@ async function watchCycle(run: WatchRun): Promise<void> {
       if (watchHandled.get(convName) === fp) continue;
       if (matched?.hrRepliedFingerprint === fp) continue;
 
+      const { source: replySource } = storedResumeForJob(matched?.job || { title: open.jobName || '' });
       const reply = await generateReply({
         hrMessage: fp,
         chatHistory: Array.isArray(open.history) ? open.history : undefined,
         jobTitle: matched?.job?.title || open.jobName || '',
-        resumeText: useDataStore.getState().resumeText,
-        profile: useDataStore.getState().profile,
+        resumeText: replySource.text,
+        profile: replySource.profile,
         communicationInfo: useDataStore.getState().communicationInfo,
         model: useSettingsStore.getState().config.model,
       });

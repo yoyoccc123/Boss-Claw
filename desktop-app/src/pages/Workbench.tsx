@@ -25,7 +25,8 @@ import PlatformChip from '@/components/PlatformChip';
 import { ChevronDown } from '@/components/ChevronDown';
 import { LogConsole } from '@/components/LogConsole';
 import { rerankPending, promoteApprovedToQueue } from '@/lib/bossclaw/priority';
-import { analyzeJob, resolveQueueMinScore } from '@/lib/bossclaw/matching';
+import { resolveQueueMinScore } from '@/lib/bossclaw/matching';
+import { analyzeJobWithResume, storedResumeForJob } from '@/lib/bossclaw/resumeRoutingRuntime';
 import { fitLevelLabel } from '@/lib/bossclaw/fitLevel';
 import { isLocationExcluded } from '@/lib/bossclaw/locationFilter';
 import { isCompanyExcluded } from '@/lib/bossclaw/companyFilter';
@@ -641,7 +642,7 @@ export default function Workbench() {
     try {
       addLog('info', `AI 正在分析岗位：${job.title || job.url}`);
       const customGreetingPrompt = useDataStore.getState().greetingPrompt;
-      const analysis = await analyzeJob(job, profile, useDataStore.getState().resumeText, config, config.model, customGreetingPrompt || undefined);
+      const analysis = await analyzeJobWithResume(job, config, customGreetingPrompt || undefined);
       const item = makePendingItem(job, analysis, analysis.greeting, runId);
       // 同链接查重+自愈：若该岗位已入队，绝不叠卡，且一律提醒「已在队列」。
       // 信息处置三原则：
@@ -1003,7 +1004,7 @@ export default function Workbench() {
     const meta: JobMeta = { ...job, url, jobId, interviewMode: detectInterviewMode(job) };
     try {
       const customGreetingPrompt = useDataStore.getState().greetingPrompt;
-      const analysis = await analyzeJob(meta, profile, data.resumeText, cfg, cfg.model, customGreetingPrompt || undefined);
+      const analysis = await analyzeJobWithResume(meta, cfg, customGreetingPrompt || undefined);
       // 入库门槛：reject（硬伤 / 明确冲突）一律跳过；其余档位统一按「最低入队分」放行，
       // 门槛由设置页「硬性智能过滤 → 最低入队分」配置（config.minQueueScore，默认 60，0 = 不限）；
       // 不再写死 60 分底线——推荐岗位分（minScore）只决定「是否推荐」，入队资格由最低入队分决定。
@@ -3103,6 +3104,7 @@ export default function Workbench() {
                         )}
                       </div>
                     )}
+                    <div style={{ marginTop: 6 }}><Tag>基础简历：{storedResumeForJob(p.job).source.name}</Tag></div>
                     {p.error && <div className="job-error">⚠ {p.error}</div>}
                     <div className="job-actions">
                       {isPending ? (

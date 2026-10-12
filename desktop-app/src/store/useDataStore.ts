@@ -16,6 +16,7 @@ import type {
 import { DEFAULT_STATS, DEFAULT_PROFILE, DEFAULT_PROFILE_DRAFT, DEFAULT_DIRECTION_PLAN, today } from '@/lib/bossclaw/defaults';
 import { cleanCompanyName } from '@/lib/bossclaw/jobDisplay';
 import type { ResumeWritingPreferences } from '@/lib/bossclaw/resumeWriting';
+import type { ResumeVariant } from '@/lib/bossclaw/resumeVariants';
 
 /** 达标岗位本地缓存上限：最多保留最近 N 天（按日期分组）的达标岗位数据，超出自动清理更早几天的数据，防止 localStorage 撑爆。
  *  实测按每天约 460 个达标岗位、叠加图片简历+导入文件后，保留 7 天（≈3200 条）仍能把整 store 稳定在 5MB 配额约 60% 以内；90 天会随累计溢出。 */
@@ -47,6 +48,12 @@ export interface ExperienceMaterial {
 }
 
 interface DataState {
+  resumeVariants: ResumeVariant[];
+  defaultResumeVariantId: string;
+  autoResumeRouting: boolean;
+  upsertResumeVariant: (variant: ResumeVariant) => void;
+  removeResumeVariant: (id: string) => void;
+  setResumeRouting: (patch: { defaultResumeVariantId?: string; autoResumeRouting?: boolean }) => void;
   resumeText: string;
   resumeFileName: string;
   resumeWritingPreferences: ResumeWritingPreferences;
@@ -112,6 +119,20 @@ interface DataState {
 export const useDataStore = create<DataState>()(
   persist(
     (set, get) => ({
+      resumeVariants: [],
+      defaultResumeVariantId: '',
+      autoResumeRouting: true,
+      upsertResumeVariant: (variant) => set(s => ({
+        resumeVariants: s.resumeVariants.some(v => v.id === variant.id)
+          ? s.resumeVariants.map(v => v.id === variant.id ? { ...variant, text: variant.text.slice(0, 160_000) } : v)
+          : [...s.resumeVariants, { ...variant, text: variant.text.slice(0, 160_000) }],
+        defaultResumeVariantId: s.defaultResumeVariantId || variant.id,
+      })),
+      removeResumeVariant: (id) => set(s => ({
+        resumeVariants: s.resumeVariants.filter(v => v.id !== id),
+        defaultResumeVariantId: s.defaultResumeVariantId === id ? s.resumeVariants.find(v => v.id !== id)?.id || '' : s.defaultResumeVariantId,
+      })),
+      setResumeRouting: (patch) => set(patch),
       resumeText: '',
       resumeFileName: '',
       resumeWritingPreferences: {},
@@ -258,6 +279,14 @@ export const useDataStore = create<DataState>()(
       // 如「深圳·南山区·科技园」），修复「数据统计 · 公司 Top」把地名当公司名展示的 bug；
       // v2 起折叠存量重复岗位（归一化 URL / jobId / 弱身份软匹配，保留更完整的一条）。
       version: 2,
+      merge: (persisted, current) => {
+        const saved = persisted && typeof persisted === 'object' ? persisted as Partial<DataState> : {};
+        return { ...current, ...saved,
+          resumeVariants: (Array.isArray(saved.resumeVariants) ? saved.resumeVariants : []).filter(v => v && typeof v.id === 'string' && typeof v.name === 'string' && typeof v.text === 'string'),
+          defaultResumeVariantId: typeof saved.defaultResumeVariantId === 'string' ? saved.defaultResumeVariantId : '',
+          autoResumeRouting: saved.autoResumeRouting !== false,
+        };
+      },
       migrate: (state) => {
         let s = state as DataState;
         if (s && typeof s === 'object' && Array.isArray(s.pending)) {

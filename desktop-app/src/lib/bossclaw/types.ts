@@ -26,6 +26,7 @@ export type InterviewModeFilter = 'any' | 'online' | 'offline';
 
 // 图片简历（对齐 AI-BossJob 的 imageResumes）：本地 base64 图片，首次沟通后自动打包发送
 export interface ImageResume {
+  resumeVariantId?: string;
   id: string;
   /** 文件名（用于展示与智能匹配） */
   name: string;
@@ -345,6 +346,8 @@ export interface MatchDimensionEvidence {
 }
 
 export interface JobAnalysis {
+  resumeVariantId?: string;
+  resumeVariantName?: string;
   score: number;
   /**
    * 岗位适配档位（AI 四层整体裁决 + 技能维错位闸门的产物，见 lib/bossclaw/fitLevel.ts）：
@@ -384,6 +387,8 @@ export interface JobAnalysis {
 }
 
 export interface JobMeta {
+  /** Empty means automatic routing; an ID is a user-selected resume version. */
+  resumeVariantId?: string;
   /** 来源招聘平台（多平台适配）：默认 'boss'，存量数据视为 boss */
   platform?: JobPlatform;
   title?: string;
