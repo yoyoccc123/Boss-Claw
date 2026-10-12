@@ -56,7 +56,7 @@ export const RESUME_TEMPLATES: ResumeTemplateMeta[] = [
 ];
 
 /** 参考版的推荐顺序；用户仍可在导出弹窗调整。 */
-export const FOCUS_MODULE_ORDER = ['selfEval', 'skills', 'internships', 'works', 'projects', 'education', 'honors'];
+export const FOCUS_MODULE_ORDER = ['education', 'honors', 'selfEval', 'skills', 'internships', 'works', 'projects'];
 
 export function isKnownTemplate(id: string): boolean {
   return RESUME_TEMPLATES.some((t) => t.id === id);
@@ -228,7 +228,7 @@ function renderSkillLine(line: string): string {
   return `<p class="resume-line">${htmlEscape(line)}</p>`;
 }
 
-function renderModuleBody(mod: ResumeDocModule): string {
+function renderModuleBody(mod: ResumeDocModule, summaryBullets = false): string {
   if (mod.kind === 'blocks') {
     return (mod.blocks || [])
       .map((b) => {
@@ -243,6 +243,10 @@ function renderModuleBody(mod: ResumeDocModule): string {
   }
   const lines = (mod.lines || []).filter(Boolean);
   if (mod.kind === 'paragraph') {
+    if (summaryBullets && mod.id === 'selfEval') {
+      const points = lines.flatMap(line => line.match(/[^。；;\n]+[。；;]?/g) || []).map(point => point.trim()).filter(Boolean);
+      return `<ul class="bullets summary-points">${points.map(point => `<li>${htmlEscape(point)}</li>`).join('')}</ul>`;
+    }
     return `<div class="para-block">${lines.map((l) => `<p>${htmlEscape(l)}</p>`).join('')}</div>`;
   }
   return lines
@@ -251,10 +255,10 @@ function renderModuleBody(mod: ResumeDocModule): string {
 }
 
 /** 渲染模块列表（顺序由上游 data.modules 决定；空模块已被上游过滤） */
-function renderModules(modules: ResumeDocModule[]): string {
+function renderModules(modules: ResumeDocModule[], summaryBullets = false): string {
   return modules
     .map((mod) => {
-      const body = renderModuleBody(mod);
+      const body = renderModuleBody(mod, summaryBullets);
       if (!body) return '';
       return (
         `<section class="resume-section" data-section="${htmlEscape(mod.id)}">` +
@@ -267,7 +271,7 @@ function renderModules(modules: ResumeDocModule[]): string {
 }
 
 /** 深蓝参考版仅把相邻的简介/技能并排；勾选和用户模块顺序始终生效。 */
-function renderFocus(data: ResumeDocData): string {
+function renderFocus(data: ResumeDocData, summaryBullets = false): string {
   const { contact } = data;
   const details = [
     contact.phone.trim() ? `联系电话：${contact.phone.trim()}` : '',
@@ -286,10 +290,10 @@ function renderFocus(data: ResumeDocData): string {
   for (let i = 0; i < modules.length; i++) {
     const pair = modules.slice(i, i + 2);
     if (pair.length === 2 && pair.some((m) => m.id === 'selfEval') && pair.some((m) => m.id === 'skills')) {
-      parts.push(`<div class="focus-overview">${renderModules(pair)}</div>`);
+      parts.push(`<div class="focus-overview">${renderModules(pair, summaryBullets)}</div>`);
       i++;
     } else {
-      parts.push(renderModules([modules[i]]));
+      parts.push(renderModules([modules[i]], summaryBullets));
     }
   }
   return `<div class="resume">${header}${parts.join('')}</div>`;
@@ -343,6 +347,8 @@ export function buildResumeHtml(data: ResumeDocData, templateId = 'personal'): s
 .tpl-personal .resume-section-body .exp-heading { margin:0; }
 .tpl-personal .resume-section-body .exp-meta { margin:0.4mm 0; }
 .tpl-personal .para-block p { margin:0; }
+.tpl-personal .summary-points { margin:0; }
+.tpl-personal .summary-points li { break-inside:avoid; }
 .tpl-personal .resume-section[data-section="projects"] .exp-block { padding:1mm 2.5mm; margin-bottom:1mm; }
 .tpl-personal ul.bullets li { margin-bottom:0.4mm; }
 .tpl-personal .focus-overview { margin-bottom:2mm; }
@@ -356,7 +362,7 @@ export function buildResumeHtml(data: ResumeDocData, templateId = 'personal'): s
 .tpl-personal .resume-section[data-section="skills"] .resume-line:nth-child(4n) { color:#b46b13; }
 ` : TEMPLATE_CSS[tplId] || '';
   let body: string;
-  if (tplId === 'focus' || tplId === 'personal') body = renderFocus(data);
+  if (tplId === 'focus' || tplId === 'personal') body = renderFocus(data, tplId === 'personal');
   else if (tplId === 'column' || tplId === 'dark') body = renderSplit(data);
   else if (tplId === 'simple') body = renderStandard(data, true);
   else body = renderStandard(data, false);

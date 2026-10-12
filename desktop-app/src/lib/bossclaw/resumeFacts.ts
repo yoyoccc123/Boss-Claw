@@ -1,5 +1,6 @@
 import type { TailorDocLine, TailorResumeDoc } from './jobAssistant';
 import type { ResumeWritingPreferences } from './resumeWriting';
+import { resumeDisplayText } from './resumeWriting';
 
 export const factKey = (text: string) => String(text || '').replace(/\s+/g, '').toLowerCase();
 
@@ -47,7 +48,7 @@ export function unsupportedClaim(text: string, source: string): boolean {
   return claims.some(([claim, proof]) => claim.test(text) && !proof.test(source));
 }
 
-const NATURE = /课程设计|竞赛项目|团队项目|个人技术实践|开源二次开发|开源复现|个人原型|原型实践/;
+const NATURE = /课程设计|竞赛项目|团队项目|个人技术实践|开源二次开发|开源复现|个人原型|原型实践|项目实践/;
 function projectAnchors(facts: string) {
   const lines = facts.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const anchors: Array<{ heading: string; meta: string; text: string }> = [];
@@ -72,7 +73,7 @@ function projectAnchors(facts: string) {
 export function enforceResumeFacts(doc: TailorResumeDoc, facts: string, preferences: ResumeWritingPreferences = {}): { doc: TailorResumeDoc; corrections: string[] } {
   const corrections: string[] = [];
   const anchors = projectAnchors(facts);
-  const preferred = (text: string) => preferences.conciseRagLabel ? text.replace(/RAG\s*场\s*景\s*检索/gi, 'RAG') : text;
+  const preferred = (text: string) => resumeDisplayText(preferences.conciseRagLabel ? text.replace(/RAG\s*场\s*景\s*检索/gi, 'RAG') : text, preferences);
   const excluded = (text: string) => (preferences.omitCourseList && /相关课程|学习过.*(?:深度学习|计算机网络|数据结构)|(?:主修|核心|相关)课程/.test(text))
     || (preferences.omitPatentPreparation && /专利.*(?:评估材料|材料准备)|材料实践.*专利/.test(text));
   const guard = (line: TailorDocLine, module: string): TailorDocLine | null => {
@@ -125,7 +126,7 @@ export function enforceResumeFacts(doc: TailorResumeDoc, facts: string, preferen
   }
   return {
     doc: { ...doc, education: blocks(doc.education, '教育'), internships: blocks(doc.internships, '实习'), works: blocks(doc.works, '工作'),
-      projects: blocks(doc.projects, '项目'), skills, selfEval, honors: doc.honors.filter(line => !excluded(line)).map(preferred) },
+      projects: blocks(doc.projects, '项目').slice(0, preferences.preferTwoProjectsWithExperience && (doc.internships.length || doc.works.length) ? 2 : doc.projects.length), skills, selfEval, honors: doc.honors.filter(line => !excluded(line)).map(preferred) },
     corrections: [...new Set(corrections)],
   };
 }

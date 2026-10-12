@@ -76,6 +76,10 @@ try {
   assert.equal(local.doc.projects[0].bullets[0].text, project, '本地兜底也须保留完整项目要点，不能硬截为标题');
   assert.ok(!JSON.stringify(local.highlightedSkills).includes('RAG 场景检索'), 'AI失败时仍执行已保存偏好');
   assert.equal(local.doc.selfEval.text, summary);
+  const withInternship = enforceResumeFacts(normalizeTailorDoc({ internships: [{ heading: '示例公司', meta: 'Python实习生', bullets: [{ text: project, source: project }] }], projects: Array.from({ length: 3 }, () => ({ heading: '图书借阅平台 | 课程设计', meta: '课程设计', bullets: [{ text: project, source: project }] })), selfEval: { text: summary, source: summary } }), facts, { hideCourseDesignLabel: true, preferTwoProjectsWithExperience: true });
+  assert.equal(withInternship.doc.projects.length, 2);
+  assert.ok(!withInternship.doc.projects[0].heading.includes('课程设计'));
+  assert.equal(withInternship.doc.internships[0].bullets[0].text, project, '精简项目不能删掉公司经历');
   const finalDoc = normalizeTailorDoc({ skills: [{ text: '了解数据库表设计', source: '了解数据库表设计' }, { text: '实践RAG和大模型API', source: skill }], selfEval: { text: summary, source: summary } });
   const points = ['了解数据库表设计', '了解大模型与 Embedding', '一年以上深度学习学习研究'].map(point => ({ point, layer: 'must', verdict: 'covered', evidence: '旧判定' }));
   const result = { doc: finalDoc, jdPoints: points, supplements: [], aiMatch: null };

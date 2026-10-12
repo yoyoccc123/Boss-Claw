@@ -18,7 +18,7 @@ try {
     },
     tsconfig: join(root, 'tsconfig.json'), bundle: true, format: 'cjs', platform: 'node', outfile, logLevel: 'silent',
   });
-  const { normalizeTailorDoc, buildResumeDocData, buildResumeHtml, RESUME_TEMPLATES } = createRequire(import.meta.url)(outfile);
+  const { normalizeTailorDoc, buildResumeDocData, buildResumeHtml, RESUME_TEMPLATES, FOCUS_MODULE_ORDER } = createRequire(import.meta.url)(outfile);
   const line = (text) => ({ text, source: `原文摘录：${text}` });
   const raw = {
     projects: Array.from({ length: 5 }, (_, i) => ({
@@ -66,6 +66,19 @@ try {
   assert.ok(personal.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
   assert.ok(personal.includes('重点项目经历'));
   assert.ok(personal.includes('专业技能'), '个人模板保留专业技能模块标题');
+  assert.ok(personal.includes('class="bullets summary-points"'), '个人简介以要点呈现');
+  assert.ok(!paired.includes('summary-points'), '其他模板仍保留段落样式');
+  assert.deepEqual(FOCUS_MODULE_ORDER, ['education', 'honors', 'selfEval', 'skills', 'internships', 'works', 'projects']);
+  const withWork = { ...doc, internships: [{ heading: '示例互联网技术有限公司', meta: 'Python开发实习生｜2024.03–2024.05', bullets: [{ text: '完成CSV清洗与结果导出', source: '完成CSV清洗与结果导出' }] }], projects: [{ heading: '票据归档工具 | 课程设计', meta: '2026.02｜课程设计｜Python', bullets: [{ text: '参与功能验证', source: '参与功能验证' }] }], honors: ['校级实践赛二等奖'] };
+  const formatted = buildResumeDocData('', null, { doc: withWork }, {}, FOCUS_MODULE_ORDER, { hideCourseDesignLabel: true });
+  const htmlWithWork = buildResumeHtml(formatted);
+  assert.ok(!htmlWithWork.includes('课程设计'), '历史导出也能应用标签隐藏偏好');
+  assert.ok(htmlWithWork.includes('Python开发实习生｜2024.03–2024.05'));
+  assert.ok(htmlWithWork.includes('工作经历'), '实习身份保留在工作经历模块中');
+  const ids = formatted.modules.map(module => module.id);
+  assert.ok(ids.indexOf('honors') === ids.indexOf('education') + 1);
+  assert.ok(ids.indexOf('internships') < ids.indexOf('projects'));
+  assert.equal(withWork.projects[0].heading, '票据归档工具 | 课程设计', '导出显示调整不能改写历史原始正文');
   assert.ok(buildResumeHtml(data, 'unknown').includes('class="tpl-personal"'));
   console.log('PASS resume: 精简上限/来源、技能去重、历史兼容、个人模板与六套可选模板顺序与转义。');
 } finally {

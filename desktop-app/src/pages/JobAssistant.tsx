@@ -52,7 +52,7 @@ const materialBridgeFallback = async (file: File, name: string) => {
 
 // ===== 历史定制记录（本地持久化，最近 200 条） =====
 const HISTORY_KEY = 'bossclaw-tailor-history-v1';
-const PERSONAL_DEFAULT_KEY = 'bossclaw-personal-template-default-v1';
+  const PERSONAL_DEFAULT_KEY = 'bossclaw-personal-template-default-v2';
 const HISTORY_MAX = TAILOR_HISTORY_MAX;
 
 function loadHistory(): TailorHistoryItem[] {
@@ -414,7 +414,7 @@ export default function JobAssistant() {
         const empty: string[] = [];
         exportBatch.forEach((item, index) => {
           if (!batchJobIncluded(item)) return;
-          const data = buildResumeDocData(resumeText, profile, item.result!, { ...values, targetTitle: item.jobTitle }, orderedIds);
+          const data = buildResumeDocData(resumeText, profile, item.result!, { ...values, targetTitle: item.jobTitle }, orderedIds, useDataStore.getState().resumeWritingPreferences);
           if (!data.modules.length) { empty.push(item.jobTitle); return; }
           if (photo) data.photo = photo;
           files.push({ fileName: batchPdfFileName(values.name, item.jobTitle, item.job.company || '', index), html: buildResumeHtml(data, templateId) });
@@ -437,7 +437,7 @@ export default function JobAssistant() {
         else message.warning(`已保存 ${written.length} 份${failed.length ? `，${failed.length} 份失败` : ''}${r.canceled ? '，剩余文件已停止导出' : ''}`);
         return;
       }
-      const data = buildResumeDocData(resumeText, profile, exportTailor, values, orderedIds);
+      const data = buildResumeDocData(resumeText, profile, exportTailor, values, orderedIds, useDataStore.getState().resumeWritingPreferences);
       if (!data.modules.length) {
         message.warning('没有可导出的模块内容，请至少勾选一个有内容的模块');
         return;
