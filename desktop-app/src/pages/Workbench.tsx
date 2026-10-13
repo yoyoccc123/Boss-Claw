@@ -76,7 +76,7 @@ const COMM_PHASE_STAGES: TaskStage[] = ['open_job', 'open_chat', 'verify_chat_ta
 
 const STATUS_TAG: Record<string, { color: string; label: string }> = {
   pending: { color: 'default', label: '待确认' },
-  approved_queue: { color: 'cyan', label: '投递中' },
+  approved_queue: { color: 'blue', label: '待投递' },
   approved: { color: 'blue', label: '待投递' },
   failed: { color: 'red', label: '失败' },
   sent: { color: 'green', label: '已投递' },
@@ -302,7 +302,7 @@ export default function Workbench() {
   const commStuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // BOSS DOM 投递结果等待槽：runNext 打开岗位下发 start-apply 后挂起，等 handleApplyStage 回写终态
   // （verify_result→success / risk / failed / external→skip），避免 fire-and-forget 造成 runNext 反复重入与日志重复。
-  const domWaitRef = useRef<((mode: 'success' | 'risk' | 'failed' | 'skip' | 'timeout' | 'continue_chat', payload: any, tabId?: string) => void) | null>(null);
+  const domWaitRef = useRef<((mode: 'success' | 'risk' | 'failed' | 'skip' | 'timeout' | 'continue_chat' | 'cancelled', payload: any, tabId?: string) => void) | null>(null);
   // 最近一次记录的投递阶段（用于进度日志去重：同一阶段反复回传时只记一条，避免刷屏）
   const lastApplyStageRef = useRef<TaskStage | ''>('');
   // P01：runNext 互斥守卫。只允许一个投递循环在途；执行中再有触发则排队，结束后续跑。
@@ -310,6 +310,24 @@ export default function Workbench() {
   // 造成 activeId/applyStage 相互覆盖、看门狗绑错、waitForSlot 并发等待者超发动作预算的问题。
   const runNextLock = useRef(false);
   const runNextQueued = useRef(false);
+  const deliveryEpochRef = useRef(0);
+  // 已下发的当前请求继续核对结果；尚在等待的任务停止后不得下发或补发。
+  const deliverySubmittedRef = useRef(false);
+  const canContinueDelivery = (epoch: number) => epoch === deliveryEpochRef.current && useAppStore.getState().autoAssist;
+  useEffect(() => useAppStore.subscribe((state, previous) => {
+    if (!previous.autoAssist || state.autoAssist) return;
+    deliveryEpochRef.current++;
+    runNextQueued.current = false;
+    if (!deliverySubmittedRef.current) {
+      domWaitRef.current?.('cancelled', {}, activeTabRef.current || undefined);
+      if (activeTabRef.current) {
+        webviewApi.current?.closeTab(activeTabRef.current);
+        activeTabRef.current = null;
+      }
+      setActiveId(null);
+      setApplyStage(null);
+    }
+  }), []);
 
   // ===== 可视化采集状态（对齐 job-claw-main：逐卡片平滑滚动 + 高亮 + 点击展开详情）=====
   const [visualCollecting, setVisualCollecting] = useState(false);
@@ -476,8 +494,10 @@ export default function Workbench() {
         cfxActiveRef.current = false;
         setCfxCollecting(false);
         setRunning(false);
-        setActiveId(null);
-        setApplyStage(null);
+        if (!deliverySubmittedRef.current) {
+          setActiveId(null);
+          setApplyStage(null);
+        }
         addLog('warn', '已停止投递');
       }
     }
@@ -708,7 +728,7 @@ export default function Workbench() {
 
   const startDelivery = () => { if (!running) setAutoAssist(true); };
 
-  // 批准即入队（approved_queue = 「投递中」）：点「批准」直接进投递队列，不再经过
+  // 批准即入队（approved_queue = 已确认等待处理）：点「批准」直接进投递队列，不再经过
   // 「待投递」中间态、也不必再点一次「一键投递」。招呼语非空校验保持不变（无招呼语仍拒绝批准）。
   // 引擎启动策略：仅当投递引擎已在运行时新岗位自动排队；引擎停着时不擅自启动
   // （避免「随手批准一下」就把投递打开）。首次启动仍由用户点「开始投递」。
@@ -731,7 +751,7 @@ export default function Workbench() {
     if (!finalGreeting) { message.warning('请先填写求职招呼语，再确认沟通'); return; }
     const next = rerankPending(latestPending.map((p) => (p.id === id ? { ...p, job: normalizeJobDetailMetadata(p.job), linkIncomplete: false, error: '', deliveryGreeting: finalGreeting, status: 'approved_queue' as const, approvedAt: p.approvedAt || Date.now() } : p)), useSettingsStore.getState().config);
     setPending(next);
-    addLog('info', '已批准并加入「投递中」队列，将按匹配分与平台优先级投递');
+    addLog('info', '已确认并加入投递队列，将按匹配分与平台优先级投递');
     // 只在引擎已运行时续跑；同时刻可能有多个岗位被批准，runNext 内部有重入锁（runNextLock/runNextQueued）
     if (useAppStore.getState().autoAssist) requestRunNext();
   };
@@ -763,7 +783,7 @@ export default function Workbench() {
       useSettingsStore.getState().config,
     );
     setPending(next);
-    addLog('success', `已批量确认 ${approvedIds.size} 个岗位，进入「投递中」队列`);
+    addLog('success', `已批量确认 ${approvedIds.size} 个岗位，进入投递队列`);
     if (noGreeting.length) {
       message.warning(`${noGreeting.length} 个岗位因缺少招呼语未入队，仍留在「待确认」`);
       addLog('warn', `以下岗位缺少招呼语，未入队：${noGreeting.slice(0, 5).join('、')}${noGreeting.length > 5 ? ` 等 ${noGreeting.length} 个` : ''}`);
@@ -784,7 +804,7 @@ export default function Workbench() {
   const onRetry = (id: string) => {
     const item = pending.find((p) => p.id === id);
     if (item?.riskBlocked) { message.warning('该岗位曾触发平台风控拦截（验证/封禁），禁止重试，请人工核对'); return; }
-    updatePending(id, { status: 'pending', retryCount: (item?.retryCount || 0) + 1, error: '', riskBlocked: false });
+    updatePending(id, { status: 'pending', retryCount: (item?.retryCount || 0) + 1, error: '', riskBlocked: false, deliveryNeedsReview: false, retryable: true });
     addLog('info', '已重置该岗位，可重新分析/投递');
   };
 
@@ -796,6 +816,7 @@ export default function Workbench() {
     // 其它状态（failed/skipped/ignored）不渲染该按钮，此处再兜一层防御性判断。
     const cur = useDataStore.getState().pending.find((p) => p.id === id);
     if (!cur) return;
+    if (id === activeId && deliverySubmittedRef.current) { message.warning('本次投递请求已下发，正在核对结果，无法撤回'); return; }
     if (cur.status === 'sent') { message.warning('已投递的岗位无法撤回'); return; }
     if (cur.status !== 'approved_queue' && cur.status !== 'approved') {
       message.warning('仅「投递中 / 待投递」的岗位可以撤回');
@@ -806,6 +827,8 @@ export default function Workbench() {
     const next = rerankPending(pending.map((p) => (p.id === id ? { ...p, status: 'pending' as const } : p)), useSettingsStore.getState().config);
     setPending(next);
     if (id === activeId) {
+      deliveryEpochRef.current++;
+      domWaitRef.current?.('cancelled', {}, activeTabRef.current || undefined);
       setActiveId(null);
       setApplyStage(null);
       if (activeTabRef.current) {
@@ -833,7 +856,7 @@ export default function Workbench() {
     if (count) setPending(next);
     if (!running) setAutoAssist(true);
     addLog('success', count
-      ? `已将 ${count} 个「待投递」岗位并入「投递中」队列，开始投递`
+      ? `已将 ${count} 个待投递岗位并入投递队列，开始投递`
       : `队列中已有 ${queued} 个岗位，开始投递`);
   };
 
@@ -847,9 +870,9 @@ export default function Workbench() {
   };
 
   const onRetryAllFailed = () => {
-    const retryable = pending.filter((p) => p.status === 'failed' && !p.riskBlocked && !p.linkIncomplete);
-    if (!retryable.length) { message.info(pending.some(p => p.linkIncomplete) ? '缺少详情链接的岗位需重新采集补齐后再确认' : '没有可重试的失败任务'); return; }
-    setPending(pending.map((p) => (p.status === 'failed' && !p.riskBlocked && !p.linkIncomplete ? { ...p, status: 'approved_queue' as const, retryCount: (p.retryCount || 0) + 1, error: '', riskBlocked: false, approvedAt: Date.now() } : p)));
+    const retryable = pending.filter((p) => p.status === 'failed' && !p.riskBlocked && !p.linkIncomplete && !p.deliveryNeedsReview);
+    if (!retryable.length) { message.info(pending.some(p => p.deliveryNeedsReview) ? '结果未确认的岗位需人工核对后单独重试' : pending.some(p => p.linkIncomplete) ? '缺少详情链接的岗位需重新采集补齐后再确认' : '没有可重试的失败任务'); return; }
+    setPending(pending.map((p) => (p.status === 'failed' && !p.riskBlocked && !p.linkIncomplete && !p.deliveryNeedsReview ? { ...p, status: 'approved_queue' as const, retryCount: (p.retryCount || 0) + 1, error: '', riskBlocked: false, approvedAt: Date.now() } : p)));
     addLog('info', `已重新投递 ${retryable.length} 个失败任务`);
     recomputeStats();
     startDelivery();
@@ -860,8 +883,10 @@ export default function Workbench() {
     setVisualCollecting(false);
     setVisualPaused(false);
     setAutoAssist(false);
-    setActiveId(null);
-    setApplyStage(null);
+    if (!deliverySubmittedRef.current) {
+      setActiveId(null);
+      setApplyStage(null);
+    }
     addLog('warn', reason);
   };
 
@@ -913,7 +938,16 @@ export default function Workbench() {
    * ⚠️ 安全语义不变：等的仍是两次投递动作之间的间隔，`lastDeliveryAt` 仍在**即将执行投递动作时**刷新，
    * 因此点击/发送的时序与串行版本一致。**禁止**把它改成「不等」或缩短间隔。
    */
-  const awaitDeliveryGap = async (): Promise<void> => {
+  const awaitDeliveryGap = async (epoch: number): Promise<boolean> => {
+    const waitWhileRunning = async (ms: number) => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        if (!canContinueDelivery(epoch)) return false;
+        await sleep(Math.min(250, until - Date.now()));
+      }
+      return canContinueDelivery(epoch);
+    };
+    if (!canContinueDelivery(epoch)) return false;
     const cfg = useSettingsStore.getState().config;
     // ===== 批次休息（真人不会连续上百次投递而不中断）=====
     // 与「岗位间隔」是两个量级：岗位间隔是秒级抖动，批次休息是分钟级中断，后者才是打断
@@ -923,11 +957,12 @@ export default function Workbench() {
     if (restMs > 0) {
       const restMin = Math.round(restMs / 60000);
       addLog('info', `已连续投递 ${sinceRest} 个岗位，按防封号策略休息约 ${restMin} 分钟（模拟真人作业中断，降低风控风险）`);
-      await sleep(restMs);
+      if (!await waitWhileRunning(restMs)) return false;
       resetDeliveredSinceRest();
       addLog('info', '批次休息结束，继续投递');
     }
     await sharedPacer(cfg.maxActionsPerMinute).waitForSlot();
+    if (!canContinueDelivery(epoch)) return false;
     const baseSec = Math.max(Number(cfg.betweenJobsSeconds) || SAFETY_LIMITS.MIN_BETWEEN_JOBS_MS / 1000, SAFETY_LIMITS.MIN_BETWEEN_JOBS_MS / 1000);
     const gapMs = humanDelayMs(baseSec * 1000, 0.35);
     const elapsed = Date.now() - lastDeliveryAt.current;
@@ -937,10 +972,11 @@ export default function Workbench() {
       // 用户容易以为卡死而手动重复点投递 —— 那才是真正会触发风控的高频操作。
       const waitSec = Math.ceil(wait / 1000);
       addLog('info', `为降低风控风险，本岗位将等待 ${waitSec} 秒后投递（岗位间隔约 ${Math.round(gapMs / 1000)}s，距上次投递已过 ${Math.round(elapsed / 1000)}s）。页面已在后台加载完成，期间请勿手动重复投递`);
-      await sleep(wait);
+      if (!await waitWhileRunning(wait)) return false;
       addLog('info', `等待结束（${waitSec}s），继续投递本岗位`);
     }
     lastDeliveryAt.current = Date.now();
+    return canContinueDelivery(epoch);
   };
 
   // ===== 岗位入库（去重 -> 活跃度/猎头/城市过滤 -> AI 分析 -> 入队）=====
@@ -1939,6 +1975,7 @@ export default function Workbench() {
 
   /** 通道 A：非 BOSS 平台 DOM 投递（猎聘/智联/51Job；新建对应平台标签页） */
   const deliverNonBoss = async (candidate: PendingItem, url: string): Promise<void> => {
+    const epoch = deliveryEpochRef.current;
     const pf = String(candidate.job?.platform || 'boss') as JobPlatform;
     const liveCandidate = useDataStore.getState().pending.find((p) => p.id === candidate.id);
     const greeting = String(liveCandidate?.deliveryGreeting || liveCandidate?.analysis?.greeting || candidate.deliveryGreeting || candidate.analysis?.greeting || '').trim();
@@ -1965,14 +2002,18 @@ export default function Workbench() {
     try {
       // 非 BOSS 路径的 platformApply 内部自行「打开标签页 + 下发投递」，无法把加载与节流拆开并行，
       // 因此与串行版本保持一致：先等满岗位间隔再执行（安全语义优先于观感）。
-      await awaitDeliveryGap();
-      r = await webviewApi.current?.platformApply(url, pf, candidate.job, greeting);
+      if (!await awaitDeliveryGap(epoch) || !canContinueDelivery(epoch)) return;
+      r = await webviewApi.current?.platformApply(url, pf, candidate.job, greeting, {
+        canStart: () => canContinueDelivery(epoch),
+        onStart: () => { deliverySubmittedRef.current = true; },
+      });
     } catch (e) {
       r = { ok: false, stage: 'failed', error: String((e as Error)?.message || e) };
     } finally {
       releaseDelivery(candidate.id, pf); // 锁绝不泄漏
     }
     const res = r || {};
+    if (res.stage === 'cancelled') return;
     const nTitle = candidate.job?.title || '岗位';
     if (res.ok && res.stage === 'success') {
       handleDelivered(candidate.id, res.tabId);
@@ -2026,7 +2067,7 @@ export default function Workbench() {
       return;
     }
     const errMsg = res.error || res.message || '投递失败';
-    updatePending(candidate.id, { status: 'failed', error: errMsg });
+    updatePending(candidate.id, { status: 'failed', error: errMsg, ...(res.needsReview ? { deliveryNeedsReview: true, retryable: false } : {}) });
     addLog('error', `投递失败：${nTitle}（${errMsg}）`);
     if (res.needsReview) {
       setApplyStage(null); recomputeStats();
@@ -2045,6 +2086,7 @@ export default function Workbench() {
 
   /** 通道 B：Camoufox 隐身投递（可选，设置「优先走隐身通道」时；仅 BOSS） */
   const deliverCamoufox = async (candidate: PendingItem): Promise<void> => {
+    const epoch = deliveryEpochRef.current;
     const pf = String(candidate.job?.platform || 'boss') as JobPlatform;
     const cfx0 = useSettingsStore.getState().config.camoufox || { enabled: false, os: 'windows', pages: 1, prefer: false };
     if (!(cfx0.enabled && cfx0.prefer)) return;
@@ -2057,6 +2099,7 @@ export default function Workbench() {
       setApplyStage('open_job');
       addLog('info', `通过 Camoufox 隐身通道投递：${candidate.job?.title || '岗位'}`);
       const st = await camoufoxStatus();
+      if (!canContinueDelivery(epoch)) return;
       if (!st.ready) { pauseAssist('Camoufox 引擎未就绪：' + (st.message || '请到设置页检测')); return; }
       setApplyStage('send_message');
       // 共享占位锁：若该岗位正被后台「自动沟通」投递，则工作台跳过（交给认领方）
@@ -2071,7 +2114,8 @@ export default function Workbench() {
       try {
         // Camoufox 路径没有可并行的页面加载（发送在独立进程内完成），
         // 因此与串行版本一致：先等满岗位间隔再发送。
-        await awaitDeliveryGap();
+        if (!await awaitDeliveryGap(epoch) || !canContinueDelivery(epoch)) return;
+        deliverySubmittedRef.current = true;
         cfxResult = await camoufoxSend(jobId, greeting, cfx0.os);
       } finally {
         releaseDelivery(candidate.id, pf);
@@ -2120,6 +2164,7 @@ export default function Workbench() {
 
   /** 通道 C：BOSS 内置浏览器真实 DOM 沟通投递（对齐 job-claw-main） */
   const deliverBossDom = async (candidate: PendingItem, url: string): Promise<void> => {
+    const epoch = deliveryEpochRef.current;
     const pf = String(candidate.job?.platform || 'boss') as JobPlatform;
     // 不先调 /friend/add.json 官方接口——该接口常因缺少必要参数返回 code 1；DOM 沟通投递自带
     // 文字气泡确认 / 外部网申跳过 / 风控即停，安全性与人工操作口径都更贴合。
@@ -2161,7 +2206,7 @@ export default function Workbench() {
     // 单线性等待 DOM 投递终态：runNext 在此挂起，终态由 handleApplyStage 回写 domWaitRef，
     // 避免 fire-and-forget 造成 runNext 反复重入、打开多个标签页并重复刷日志。
     const domTitle = candidate.job?.title || '岗位';
-    let domResult: { mode: 'success' | 'risk' | 'failed' | 'skip' | 'timeout' | 'continue_chat'; payload: any; tabId?: string } = { mode: 'failed', payload: { error: 'DOM 沟通投递未返回终态' } };
+    let domResult: { mode: 'success' | 'risk' | 'failed' | 'skip' | 'timeout' | 'continue_chat' | 'cancelled'; payload: any; tabId?: string } = { mode: 'failed', payload: { error: 'DOM 沟通投递未返回终态' } };
     try {
       domResult = await new Promise<typeof domResult>((resolve) => {
         let timerRef: ReturnType<typeof setTimeout> | null = null;
@@ -2178,7 +2223,11 @@ export default function Workbench() {
         domWaitRef.current = settle;
         // 页面加载（waitDomReady）与投递节奏（awaitDeliveryGap）并行，随后才下发 start-apply（domApply）。
         const payload = { job: candidate.job, greeting: finalGreeting };
-        const sendOnce = () => webviewApi.current?.sendInTab?.(domTab, 'start-apply', payload);
+        const sendOnce = () => {
+          if (settled || !canContinueDelivery(epoch)) return;
+          deliverySubmittedRef.current = true;
+          webviewApi.current?.sendInTab?.(domTab, 'start-apply', payload);
+        };
         const isChatUrl = (u: string) => /app\.zhipin\.com/i.test(u) || /(\/web\/geek\/chat|\/chat(?:\/|\?|$))/i.test(u);
         void (async () => {
           // 页面就绪探测：与「岗位间隔节流」并行执行（见下方 Promise.all）。
@@ -2189,6 +2238,7 @@ export default function Workbench() {
             const domDeadline = Date.now() + 25000;
             let lastProbeAt = 0;
             while (Date.now() < domDeadline) {
+              if (settled || !canContinueDelivery(epoch)) return;
               // 快速路径（原逻辑）：preload 就绪且不再 loading 直接视为可用
               if (webviewApi.current?.isPreloadReady?.(domTab) && !webviewApi.current?.isLoading?.(domTab)) return;
               // 兜底路径：preload 就绪标记 / loading 标志被卡住时，用 pageStatus 探针实测页面可用性。
@@ -2207,7 +2257,8 @@ export default function Workbench() {
           // 并行：页面加载（通常 <1s） + 岗位间隔节流（13~27s）。
           // 串行版本是「先等节流 → 再开页面」，用户要盯着空转的十几秒；并行后页面几乎立刻打开，
           // 而 start-apply（点击立即沟通）仍要等节流结束才下发 —— 投递动作的时序完全不变。
-          await Promise.all([awaitDeliveryGap(), waitDomReady()]);
+          const [allowed] = await Promise.all([awaitDeliveryGap(epoch), waitDomReady()]);
+          if (!allowed || !canContinueDelivery(epoch)) { settle('cancelled', {}); return; }
           if (!webviewApi.current) return;
           sendOnce();
           // 「继续沟通/立即沟通」的沟通入口常整页跳转到聊天页（app.zhipin.com / /web/geek/chat），导航会使 preload 重注入、
@@ -2216,12 +2267,13 @@ export default function Workbench() {
           // 检测窗口放宽到与投递看门狗一致（最长约 3 分钟），覆盖聊天窗口渲染慢的情形。
           const detectDeadline = Date.now() + Math.max(60000, (stuckSec - 10) * 1000);
           let reSent = false;
-          while (Date.now() < detectDeadline && !reSent) {
+          while (Date.now() < detectDeadline && !reSent && !settled && canContinueDelivery(epoch)) {
             let u = '';
             try { u = String((await webviewApi.current?.pageStatus?.(domTab))?.url || ''); } catch { u = ''; }
             if (isChatUrl(u)) {
               const d2 = Date.now() + 6000;
               while (Date.now() < d2) {
+                if (settled || !canContinueDelivery(epoch)) return;
                 if (webviewApi.current?.isPreloadReady?.(domTab) && !webviewApi.current?.isLoading?.(domTab)) break;
                 await sleep(300);
               }
@@ -2238,6 +2290,7 @@ export default function Workbench() {
       releaseDelivery(candidate.id, pf);
     }
 
+    if (domResult.mode === 'cancelled') return;
     if (domResult.mode === 'success') {
       handleDelivered(candidate.id, domResult.tabId);
       return;
@@ -2269,6 +2322,13 @@ export default function Workbench() {
       if (useAppStore.getState().autoAssist) requestRunNext();
       return;
     }
+    if (domResult.mode === 'timeout' && deliverySubmittedRef.current) {
+      const error = '投递请求已下发，但结果未确认；请核对平台聊天或投递记录后再重试';
+      updatePending(candidate.id, { status: 'failed', error, deliveryNeedsReview: true, retryable: false });
+      setApplyStage(null); recomputeStats();
+      pauseAssist(error);
+      return;
+    }
     // failed / timeout
     const errMsg = String(domResult.payload?.error || 'DOM 沟通投递失败');
     updatePending(candidate.id, { status: 'failed', error: errMsg, retryable: true });
@@ -2285,6 +2345,7 @@ export default function Workbench() {
   };
 
   const runNext = async () => {
+    if (!useAppStore.getState().autoAssist) return;
     // 多平台适配：投递覆盖全部平台——BOSS 走 webview 官方接口；猎聘/智联/51Job
     // 分别新建对应平台标签页做 DOM 投递（见下方平台分派分支）。
     // 投递顺序完全由 rerankPending 决定（状态组 → 平台优先级 → priorityScore → AI 分 → 入队时间），
@@ -2306,6 +2367,7 @@ export default function Workbench() {
       return;
     }
     setActiveId(candidate.id);
+    deliverySubmittedRef.current = false;
     lastApplyStageRef.current = '';
     setApplyStage('queued');
     addLog('info', `按匹配优先级投递：${candidate.job?.title || '岗位'}（AI ${candidate.analysis?.score || 0} 分）`);
@@ -2332,9 +2394,15 @@ export default function Workbench() {
     const sendCfg = useSettingsStore.getState().config;
     const cfx0 = sendCfg.camoufox || { enabled: false, os: 'windows', pages: 1, prefer: false };
     const pf = String(candidate.job?.platform || 'boss') as JobPlatform;
-    if (pf && pf !== 'boss') { await deliverNonBoss(candidate, url); return; }
-    if (cfx0.enabled && cfx0.prefer) { await deliverCamoufox(candidate); return; }
-    await deliverBossDom(candidate, url);
+    try {
+      if (pf && pf !== 'boss') { await deliverNonBoss(candidate, url); return; }
+      if (cfx0.enabled && cfx0.prefer) { await deliverCamoufox(candidate); return; }
+      await deliverBossDom(candidate, url);
+    } finally {
+      deliverySubmittedRef.current = false;
+      setActiveId(null);
+      setApplyStage(null);
+    }
   };
 
   useEffect(() => { runNextRef.current = runNext; });
@@ -2485,6 +2553,7 @@ export default function Workbench() {
       if (COMM_PHASE_STAGES.includes(applyStage)) action = `正在自动沟通：${label}`;
       else action = `正在投递：${label}`;
     } else if (running) action = '投递引擎运行中';
+    else if (activeItem && applyStage) action = '投递已停止，正在核对本次结果';
     else action = null;
 
     const store = useAppStore.getState();
@@ -2499,7 +2568,7 @@ export default function Workbench() {
       if (p.status === 'approved_queue') {
         const stage: TaskStage = p.id === activeId && applyStage ? applyStage : 'queued';
         const meta = taskStageMetaFor(pf, stage);
-        list.push({ p, stage, label: meta.label, progress: meta.progress });
+        list.push({ p, stage, label: p.id === activeId && applyStage ? (autoAssist ? meta.label : '正在核对本次结果') : (autoAssist ? '排队中' : '待投递'), progress: meta.progress });
       } else if (p.status === 'pending') {
         const meta = taskStageMetaFor(pf, 'waiting_review');
         list.push({ p, stage: 'waiting_review', label: meta.label, progress: meta.progress });
@@ -2520,7 +2589,7 @@ export default function Workbench() {
     };
     list.sort((a, b) => rank(a) - rank(b) || Number(b.p.approvedAt || b.p.createdAt || 0) - Number(a.p.approvedAt || a.p.createdAt || 0));
     return list;
-  }, [pending, activeId, applyStage]);
+  }, [pending, activeId, applyStage, autoAssist]);
 
   const deliveryQueuedCount = deliveryTasks.filter((t) => t.p.status === 'approved_queue' && t.p.id !== activeId).length;
   const deliveryPendingCount = deliveryTasks.filter((t) => t.p.status === 'pending').length;
@@ -2542,8 +2611,8 @@ export default function Workbench() {
   //   搜索中 = 正在采集；待确认 = 待人工确认岗位；待投递 = 已确认等待投递；投递中 = 投递流程进行中；已完成 = 投递成功；失败 = 投递失败
   const statSearching = collecting ? 1 : 0;
   const statToConfirm = deliveryPendingCount;
-  const statToDeliver = deliveryApprovedCount;
-  const statDelivering = deliveryQueuedCount + (activeItem && applyStage ? 1 : 0);
+  const statToDeliver = deliveryApprovedCount + deliveryQueuedCount;
+  const statDelivering = activeItem && applyStage ? 1 : 0;
   const statDone = deliverySentCount;
   const statFailed = deliveryFailedCount;
 
@@ -2613,7 +2682,7 @@ export default function Workbench() {
     { key: 'all', label: `全部 ${visibleAllCount}` },
     { key: 'pending', label: `待确认 ${eligibleRanked.filter((p) => p.status === 'pending').length}` },
     { key: 'approved', label: `待投递 ${eligibleRanked.filter((p) => p.status === 'approved').length}` },
-    { key: 'approved_queue', label: `投递中 ${eligibleRanked.filter((p) => p.status === 'approved_queue').length}` },
+    { key: 'approved_queue', label: `投递队列 ${eligibleRanked.filter((p) => p.status === 'approved_queue').length}` },
     { key: 'sent', label: `已投递 ${eligibleRanked.filter((p) => p.status === 'sent').length}` },
     { key: 'failed', label: `失败 ${eligibleRanked.filter((p) => p.status === 'failed').length}` },
   ];
@@ -2782,7 +2851,7 @@ export default function Workbench() {
             </div>
             <div className={'wb-stat' + (statDelivering ? ' is-on' : '')}>
               <span className="wb-stat-num">{statDelivering}</span>
-              <span className="wb-stat-label">投递中</span>
+              <span className="wb-stat-label">{autoAssist ? '投递中' : '结果核对中'}</span>
             </div>
             <div className={'wb-stat' + (statDone ? ' is-on' : '')}>
               <span className="wb-stat-num">{statDone}</span>
@@ -2821,7 +2890,7 @@ export default function Workbench() {
             <Text type="secondary" style={{ fontSize: 12, flex: 1 }}>
               {deliveryTasks.length > 0
                 ? [
-                    statDelivering && `投递中 ${statDelivering} 个`,
+                    statDelivering && `${autoAssist ? '投递中' : '结果核对中'} ${statDelivering} 个`,
                     statToConfirm && `待确认 ${statToConfirm} 个`,
                     statToDeliver && `待投递 ${statToDeliver} 个`,
                     statDone && `已完成 ${statDone} 个`,
@@ -2922,12 +2991,12 @@ export default function Workbench() {
                       {formatMetaLine(activeItem.job?.company, activeItem.job?.location, activeItem.job?.salary) || '岗位信息处理中'}
                     </div>
                   </div>
-                  <Tag color="processing" style={{ margin: 0, flex: '0 0 auto' }}>{currentPhase ? currentPhase.label : '投递中'}</Tag>
+                  <Tag color="processing" style={{ margin: 0, flex: '0 0 auto' }}>{autoAssist ? (currentPhase ? currentPhase.label : '投递中') : '结果核对中'}</Tag>
                 </div>
                 <Progress percent={currentPhase ? currentPhase.progress : 0} size="small" strokeColor={{ from: MATCH_SCORE_COLOR, to: '#078A83' }} status="active" />
                 <div className="delivery-task-meta">
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {currentPhase ? currentPhase.label : '准备中'} · {currentPhase ? currentPhase.progress : 0}%
+                    {autoAssist ? (currentPhase ? currentPhase.label : '准备中') : '已停止后续投递，正在核对本次结果'} · {currentPhase ? currentPhase.progress : 0}%
                     {activeItem.retryCount ? ` · 已重试 ${activeItem.retryCount} 次` : ''}
                   </Text>
                 </div>
@@ -2935,7 +3004,7 @@ export default function Workbench() {
                 <div className="delivery-task-actions delivery-task-actions--single">
                   <Button size="small" icon={<EyeOutlined />} onClick={() => activeItem.job?.url && webviewApi.current?.openInNewTab(activeItem.job.url, activeItem.job?.title)}>打开岗位</Button>
                   <span className="action-spacer" />
-                  <Button size="small" danger icon={<StopOutlined />} onClick={() => pauseAssist('用户手动暂停当前投递')}>暂停投递</Button>
+                  <Button size="small" danger icon={<StopOutlined />} disabled={!autoAssist} onClick={() => pauseAssist('用户手动停止后续投递；已开始的请求将核对最终结果')}>停止投递</Button>
                 </div>
               </div>
             </div>
@@ -3024,7 +3093,7 @@ export default function Workbench() {
         <div className="wb-sort-hint">
           <InfoCircleOutlined className="wb-sort-hint__icon" />
           <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.4 }}>
-            待确认岗位按 AI 匹配分从高到低排列；点「确认」即加入「投递中」队列，确认前可先修改求职招呼语（招呼语为空则无法确认）。
+            点「确认」加入投递队列，按 AI 匹配分从高到低处理；停止后保留未投递岗位，再次开始可继续。确认前可修改招呼语（为空则无法确认）。
           </Text>
         </div>
         <div className="wb-jobs">
@@ -3036,7 +3105,10 @@ export default function Workbench() {
             <>
               {(jobsExpanded ? ranked : ranked.slice(0, 5)).map((p: PendingItem) => {
                 const chip = scoreChip(p.analysis?.score);
-                const st = STATUS_TAG[p.status] || { color: 'default', label: p.status };
+                const st = p.status === 'approved_queue'
+                  ? { color: p.id === activeId && applyStage ? 'cyan' : (autoAssist ? 'cyan' : 'blue'), label: p.id === activeId && applyStage ? (autoAssist ? '投递中' : '结果核对中') : (autoAssist ? '排队中' : '待投递') }
+                  : p.deliveryNeedsReview ? { color: 'orange', label: '待核对' }
+                  : STATUS_TAG[p.status] || { color: 'default', label: p.status };
                 const isPending = p.status === 'pending';
                 const isExpanded = expandedIds.has(p.id);
                 // 元信息行只展示真实解析到的「公司 · 地点 · 薪资」；缺字段时整行不渲染，绝不显示占位/裸链接占位，
@@ -3169,7 +3241,7 @@ export default function Workbench() {
                               // 失败等非终态：允许重新投递（回到投递队列）。
                               // 不再叫「批准」——该岗位已确认过，此时只是重跑投递，叫「重试」才不会
                               // 与待确认卡的「确认沟通」混淆（用户反馈：已确认的岗位还显示「批准」很怪）。
-                              <Button size="small" type="primary" icon={<ReloadOutlined />} onClick={() => onRetry(p.id)}>重试</Button>
+                              <Button size="small" type="primary" icon={<ReloadOutlined />} onClick={() => onRetry(p.id)}>{p.deliveryNeedsReview ? '核对后重试' : '重试'}</Button>
                             )}
                           </div>
                           <div className="job-actions-right">
