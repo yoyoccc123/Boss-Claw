@@ -30,7 +30,7 @@ function sessionIdFromUrl(href) {
   try { const u = new URL(href); return u.protocol === 'https:' && u.hostname === 'i.zhaopin.com' && /^\/im\/?$/.test(u.pathname)
     ? u.searchParams.get('sessionId') || u.searchParams.get('sessionid') || '' : ''; } catch { return ''; }
 }
-function readZhaopinChat(doc, href, job = {}, expectedSessionId = '') {
+function readZhaopinChat(doc, href, job = {}, expectedSessionId = '', nativeBinding = null) {
   const sessionId = sessionIdFromUrl(href), fail = reason => ({ ready: false, sessionId, reason });
   if (!sessionId || (expectedSessionId && sessionId !== expectedSessionId)) return fail('聊天会话链接未确认或已变化');
   const history = readZhaopinHistory(doc); if (!history.ready) return fail(history.reason);
@@ -43,10 +43,12 @@ function readZhaopinChat(doc, href, job = {}, expectedSessionId = '') {
   const expectedJob = jobNumberFromUrl(job.url) || String(job.jobId || '').replace(/\.html?$/i, '').toUpperCase();
   const actualJob = details.length === 1 ? jobNumberFromUrl(details[0].href) : '';
   if (details.length !== 1 || !expectedJob || !actualJob) return fail('聊天页“查看详情”的岗位编号尚未确认');
-  if (actualJob !== expectedJob) return fail(`聊天岗位编号与目标不一致（目标：${expectedJob}；当前：${actualJob}）`);
+  const nativeMatched = nativeBinding?.ok === true && nativeBinding.source === 'native-continue'
+    && nativeBinding.jobNumber === expectedJob && nativeBinding.sessionId === sessionId && nativeBinding.expiresAt > Date.now();
+  if (actualJob !== expectedJob && !nativeMatched) return fail(`聊天岗位编号与目标不一致（目标：${expectedJob}；当前：${actualJob}）`);
   if (details[0]?.classList.contains('is-offline')) return fail('聊天中的岗位已下线');
-  // The official detail number identifies the job. Company/title display metadata may differ.
-  // Never search by company name or fall back to names when the detail number is missing.
+  // A verified native Continue binds the requested job to the platform's actual session.
+  // Without that provenance, keep the exact detail-number fallback; never search by names.
   if (!normalize(name) || !titleKey(title)) return fail('聊天招聘方或岗位信息尚未就绪');
   if (titleKey(text(entry.querySelector('.im-session-item__job'))) !== titleKey(title)
     || normalize(text(entry.querySelector('.im-session-item__name'))) !== normalize(name)) return fail('选中会话与聊天标题不一致');
@@ -55,7 +57,7 @@ function readZhaopinChat(doc, href, job = {}, expectedSessionId = '') {
   if (panels.length !== 1 || editors.length !== 1 || editors[0].disabled) return fail('聊天输入框尚未就绪');
   const panel = panels[0], editor = editors[0];
   if (!panel.contains(editor) || nodes(panel, '.im-main-panel__timeline').length !== 1) return fail('聊天消息区尚未就绪');
-  return { ready: true, sessionId, header, panel, editor, signature: [sessionId, actualJob, name, titleKey(title)].map(normalize).join('|') };
+  return { ready: true, sessionId, header, panel, editor, signature: [sessionId, expectedJob, name, nativeMatched ? 'native-continue' : actualJob + '|' + titleKey(title)].map(normalize).join('|') };
 }
 function readZhaopinChatReady(doc, href) {
   const headers = nodes(doc, '.im-chat-header');
@@ -73,6 +75,8 @@ function readZhaopinDeliveryState(target, greeting = '', defaultGreeting = '') {
     defaultGreeting, '您好，我对这个职位很感兴趣，想进一步了解一下。',
     '您好，我对该职位很感兴趣，请您看下我的简历，如果合适可以随时联系我，谢谢。',
   ].filter(Boolean).map(normalize));
+  // Captured on the actual PC conversation: a platform delivery receipt rendered as an HR bubble.
+  const platformReceipts = new Set(['感谢您的投递，HR正在仔细查看简历', '感谢您的投递，HR正在仔细查看简历~'].map(normalize));
   const rows = nodes(target.panel.querySelector('.im-main-panel__timeline'), '.im-message__bubble');
   const outgoing = [], incoming = [], matching = [], nonDefaultOutgoing = [];
   for (const bubble of rows) {
@@ -88,7 +92,7 @@ function readZhaopinDeliveryState(target, greeting = '', defaultGreeting = '') {
       const receipt = normalize(text(row?.querySelector('.im-message__receipt')));
       if (wanted && body === wanted && !unconfirmed && /^(送达|已读)$/.test(receipt)) matching.push(bubble);
       else if (!defaults.has(body)) nonDefaultOutgoing.push(bubble);
-    } else incoming.push(bubble);
+    } else if (!platformReceipts.has(body)) incoming.push(bubble);
   }
   const buttons = nodes(target.panel, 'button.im-sender__send-btn').filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && normalize(text(el)) === '发送');
   return { outgoing, incoming, matching, nonDefaultOutgoing, editorText: String(target.editor.value || '').trim(), sendButton: buttons.length === 1 ? buttons[0] : null };
