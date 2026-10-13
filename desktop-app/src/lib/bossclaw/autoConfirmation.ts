@@ -5,6 +5,7 @@ import { platformEnabled } from './platforms';
 import { isQualifiedPending } from './collectionGoal';
 
 export function autoConfirmationReason(item: PendingItem, config: AppConfig): string {
+  if (item.manualConfirmationRequired) return '已手动撤回，等待再次确认';
   if (!isQualifiedPending(item)) return '岗位分析未通过，需要复核';
   if (item.analysis!.score < resolveQueueMinScore(config)) return '低于当前最低入队分';
   if (!platformEnabled(config, item.job.platform || 'boss')) return '来源平台未启用';

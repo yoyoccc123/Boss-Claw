@@ -1512,13 +1512,8 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                 />
               </div>
               <div className="sg-item">
-                <span className="field-label">断点续采起始序号</span>
-                <InputNumber
-                  min={0}
-                  value={config.collectResumeIndex || 0}
-                  onChange={(v) => setConfig({ collectResumeIndex: Math.max(0, v ?? 0) })}
-                  style={{ width: '100%' }}
-                />
+                <span className="field-label">断点续采</span>
+                <Text type="secondary">在工作台点击「搜索采集」，选择继续上次或从头采集；各平台分别保存进度。</Text>
               </div>
             </div>
             <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 13 }}>

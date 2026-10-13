@@ -158,6 +158,7 @@ interface Props {
   onLoginState?: (data: any) => void;
   onCollectProgress?: (data: any) => void;
   onCollectDone?: (data: any) => void;
+  onCollectInterrupted?: (data: { tabId: string; reason: string }) => void;
   onDomDump?: (data: any) => void;
   apiRef?: React.MutableRefObject<WebviewApi | null>;
   /**
@@ -197,7 +198,7 @@ export default function BrowserView(props: Props) {
   return <BrowserViewImpl {...props} />;
 }
 
-function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJobExtracted, onApplyStage, onLoginState, onCollectProgress, onCollectDone, onDomDump, apiRef, overlaySuppressed = false }: Props) {
+function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJobExtracted, onApplyStage, onLoginState, onCollectProgress, onCollectDone, onCollectInterrupted, onDomDump, apiRef, overlaySuppressed = false }: Props) {
   const homeMeta = PLATFORM_META[defaultPlatform] || PLATFORM_META.boss;
   const [tabs, setTabs] = useState<TabState[]>(() => {
     const tab = makeTab(homeMeta.homeUrl, homeMeta.label, 'main');
@@ -304,10 +305,10 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
 
   // ===== 事件回调全部用 ref，避免闭包捕获旧值 =====
   const callbacksRef = useRef({
-    onNavigate, onJobExtracted, onApplyStage, onLoginState, onCollectProgress, onCollectDone, onDomDump,
+    onNavigate, onJobExtracted, onApplyStage, onLoginState, onCollectProgress, onCollectDone, onCollectInterrupted, onDomDump,
   });
   useEffect(() => {
-    callbacksRef.current = { onNavigate, onJobExtracted, onApplyStage, onLoginState, onCollectProgress, onCollectDone, onDomDump };
+    callbacksRef.current = { onNavigate, onJobExtracted, onApplyStage, onLoginState, onCollectProgress, onCollectDone, onCollectInterrupted, onDomDump };
   });
 
   // ===== onNavigate 变化去重：webview 高频回传 nav（URL/标题未变的导航事件、SPA 内重复上报）=====
@@ -566,6 +567,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     el.addEventListener('did-start-navigation', ((event: any, _url?: string, _isInPlace?: boolean, legacyIsMainFrame?: boolean) => {
       const isMainFrame = typeof event?.isMainFrame === 'boolean' ? event.isMainFrame : legacyIsMainFrame !== false;
       if (!isMainFrame) return;
+      if (!event?.isInPlace && !_isInPlace) callbacksRef.current.onCollectInterrupted?.({ tabId, reason: '采集网页发生刷新或整页跳转' });
       preloadReady.current[tabId] = false;
       loadSeqRef.current[tabId] = (loadSeqRef.current[tabId] || 0) + 1; // 导航代际 +1，令旧定时器失效
       ctl().markLoading(tabId, true);
@@ -591,9 +593,14 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       forceResizeWebview(tabId);
       ctl().markLoading(tabId, false);
     });
-    el.addEventListener('did-fail-load', () => {
+    el.addEventListener('did-fail-load', ((event: any) => {
       forceResizeWebview(tabId);
       ctl().markLoading(tabId, false);
+      if (event?.isMainFrame !== false && event?.errorCode !== -3) callbacksRef.current.onCollectInterrupted?.({ tabId, reason: '采集网页加载失败' });
+    }) as any);
+    el.addEventListener('render-process-gone', () => {
+      ctl().markLoading(tabId, false);
+      callbacksRef.current.onCollectInterrupted?.({ tabId, reason: '采集网页进程退出' });
     });
     el.addEventListener('did-frame-finish-load', () => forceResizeWebview(tabId));
     // 初始挂载兜底：首个 src 的首次导航若不触发 did-start-navigation，

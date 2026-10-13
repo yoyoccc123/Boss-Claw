@@ -20,6 +20,8 @@ import type { ResumeWritingPreferences } from '@/lib/bossclaw/resumeWriting';
 import type { ResumeVariant } from '@/lib/bossclaw/resumeVariants';
 import { normalizeJobDetailMetadata, repairZhaopinPending, ZHAOPIN_LINK_ERROR } from '@/lib/bossclaw/jobDetailLink';
 import { collectionGoal, collectionCountFor, collectionDay, collectionIdentity, isQualifiedPending, seedCollectionCounts, type DailyCollectionCounts } from '@/lib/bossclaw/collectionGoal';
+import type { CollectionCheckpoints, CollectionCheckpoint } from '@/lib/bossclaw/collectionResume';
+import type { JobPlatform } from '@/lib/bossclaw/platforms';
 
 /** 达标岗位本地缓存上限：最多保留最近 N 天（按日期分组）的达标岗位数据，超出自动清理更早几天的数据，防止 localStorage 撑爆。
  *  实测按每天约 460 个达标岗位、叠加图片简历+导入文件后，保留 7 天（≈3200 条）仍能把整 store 稳定在 5MB 配额约 60% 以内；90 天会随累计溢出。 */
@@ -82,6 +84,8 @@ interface DataState {
   directionPlan: DirectionPlan | null;
   pending: PendingItem[];
   collectionCounts: DailyCollectionCounts;
+  collectionCheckpoints: CollectionCheckpoints;
+  setCollectionCheckpoint: (platform: JobPlatform, checkpoint: CollectionCheckpoint) => void;
   taskRuns: TaskRun[];
   stats: Stats;
   /** 达标岗位导出记录（持久化）：按「日期 → 该日已导出的达标岗位」累积，用于当天内去重 */
@@ -151,6 +155,8 @@ export const useDataStore = create<DataState>()(
       directionPlan: DEFAULT_DIRECTION_PLAN,
       pending: [],
       collectionCounts: {},
+      collectionCheckpoints: {},
+      setCollectionCheckpoint: (platform, checkpoint) => set(s => ({ collectionCheckpoints: { ...s.collectionCheckpoints, [platform]: checkpoint } })),
       taskRuns: [],
       stats: DEFAULT_STATS,
       qualifiedExports: {},
@@ -305,6 +311,7 @@ export const useDataStore = create<DataState>()(
           defaultResumeVariantId: typeof saved.defaultResumeVariantId === 'string' ? saved.defaultResumeVariantId : '',
           autoResumeRouting: saved.autoResumeRouting !== false,
           collectionCounts: seedCollectionCounts(Array.isArray(saved.pending) ? saved.pending : [], saved.collectionCounts || {}),
+          collectionCheckpoints: saved.collectionCheckpoints || {},
         };
       },
       migrate: (state) => {

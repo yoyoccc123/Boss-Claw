@@ -8,7 +8,7 @@
  * 右栏子模块：内置浏览器（BrowserView 多平台标签 webview，含 BOSS 等平台登录态与岗位详情页）
  */
 import { useEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
-import { Button, Card, Checkbox, Empty, Progress, Tag, Typography, message, Segmented, Tooltip, Space, Select, Alert, InputNumber } from 'antd';
+import { Button, Card, Checkbox, Dropdown, Empty, Progress, Tag, Typography, message, Segmented, Tooltip, Space, Select, Alert, InputNumber } from 'antd';
 import {
   CheckOutlined, ReloadOutlined, EyeOutlined, SearchOutlined,
   StopOutlined, UndoOutlined, ThunderboltOutlined,
@@ -65,6 +65,8 @@ import { DEFAULT_WORKBENCH_FILTERS, normalizeWorkbenchFilters, filterWorkbenchJo
 import { canSupplementZhaopinGreeting } from '@/lib/bossclaw/zhaopinGreetingRetry';
 import { collectionGoal } from '@/lib/bossclaw/collectionGoal';
 import { autoConfirmPending, autoConfirmationReason } from '@/lib/bossclaw/autoConfirmation';
+import { beginCollection, collectionSignature, acknowledgeCollectionJob, advanceCollection, collectionJobKey,
+  type CollectionStartMode, type CollectionCheckpoint, type CollectionCombination } from '@/lib/bossclaw/collectionResume';
 
 const { Text } = Typography;
 
@@ -253,6 +255,7 @@ function pickGreetingForJob(job: JobMeta | undefined | null, greetings: string[]
 
 export default function Workbench() {
   const profile = useDataStore((s) => s.profile);
+  const collectionCheckpoints = useDataStore((s) => s.collectionCheckpoints);
   const pending = useDataStore((s) => s.pending);
   const addPendingItem = useDataStore((s) => s.addPendingItem);
   const updatePending = useDataStore((s) => s.updatePending);
@@ -343,6 +346,10 @@ export default function Workbench() {
   const collectDoneResolve = useRef<(() => void) | null>(null);
   const collectSequenceRef = useRef(0);
   const collectBatchGenerationRef = useRef(0);
+  const collectPhaseRef = useRef<'idle' | 'loading' | 'collecting' | 'analyzing'>('idle');
+  const collectTerminalRef = useRef('');
+  const checkpointContextRef = useRef<{ platform: JobPlatform; generation: number; checkpoint: CollectionCheckpoint;
+    queue: CollectionCombination[]; persist: boolean; unresolved: Set<string> } | null>(null);
   const collectAwaitingSeqRef = useRef<string | null>(null);
   const collectBottomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const collectingPlatformRef = useRef<JobPlatform | null>(null);
@@ -758,7 +765,7 @@ export default function Workbench() {
       }
     }
     if (!finalGreeting) { message.warning('请先填写求职招呼语，再确认沟通'); return; }
-    const next = rerankPending(latestPending.map((p) => (p.id === id ? { ...p, job: normalizeJobDetailMetadata(p.job), linkIncomplete: false, error: '', deliveryGreeting: finalGreeting, status: 'approved_queue' as const, approvedAt: p.approvedAt || Date.now() } : p)), useSettingsStore.getState().config);
+    const next = rerankPending(latestPending.map((p) => (p.id === id ? { ...p, manualConfirmationRequired: false, job: normalizeJobDetailMetadata(p.job), linkIncomplete: false, error: '', deliveryGreeting: finalGreeting, status: 'approved_queue' as const, approvedAt: p.approvedAt || Date.now() } : p)), useSettingsStore.getState().config);
     setPending(next);
     addLog('info', '已确认并加入投递队列，将按匹配分与平台优先级投递');
     // 只在引擎已运行时续跑；同时刻可能有多个岗位被批准，runNext 内部有重入锁（runNextLock/runNextQueued）
@@ -788,7 +795,7 @@ export default function Workbench() {
       return;
     }
     const next = rerankPending(
-      pending.map((p) => (approvedIds.has(p.id) ? { ...p, job: normalizeJobDetailMetadata(p.job), linkIncomplete: false, error: '', status: 'approved_queue' as const, approvedAt: Date.now() } : p)),
+      useDataStore.getState().pending.map((p) => (approvedIds.has(p.id) ? { ...p, manualConfirmationRequired: false, job: normalizeJobDetailMetadata(p.job), linkIncomplete: false, error: '', status: 'approved_queue' as const, approvedAt: Date.now() } : p)),
       useSettingsStore.getState().config,
     );
     setPending(next);
@@ -853,7 +860,7 @@ export default function Workbench() {
     }
     // 撤回后引擎当前 activeId 可能正指向该岗位——一并释放 activeId/applyStage 并关闭本次
     // 投递标签，避免引擎继续对一个已退回「待确认」的岗位投递（状态与动作脱节）。
-    const next = rerankPending(pending.map((p) => (p.id === id ? { ...p, status: 'pending' as const } : p)), useSettingsStore.getState().config);
+    const next = rerankPending(useDataStore.getState().pending.map((p) => (p.id === id ? { ...p, manualConfirmationRequired: true, status: 'pending' as const } : p)), useSettingsStore.getState().config);
     setPending(next);
     if (id === activeId) {
       deliveryEpochRef.current++;
@@ -868,6 +875,40 @@ export default function Workbench() {
     addLog('info', '已撤回岗位，退回「待确认」');
     recomputeStats();
     if (useAppStore.getState().autoAssist) requestRunNext();
+  };
+
+  const prepareCollectionCheckpoint = (platform: JobPlatform, queue: CollectionCombination[], mode: CollectionStartMode, targeted = false) => {
+    const signature = collectionSignature(queue, useSettingsStore.getState().config);
+    const saved = targeted ? undefined : useDataStore.getState().collectionCheckpoints[platform];
+    const { checkpoint, changed } = beginCollection(queue, signature, saved, targeted ? 'restart' : mode);
+    if (changed && mode === 'continue' && !targeted) {
+      message.warning(`${platformLabel(platform)} 搜索条件已改变，请选择「从头采集」；原进度仍保留`); return null;
+    }
+    if (checkpoint.complete) { addLog('info', `${platformLabel(platform)} 上次搜索组合已全部完成，如需重新搜索请选择「从头采集」`); return null; }
+    const ctx = { platform, generation: collectBatchGenerationRef.current, checkpoint, queue, persist: !targeted, unresolved: new Set<string>() };
+    checkpointContextRef.current = ctx;
+    if (ctx.persist) useDataStore.getState().setCollectionCheckpoint(platform, checkpoint);
+    addLog('info', `${platformLabel(platform)} ${mode === 'restart' ? '从头采集' : '继续采集'}：${checkpoint.location || '全国'} · ${keywordLabel(checkpoint.keyword)}，已处理 ${checkpoint.processedKeys.length} 个岗位`);
+    return ctx;
+  };
+
+  const checkpointJobAcknowledgment = (key: string, title: string): (() => void) => {
+    const ctx = checkpointContextRef.current;
+    const index = ctx?.checkpoint.index;
+    ctx?.unresolved.add(key);
+    return () => {
+      if (!ctx || ctx !== checkpointContextRef.current || ctx.generation !== collectBatchGenerationRef.current || ctx.checkpoint.index !== index) return;
+      ctx.unresolved.delete(key);
+      ctx.checkpoint = acknowledgeCollectionJob(ctx.checkpoint, key, title);
+      if (ctx.persist) useDataStore.getState().setCollectionCheckpoint(ctx.platform, ctx.checkpoint);
+    };
+  };
+
+  const advanceCollectionCheckpoint = () => {
+    const ctx = checkpointContextRef.current;
+    if (!ctx || ctx.generation !== collectBatchGenerationRef.current || ctx.unresolved.size) return;
+    ctx.checkpoint = advanceCollection(ctx.checkpoint, ctx.queue);
+    if (ctx.persist) useDataStore.getState().setCollectionCheckpoint(ctx.platform, ctx.checkpoint);
   };
 
   // 兼容入口：现在「批准」已直接入队，正常情况下不会有 approved 残留。
@@ -1028,7 +1069,8 @@ export default function Workbench() {
     return true;
   }, [addLog]);
 
-  const ingestJob = useCallback(async (job: any, generation = collectBatchGenerationRef.current): Promise<boolean> => {
+  const ingestJob = useCallback(async (job: any, generation = collectBatchGenerationRef.current, onProcessed?: () => void): Promise<boolean> => {
+    const processed = () => { if (generation === collectBatchGenerationRef.current) onProcessed?.(); return false; };
     if (generation !== collectBatchGenerationRef.current) return false;
     job = normalizeJobDetailMetadata(job);
     const platform: JobPlatform = job.platform || 'boss';
@@ -1058,31 +1100,31 @@ export default function Workbench() {
           address: job.address || existing.job.address, companySize: job.companySize || existing.job.companySize },
         ...(existing.linkIncomplete && repairLink ? { status: 'pending', linkIncomplete: false, error: '', retryable: true } : {}),
       });
-      return false;
+      return processed();
     }
     // 本次会话去重：同一岗位无论入库还是被过滤跳过，都不重复 analyze/打日志（采集滚动常重复扫到同一卡片）
     const seenKey = normUrl || jobId.toLowerCase();
     if (seenKey && ingestedSeenRef.current.has(seenKey)) return false;
     if (seenKey) ingestedSeenRef.current.add(seenKey);
     const hrFilter = cfg.hrActivityFilter || 'any';
-    if (hrFilter !== 'any' && !meetsHrActivityFilter(job?.hrActive, hrFilter)) return false;
+    if (hrFilter !== 'any' && !meetsHrActivityFilter(job?.hrActive, hrFilter)) return processed();
     if (cfg.excludeHeadhunters && job?.isHeadhunter) {
       addSkipLogOnce('info', `跳过「${job?.title || '岗位'}」（猎头岗位）`);
-      return false;
+      return processed();
     }
     if (isLocationExcluded(job?.location, cfg)) {
       addSkipLogOnce('info', `跳过「${job?.title || '岗位'}」（所在地命中城市反选排除规则）`);
-      return false;
+      return processed();
     }
     const bl = isCompanyExcluded(job, cfg);
     if (bl.excluded) {
       addSkipLogOnce('info', `跳过「${job?.title || '岗位'}」（${bl.reason}）`);
-      return false;
+      return processed();
     }
     const jd = isJdKeywordExcluded(job, cfg);
     if (jd.excluded) {
       addSkipLogOnce('info', `跳过「${job?.title || '岗位'}」（${jd.reason}）`);
-      return false;
+      return processed();
     }
     // JD 截止日期已过（确定性过滤）：猎聘 JD 末尾常带「截止日期：YYYY年MM月DD日」，
     // 过期岗位无投递价值。此处前置拦截，省掉后续 AI 分析（jobMatch 里还有同一条硬约束兜底，
@@ -1091,7 +1133,7 @@ export default function Workbench() {
       const exp = checkJobExpiry(job);
       if (exp.expired) {
         addSkipLogOnce('info', `跳过「${job?.title || '岗位'}」（${exp.reason}）`);
-        return false;
+        return processed();
       }
     }
     const imFilterC = cfg.interviewModeFilter || 'any';
@@ -1099,13 +1141,14 @@ export default function Workbench() {
       const modeC = detectInterviewMode(job);
       if (modeC !== 'unknown' && modeC !== imFilterC) {
         addSkipLogOnce('info', `跳过「${job?.title || '岗位'}」（面试方式与设定冲突）`);
-        return false;
+        return processed();
       }
     }
     const meta: JobMeta = { ...job, url, jobId, interviewMode: detectInterviewMode(job) };
     try {
       const customGreetingPrompt = useDataStore.getState().greetingPrompt;
       const analysis = await analyzeJobWithResume(meta, cfg, customGreetingPrompt || undefined);
+      if (generation !== collectBatchGenerationRef.current) return false;
       // 入库门槛：reject（硬伤 / 明确冲突）一律跳过；其余档位统一按「最低入队分」放行，
       // 门槛由设置页「硬性智能过滤 → 最低入队分」配置（config.minQueueScore，默认 60，0 = 不限）；
       // 不再写死 60 分底线——推荐岗位分（minScore）只决定「是否推荐」，入队资格由最低入队分决定。
@@ -1122,7 +1165,7 @@ export default function Workbench() {
           'info',
           `跳过「${meta.title}」（${analysis.scoreSource === 'local' ? '本地' : 'AI'} ${analysis.score} 分，${analysis.decision === 'reject' ? '不推荐' : '未达入队门槛'}${diag}）`
         );
-        return false;
+        return processed();
       }
       flushLastSkipLog();
       const runId = `task_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
@@ -1132,6 +1175,7 @@ export default function Workbench() {
       if (!addPendingItem(newItem, useSettingsStore.getState().config)) {
         checkCollectionGoal(platform); return false;
       }
+      processed();
       checkCollectionGoal(platform);
       // 采集福利对齐「加入任务」：DOM 标签/正文常拿不到五险一金（只在 meta/_jobInfo/API 中），
       // 后台用 card.json（与「加入任务」同源）补全 welfare，工作台绿标即可显示，不阻塞采集循环。
@@ -1277,8 +1321,9 @@ export default function Workbench() {
       // ingestJob 内部已 try/catch 兜底不会 reject，此处 catch 仅防队列自身异常产生 unhandledrejection。
       const q = analysisQueueRef.current;
       const generation = collectBatchGenerationRef.current;
-      if (q) void q.enqueue(() => ingestJob(data.job, generation)).catch(() => {});
-      else void ingestJob(data.job, generation);
+      const ack = checkpointJobAcknowledgment(String(data.cardKey || collectionJobKey(data.job)), String(data.job.title || ''));
+      if (q) void q.enqueue(() => ingestJob(data.job, generation, ack)).catch(() => {});
+      else void ingestJob(data.job, generation, ack);
     }
     // 关键诊断落日志（低频，不刷屏）：列表就绪 / 页面已加载完但选择器没命中 / 全选择器 0 命中
     if (data?.phase === 'list-ready') {
@@ -1310,6 +1355,7 @@ export default function Workbench() {
   // 采集完成回传（collect-done）：累计处理数并唤醒本轮导航循环，进入下一个搜索组合
   const handleCollectDone = useCallback((data: any) => {
     if (!collectAwaitingSeqRef.current || data?.seq !== collectAwaitingSeqRef.current) return;
+    collectTerminalRef.current = data?.reason || (data?.error ? 'failed' : data?.loginRequired ? 'blocked' : data?.finalized ? 'failed' : 'completed');
     // 不采用 webview 回传的 processed（卡片 key 去重不稳定，会虚高如"5181"）；
     // 「已处理」以 batch 内实际入库/入眼的唯一岗位数（ingestedSeenRef.size）为准，见 runVisualCollect。
     const finish = collectDoneResolve.current;
@@ -1333,6 +1379,7 @@ export default function Workbench() {
         resolve();
       };
       collectAwaitingSeqRef.current = seq;
+      collectTerminalRef.current = '';
       collectDoneResolve.current = finish;
       webviewApi.current?.sendInTab(tabId, 'visual-collect', { ...opts, seq });
       const settleMs = Math.max(400, Number(opts.settleMs) || 1200);
@@ -1342,6 +1389,7 @@ export default function Workbench() {
       // 现在把列表首屏等待与逐卡片节奏一并计入，并放宽到 15min 上限（仅作最后兜底）。
       const timeoutMs = Math.min(900000, listWaitMs + 120000 + 240 * settleMs);
       timer = setTimeout(() => {
+        collectTerminalRef.current = 'failed';
         webviewApi.current?.sendInTab(tabId, 'collect-control', { action: 'stop' });
         finish();
       }, timeoutMs);
@@ -1393,14 +1441,15 @@ export default function Workbench() {
       ...base,
       ...patch,
       updatedAt: Date.now(),
+      collectionGeneration: collectBatchGenerationRef.current,
     } as unknown as TaskRun);
   }, [upsertTaskRun]);
 
   // 本轮采集结束后，把仍未收尾的采集任务标记为「已跳过」（用户停止时避免卡片停在“采集中”）
-  const settleCollectRuns = useCallback((runIds: string[], label: string) => {
+  const settleCollectRuns = useCallback((runIds: string[], label: string, generation = collectBatchGenerationRef.current) => {
     for (const rid of runIds) {
       const cur = useDataStore.getState().taskRuns.find((r) => r.id === rid);
-      if (cur && (cur.status === 'running' || cur.status === 'queued')) {
+      if (cur && cur.collectionGeneration === generation && (cur.status === 'running' || cur.status === 'queued')) {
         updateTaskRun(rid, { status: 'skipped', stageLabel: label, updatedAt: Date.now() });
       }
     }
@@ -1415,8 +1464,9 @@ export default function Workbench() {
    *             猎聘/前程无忧：暂无，只有列表字段。见 webview.cjs::visualCollectListOnly 头注释）。
    * runIds 非空 = 「任务进度」页定向重新采集（仍按平台各自队列过滤）。
    */
-  const runVisualCollect = async (platform: JobPlatform = 'boss', runIds?: string[]): Promise<CollectOutcome> => {
+  const runVisualCollect = async (platform: JobPlatform = 'boss', runIds?: string[], mode: CollectionStartMode = 'continue'): Promise<CollectOutcome> => {
     if (visualActiveRef.current) return 'skip';
+    const generation = collectBatchGenerationRef.current;
     if (checkCollectionGoal(platform)) return 'skip';
     ingestedSeenRef.current = new Set(); // 新一采集批重置去重，允许重新扫描
     collectListReadyLoggedRef.current = false; // 新一批重新记录首个「列表就绪」
@@ -1439,6 +1489,7 @@ export default function Workbench() {
     //   其余平台 → platformUrls.ts（城市/薪资/关键词进 URL；猎聘与智联把「基础求职条件」+ HR 活跃度
     //              一并拼进 URL，前程无忧仍只带城市/薪资/关键词）—— 与隐身采集同一构建器
     if (platform === 'boss') await loadBossCityCodes();
+    if (generation !== collectBatchGenerationRef.current) return 'abort';
     const queue = platform === 'boss'
       ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
       : filterQueueByRunIds(platform, buildPlatformSearchQueue(platform, directionPlan, config), runIds);
@@ -1462,6 +1513,8 @@ export default function Workbench() {
       return 'skip';
     }
 
+    const checkpointContext = prepareCollectionCheckpoint(platform, queue, mode, Boolean(runIds?.length));
+    if (!checkpointContext) return 'skip';
     // BOSS 城市码校验（非 BOSS 平台的城市码由 platformUrls.ts 各自解析并直接进 URL，此处不适用）
     if (platform === 'boss') {
       const unresolvedCities = [...new Set(queue.map((q) => q.location).filter(Boolean))] as string[];
@@ -1472,6 +1525,7 @@ export default function Workbench() {
     }
 
     visualActiveRef.current = true;
+    collectPhaseRef.current = 'loading';
     collectingPlatformRef.current = platform;
     setVisualCollecting(true);
     setVisualPaused(false);
@@ -1487,9 +1541,10 @@ export default function Workbench() {
     } else {
       collectTabId = webviewApi.current?.findTabByPlatform?.(platform) || '';
       if (!collectTabId) {
-        collectTabId = webviewApi.current?.openInNewTab?.(queue[0].url, `${platformLabel(platform)} · 采集`, 'main') || '';
+        collectTabId = webviewApi.current?.openInNewTab?.(queue[checkpointContext.checkpoint.index].url, `${platformLabel(platform)} · 采集`, 'main') || '';
         // 等新标签的 webview 挂载；后续 loadURLInTab + waitTabReady 仍会兜底
         if (collectTabId) await sleep(900);
+        if (generation !== collectBatchGenerationRef.current) return 'abort';
       }
     }
     visualTabRef.current = collectTabId || '';
@@ -1518,7 +1573,7 @@ export default function Workbench() {
       }
     };
     const pageUsable = (st: any): boolean =>
-      Boolean(st && (
+      Boolean(st && !st.collectionBlocked && !st.collectionLoading && (
         Number(st.cards) > 0 ||
         String(st.readyState) === 'complete' ||
         String(st.readyState) === 'interactive' ||
@@ -1559,13 +1614,20 @@ export default function Workbench() {
       let probes = 0;
       let okProbes = 0;
       while (Date.now() < deadline) {
-        if (!visualActiveRef.current) return { ready: false, reason: 'stopped', st, probes, okProbes };
+        if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) return { ready: false, reason: 'stopped', st, probes, okProbes };
         const preloadFlag = Boolean(webviewApi.current?.isPreloadReady?.(tabId));
         const overlay = Boolean(webviewApi.current?.isLoading?.(tabId));
         probes += 1;
         const probed = await probePage(tabId);
+        if (generation !== collectBatchGenerationRef.current) return { ready: false, reason: 'stopped', st, probes, okProbes };
         if (probed) okProbes += 1;
         st = probed || st;
+        if (probed?.collectionBlocked) {
+          visualLoginBlockedRef.current = String(probed.collectionBlocked);
+          visualActiveRef.current = false;
+          addLog('warn', `采集页面被拦截：${probed.collectionBlocked}。已保留断点，请处理后选择继续采集`);
+          return { ready: false, reason: 'stopped', st, probes, okProbes };
+        }
         // 登录墙即时收口：页面自身已明确是登录页 → 不再等满两轮超时（省掉 60s 白等，并给出真实原因）
         if (probed && loginWallHit(probed)) {
           addLog('warn', `「${keyword}」页面命中登录墙（${describePage(probed)}）→ 判定为未登录，本平台立即收口`);
@@ -1597,9 +1659,9 @@ export default function Workbench() {
     addLog('info', `开始可视化采集（${platformLabel(platform)}）：共 ${queue.length} 个搜索组合，${platform === 'boss' ? '逐岗位平滑滚动 + 高亮 + 点击展开详情' : '列表级滚动 + 高亮（不点开详情，详情 JD 按平台详情接口补齐）'}${cfg0.collectWithoutKeyword ? '（无关键字模式：链接不带 query，仅保留城市 / 求职类型等筛选）' : ''}`);
     // 本批采集任务的 runId（用于结束时把未收尾的卡片统一收口）
     const batchRunIds: string[] = [];
-    for (let qi = 0; qi < queue.length; qi += 1) {
+    for (let qi = checkpointContext.checkpoint.index; qi < queue.length; qi += 1) {
       const item = queue[qi];
-      if (!visualActiveRef.current || checkCollectionGoal(platform)) break;
+      if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current || checkCollectionGoal(platform)) break;
       // 该平台未登录：后续搜索组合必然同样失败 → 立即收口（登录墙判定在页内完成，不靠猜）
       if (visualLoginBlockedRef.current) break;
       addLog('info', `可视化采集「${item.keyword}」· ${item.location || '全国'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）`);
@@ -1632,9 +1694,11 @@ export default function Workbench() {
       });
 
       // 先跳转到搜索页链接，等 preload 就绪 + 加载遮罩消失（页面真正可注入）
+      collectPhaseRef.current = 'loading';
       webviewApi.current?.loadURLInTab(tabId, item.url);
       const kwLabel = keywordLabel(item.keyword);
       let waitRes = await waitTabReady(tabId, pageTimeoutMs, kwLabel);
+      if (generation !== collectBatchGenerationRef.current) break;
       // 未登录 / 登录态失效属「平台级」故障：**不重试**（重试只会再白等一整轮），
       // 记录原因后由主循环收口本平台剩余搜索组合（与 collectFaultScope 的平台级口径一致）。
       if (!waitRes.ready && waitRes.reason === 'login') {
@@ -1653,6 +1717,7 @@ export default function Workbench() {
         addLog('warn', `「${kwLabel}」页面首次加载超时（${Math.round(pageTimeoutMs / 1000)}s；${describeProbe(waitRes)}），自动重载重试一次…`);
         webviewApi.current?.loadURLInTab(tabId, item.url);
         waitRes = await waitTabReady(tabId, pageTimeoutMs, kwLabel);
+        if (generation !== collectBatchGenerationRef.current) break;
       }
       if (!waitRes.ready) {
         if (!visualActiveRef.current) break;
@@ -1675,12 +1740,14 @@ export default function Workbench() {
           error: `搜索页加载超时（${Math.round(pageTimeoutMs / 1000)}s × 2 次）；${probeDiag}`,
           progress: Math.round(((qi + 1) / queue.length) * 100),
         });
-        continue;
+        visualActiveRef.current = false;
+        break;
       }
       await visualWait(2500);
-      if (!visualActiveRef.current) break;
+      if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
 
       const before = ingestedSeenRef.current.size;
+      collectPhaseRef.current = 'collecting';
       markCollectRun(runId, baseRun, {
         status: 'running',
         stage: 'queued',
@@ -1700,18 +1767,27 @@ export default function Workbench() {
           collectionGoal(useSettingsStore.getState().config, useDataStore.getState().pending, useDataStore.getState().collectionCounts, platform).remaining)),
         // 平台自检用：preload 以页面 hostname 为权威，不一致时回传 platform-mismatch 诊断
         platform,
+        resumeKeys: checkpointContext.checkpoint.processedKeys,
       });
       // Analyze this batch before opening another search page instead of accumulating more cards.
+      if (generation !== collectBatchGenerationRef.current) break;
       if (analysisQueueRef.current?.getStats().running || analysisQueueRef.current?.getStats().queued) {
+        collectPhaseRef.current = 'analyzing';
         setVisualItem(v => ({ ...v, phase: 'analyzing', status: '正在分析本组岗位，分析完成后继续下一组' }));
       }
-      while (visualActiveRef.current && analysisQueueRef.current &&
+      while (generation === collectBatchGenerationRef.current && visualActiveRef.current && analysisQueueRef.current &&
         (analysisQueueRef.current.getStats().running || analysisQueueRef.current.getStats().queued)) {
         if (checkCollectionGoal(platform)) break;
         await sleep(200);
       }
       const got = Math.max(0, ingestedSeenRef.current.size - before);
-      if (!visualActiveRef.current) break;
+      if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
+      if (checkpointContext.unresolved.size || collectTerminalRef.current !== 'completed') {
+        addLog('warn', '本组尚未完成，已保存城市、关键词和已处理岗位；下次可继续采集');
+        visualActiveRef.current = false;
+        break;
+      }
+      advanceCollectionCheckpoint();
       markCollectRun(runId, baseRun, {
         status: 'success',
         stage: 'success',
@@ -1723,11 +1799,13 @@ export default function Workbench() {
       await visualWait(800);
     }
     const wasStopped = !visualActiveRef.current;
+    if (generation !== collectBatchGenerationRef.current) { settleCollectRuns(batchRunIds, '已停止（进度已保存）', generation); return 'abort'; }
     // 用户停止：本批仍在「采集中」的采集任务收口为「已跳过」，避免任务进度页停留在进行中
-    if (wasStopped) settleCollectRuns(batchRunIds, '已停止（未完成）');
+    if (wasStopped) settleCollectRuns(batchRunIds, '已停止（未完成）', generation);
     const processed = ingestedSeenRef.current.size;
     const loginBlocked = visualLoginBlockedRef.current;
     visualActiveRef.current = false;
+    collectPhaseRef.current = 'idle';
     visualTabRef.current = '';
     collectingPlatformRef.current = null;
     setVisualCollecting(false);
@@ -1755,7 +1833,7 @@ export default function Workbench() {
    */
   type CollectOutcome = 'done' | 'skip' | 'abort';
 
-  const runCamoufoxCollect = async (platform: JobPlatform = 'boss', runIds?: string[]): Promise<CollectOutcome> => {
+  const runCamoufoxCollect = async (platform: JobPlatform = 'boss', runIds?: string[], mode: CollectionStartMode = 'continue'): Promise<CollectOutcome> => {
     if (cfxActiveRef.current) return 'skip';
     if (checkCollectionGoal(platform)) return 'skip';
     const generation = collectBatchGenerationRef.current;
@@ -1772,6 +1850,7 @@ export default function Workbench() {
     if (!cfg0.collectWithoutKeyword && !directionPlan?.confirmed) { message.warning('请先到「投递方向」确认方向'); return 'skip'; }
     if (cfg0.collectWithoutKeyword) addLog('warn', NO_KEYWORD_SETUP_REMINDER);
     const st = await camoufoxStatus(platform);
+    if (generation !== collectBatchGenerationRef.current) return 'abort';
     if (!st.ready) { message.warning('Camoufox 引擎未就绪：' + (st.message || '请到设置页检测并安装 camoufox')); return 'skip'; }
     if (!st.engine?.loggedIn) {
       message.warning(`平台「${platformLabel(platform)}」未登录 Camoufox，请先到「设置 → 招聘平台」扫码登录后再采集`);
@@ -1779,6 +1858,7 @@ export default function Workbench() {
       return 'skip';
     }
     if (platform === 'boss') await loadBossCityCodes();
+    if (generation !== collectBatchGenerationRef.current) return 'abort';
     const queue = platform === 'boss'
       ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
       : filterQueueByRunIds(platform, buildPlatformSearchQueue(platform, directionPlan, config), runIds);
@@ -1801,6 +1881,8 @@ export default function Workbench() {
       return 'skip';
     }
     const pfLabel = platformLabel(platform);
+    const checkpointContext = prepareCollectionCheckpoint(platform, queue, mode, Boolean(runIds?.length));
+    if (!checkpointContext) return 'skip';
 
     cfxActiveRef.current = true;
     collectingPlatformRef.current = platform;
@@ -1810,12 +1892,14 @@ export default function Workbench() {
     // 队列级阻断标记：一旦命中风控/环境异常，本平台收尾后整批队列必须中止（不再跑后续平台）
     let queueAborted = false;
     // 定向重新采集（runIds 非空）语义 = 用户明确要求重跑该组合 → 忽略断点续采强制重采
-    const forceRecheck = Boolean(runIds?.length);
+    // Backend keyword cache marks a whole returned batch done, before frontend analysis.
+    // Re-read the partial combination and skip only acknowledged jobs.
+    const forceRecheck = true;
     addLog('info', `开始 Camoufox 隐身采集（${pfLabel}）：共 ${queue.length} 个搜索组合（指纹伪装：${cfx0.os}，页数：${cfx0.pages}）${cfg0.collectWithoutKeyword ? '（无关键字模式：链接不带关键词，仅保留城市等筛选）' : ''}`);
     const cfxRunIds: string[] = [];
-    for (let qi = 0; qi < queue.length; qi += 1) {
+    for (let qi = checkpointContext.checkpoint.index; qi < queue.length; qi += 1) {
       const item = queue[qi];
-      if (!cfxActiveRef.current || checkCollectionGoal(platform)) break;
+      if (generation !== collectBatchGenerationRef.current || !cfxActiveRef.current || checkCollectionGoal(platform)) break;
       const cityCode = platform === 'boss' ? (resolveCityCode(item.location) || '100010000') : String(item.location || '全国');
       // 非 BOSS 平台：城市/薪资/关键词在 URL 里，其余筛选（学历/经验/公司规模/公司性质/融资阶段/
       // HR 活跃度）随 criteria 下发，由 Python 侧 platform filters 翻译成本平台筛选参数
@@ -1846,6 +1930,7 @@ export default function Workbench() {
       lastCode = null; // 每组重置：故障范围判定与 catch 兜底只看本组结果，避免沿用上一组残留码
       try {
         const result = await camoufoxSearch(item.keyword, cityCode, cfx0.pages || 1, cfx0.os, platform, itemCriteria, forceRecheck);
+        if (generation !== collectBatchGenerationRef.current || !cfxActiveRef.current) break;
         if (result.skipped) {
           // 断点续采命中：既非失败、也非「无岗位」，单独记账便于用户理解「为什么没采」
           addLog('info', `「${keywordLabel(item.keyword)}」跳过本次采集：${result.message || '近期已采过（断点续采）'}`);
@@ -1858,12 +1943,15 @@ export default function Workbench() {
         } else if (result.ok && result.jobs?.length) {
           let added = 0;
           for (const j of result.jobs) {
-            if (!cfxActiveRef.current || checkCollectionGoal(platform)) break;
-            const ingested = await ingestJob(camoufoxJobToMeta(j, platform), generation);
+            if (generation !== collectBatchGenerationRef.current || !cfxActiveRef.current || checkCollectionGoal(platform)) break;
+            const meta = camoufoxJobToMeta(j, platform), key = collectionJobKey(meta);
+            if (checkpointContext.checkpoint.processedKeys.includes(key)) continue;
+            const ingested = await ingestJob(meta, generation, checkpointJobAcknowledgment(key, meta.title || ''));
             if (ingested) added += 1;
             await sleep(600 + Math.random() * 900);
           }
           collectedCount += added;
+          if (generation !== collectBatchGenerationRef.current || !cfxActiveRef.current || checkpointContext.unresolved.size) break;
           addLog('success', `「${keywordLabel(item.keyword)}」隐身搜索到 ${result.jobs.length} 个岗位，入库 ${added} 个`);
           markCollectRun(runId, baseRun, {
             status: 'success',
@@ -1896,6 +1984,7 @@ export default function Workbench() {
             });
             break;
           }
+          if (!result.ok) { queueAborted = true; addLog('warn', `隐身搜索未完成，进度已保留：${errMsg}`); break; }
           addLog('warn', `隐身搜索「${keywordLabel(item.keyword)}」返回空：${errMsg}`);
           markCollectRun(runId, baseRun, {
             status: 'success', stage: 'success', stageLabel: `已完成（无岗位：${errMsg.slice(0, 20)}）`,
@@ -1908,12 +1997,14 @@ export default function Workbench() {
           status: 'failed', stage: 'failed', stageLabel: '隐身搜索失败', error: String(e?.message || e),
           progress: Math.round(((qi + 1) / queue.length) * 100),
         });
-        if (isCamoufoxStopCode(lastCode)) { queueAborted = true; break; }
+        queueAborted = true; break;
       }
+      advanceCollectionCheckpoint();
       if (cfxActiveRef.current) await sleep(1500 + Math.random() * 1000);
     }
     // 用户停止 / 风控中断：未收尾的采集任务统一收口为「已跳过」
-    settleCollectRuns(cfxRunIds, '已停止（未完成）');
+    settleCollectRuns(cfxRunIds, '已停止（未完成）', generation);
+    if (generation !== collectBatchGenerationRef.current) return 'abort';
     cfxActiveRef.current = false;
     collectingPlatformRef.current = null;
     setCfxCollecting(false);
@@ -1952,14 +2043,14 @@ export default function Workbench() {
    * 历史行为是「非 BOSS 只能走 Camoufox」（当时 webview 链路只有 BOSS 选择器）；2026-09-15
    * webview 多平台化后放开闸门 —— 未安装 Camoufox 内核也能采集非 BOSS 平台（列表级）。
    * runIds 非空时只重跑这些搜索组合（「任务进度」页「开始/继续」的定向采集，忽略断点续采）。 */
-  const runCollectFor = async (platform: JobPlatform, runIds?: string[]): Promise<CollectOutcome> => {
+  const runCollectFor = async (platform: JobPlatform, runIds?: string[], mode: CollectionStartMode = 'continue'): Promise<CollectOutcome> => {
     if (checkCollectionGoal(platform)) return 'skip';
-    if (config.camoufox?.enabled) return runCamoufoxCollect(platform, runIds);
-    return runVisualCollect(platform, runIds);
+    if (config.camoufox?.enabled) return runCamoufoxCollect(platform, runIds, mode);
+    return runVisualCollect(platform, runIds, mode);
   };
 
   /** 手动「搜索采集」入口：按当前所选平台串行采集（不等待，引擎常驻执行） */
-  const startCollect = () => {
+  const startCollect = (mode: CollectionStartMode = 'continue') => {
     if (visualActiveRef.current || cfxActiveRef.current) return;
     const generation = ++collectBatchGenerationRef.current;
     // 至少一个平台：UI 已兜底回填，此处再做一次防御性检查
@@ -1976,7 +2067,7 @@ export default function Workbench() {
         if (generation !== collectBatchGenerationRef.current || visualActiveRef.current || cfxActiveRef.current) break;
         let outcome: CollectOutcome = 'done';
         try {
-          outcome = await runCollectFor(pf);
+          outcome = await runCollectFor(pf, undefined, mode);
         } catch (e) {
           addLog('error', `采集平台「${platformLabel(pf)}」执行失败：${String((e as Error)?.message || e)}`);
         }
@@ -1993,10 +2084,40 @@ export default function Workbench() {
     collectBatchGenerationRef.current += 1;
     searchTriggered.current = true; // A manual stop must not immediately trigger another automatic search batch.
     controlCollect('stop');
+    collectPhaseRef.current = 'idle';
     cfxActiveRef.current = false;
     setCfxCollecting(false);
     addLog('warn', '已停止采集');
   };
+
+  const handleCollectInterrupted = useCallback((data: { tabId: string; reason: string }) => {
+    if (!visualActiveRef.current || data.tabId !== visualTabRef.current || collectPhaseRef.current === 'loading' || collectPhaseRef.current === 'idle') return;
+    collectBatchGenerationRef.current++;
+    searchTriggered.current = true;
+    controlCollect('stop');
+    collectPhaseRef.current = 'idle';
+    addLog('warn', `${data.reason}，已停止采集并保留断点；处理页面后可选择「继续上次采集」`);
+  }, [controlCollect, addLog]);
+
+  // An interrupted preload can no longer emit collect-done. Probe independently, with a short bound.
+  useEffect(() => {
+    if (!visualCollecting) return;
+    let disposed = false, probing = false, blockedSince = 0, failures = 0;
+    const timer = setInterval(() => {
+      if (disposed || probing || !visualActiveRef.current || collectPhaseRef.current !== 'collecting') return;
+      probing = true;
+      const tabId = visualTabRef.current;
+      void webviewApi.current?.pageStatus?.(tabId).then(st => {
+        if (disposed || !visualActiveRef.current || tabId !== visualTabRef.current) return;
+        if (!st || st.error) failures++; else failures = 0;
+        if (st?.collectionLoading) blockedSince ||= Date.now(); else blockedSince = 0;
+        if (st?.collectionBlocked || failures >= 3 || (blockedSince && Date.now() - blockedSince >= 30000)) {
+          handleCollectInterrupted({ tabId, reason: st?.collectionBlocked || (failures >= 3 ? '采集网页连续无响应' : '采集网页遮罩持续超过 30 秒') });
+        }
+      }).catch(() => { failures++; }).finally(() => { probing = false; });
+    }, 4000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [visualCollecting, handleCollectInterrupted]);
 
   // 定时任务「采集」触发：消费 collectRequest 调用本组件采集入口（跨页可触发，因本组件常驻挂载）。
   // 目标平台：任务圈定（req.platforms）→ 逐一采集；未圈定 → 当前全部已启用平台。
@@ -2990,11 +3111,16 @@ export default function Workbench() {
               {visualCollecting || cfxCollecting ? (
                 <Button size="small" danger icon={<StopOutlined />} onClick={stopAllCollect}>停止采集</Button>
               ) : (
-                <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { startCollect(); }}>
+                <Dropdown trigger={['click']} menu={{ items: [
+                  { key: 'continue', label: '继续上次采集' },
+                  { key: 'restart', label: '从头采集（保留岗位记录）' },
+                ], onClick: ({ key }) => startCollect(key as CollectionStartMode) }}>
+                <Button size="small" type="primary" icon={<SearchOutlined />}>
                   {searchPlatforms.length > 1
                     ? `采集 ${searchPlatforms.length} 平台`
                     : (searchPlatforms[0] === 'boss' && config.camoufox?.enabled ? '隐身采集' : '搜索采集')}
                 </Button>
+                </Dropdown>
               )}
             </Space>
           }
@@ -3072,6 +3198,12 @@ export default function Workbench() {
             }).join(' · ')}
           </Text>
 
+          {searchPlatforms.map(p => {
+            const cp = collectionCheckpoints[p];
+            return cp ? <div key={p} style={{ marginTop: 4 }}><Text type="secondary" style={{ fontSize: 12 }}>
+              {platformLabel(p)} 上次进度：{cp.complete ? '全部搜索组合已完成' : `${cp.location || '全国'} · ${keywordLabel(cp.keyword)} · 已处理 ${cp.processedKeys.length} 个岗位${cp.lastTitle ? `，最近：${cp.lastTitle}` : ''}`}
+            </Text></div> : null;
+          })}
           {collectRuns.length > 0 && (
             <div
               className="wb-collect-tasks"
@@ -3464,6 +3596,7 @@ export default function Workbench() {
           onLoginState={handleLoginState}
           onCollectProgress={handleCollectProgress}
           onCollectDone={handleCollectDone}
+          onCollectInterrupted={handleCollectInterrupted}
           apiRef={webviewApi}
           overlaySuppressed={visualCollecting}
         />

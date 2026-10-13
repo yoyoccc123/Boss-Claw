@@ -442,6 +442,8 @@ export type PendingStatus =
   | 'ignored';
 
 export interface PendingItem {
+  /** 用户撤回的岗位须再次手动确认，全自动模式也不能重新入队。 */
+  manualConfirmationRequired?: boolean;
   /** Missing verified platform detail URL; re-collect before queueing again. */
   linkIncomplete?: boolean;
   id: string;
@@ -522,6 +524,8 @@ export type TaskStage =
   | 'skipped';
 
 export interface TaskRun {
+  /** 采集批次所有权，旧异步任务不能改写重启后的同组合任务。 */
+  collectionGeneration?: number;
   id: string;
   pendingId?: string;
   job?: JobMeta;
