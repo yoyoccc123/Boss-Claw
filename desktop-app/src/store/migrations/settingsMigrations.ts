@@ -5,6 +5,7 @@
 // 约定：每条迁移 id = 落地日期 + 主题；describe = 一句话说明；apply = 返回修补后的配置片段。
 // 迁移是「一次性的」——新用户打入没有这些历史字段，apply 对缺字段为幂等空操作。
 import type { AppConfig } from '@/lib/bossclaw/types';
+import { normalizePendingTarget } from '@/lib/bossclaw/collectionGoal';
 
 /** 已退役的 config.batchDelivery（早中晚分批）在 merge 时被剥离前的老结构，仅用于一次性迁移。 */
 export interface LegacyBatchDelivery {
@@ -58,17 +59,18 @@ const MIGRATIONS: SettingsMigration[] = [
     describe: 'platforms 补 priority 与 dailyTarget（按基线补默认，用户值优先）',
     apply: (pc, base) => {
       const defaultPlatforms = base.current.platforms || ({} as AppConfig['platforms']);
-      const persisted = (pc.platforms || {}) as Record<string, { enabled?: boolean; priority?: number; dailyTarget?: number }>;
+      const persisted = (pc.platforms || {}) as Record<string, { enabled?: boolean; priority?: number; dailyTarget?: number; pendingTarget?: number }>;
       // 老版本 dailyTarget 在顶层（pc.dailyTarget），下放到 platforms[k].dailyTarget。
       const legacyDailyTarget = Number(pc.dailyTarget ?? defaultPlatforms.boss?.dailyTarget ?? 120);
       const merged: AppConfig['platforms'] = { ...defaultPlatforms };
       for (const [k, v] of Object.entries(persisted)) {
         if (k in defaultPlatforms) {
-          const def = (defaultPlatforms as Record<string, { enabled: boolean; priority: number; dailyTarget: number }>)[k];
-          (merged as Record<string, { enabled: boolean; priority: number; dailyTarget: number }>)[k] = {
+          const def = defaultPlatforms[k as keyof AppConfig['platforms']];
+          merged[k as keyof AppConfig['platforms']] = {
             enabled: v?.enabled !== false,
             priority: Number.isFinite(Number(v?.priority)) ? Number(v.priority) : def.priority,
             dailyTarget: Number.isFinite(Number(v?.dailyTarget)) ? Number(v.dailyTarget) : legacyDailyTarget,
+            pendingTarget: normalizePendingTarget(v?.pendingTarget ?? v?.dailyTarget ?? pc.dailyTarget ?? def.pendingTarget),
           };
         }
       }

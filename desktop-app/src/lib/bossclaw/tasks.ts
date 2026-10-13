@@ -1,9 +1,7 @@
 // 移植自 job-claw-main\source\src\background.js 的任务创建逻辑
 // 注意：本文件仅保留"搜索任务(TaskRun)创建"逻辑。岗位入库的状态流转（pending→approved→approved_queue→sent）
-// 统一由 Workbench 的 ingestJob/onJoinTask + priority.promoteApprovedToQueue 处理，采集一律进入
-// 「确认队列(pending)」、批准只进「投递队列·等待(approved)」、只有「一键投递」才提升为「投递中(approved_queue)」
-// 并启动引擎。历史上曾存在 addPending 在 auto 模式下直接将岗位置为 approved_queue 的"采集即投递"逻辑，
-// 已移除，避免未批准即投递。
+// 统一由 Workbench 处理：人工模式先进入 pending，全自动模式自动确认合适岗位进入 approved_queue。
+// 加入队列与启动引擎分开；只有运行中的投递引擎执行发送，异常岗位仍留待处理。
 import type { AppConfig, DirectionPlan, TaskRun, Profile } from './types';
 import { selectedDirectionItems } from './directions';
 

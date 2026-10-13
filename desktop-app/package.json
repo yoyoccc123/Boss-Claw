@@ -37,7 +37,8 @@
     "test:zhaopin-link": "node scripts/zhaopin-link-regression.mjs",
     "test:delivery-stop": "node scripts/delivery-stop-regression.mjs",
     "test:zhaopin-block": "node scripts/zhaopin-block-regression.mjs",
-    "test:zhaopin-greeting": "node scripts/zhaopin-greeting-regression.mjs"
+    "test:zhaopin-greeting": "node scripts/zhaopin-greeting-regression.mjs",
+    "test:collection-goal": "node scripts/collection-goal-regression.mjs"
   },
   "build": {
     "appId": "com.bossclaw.desktop",

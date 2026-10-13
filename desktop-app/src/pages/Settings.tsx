@@ -80,6 +80,7 @@ import {
 } from '@/lib/bossclaw/skills';
 import { exportData, importData, clearAllData } from '@/lib/storage';
 import { useDataStore } from '@/store/useDataStore';
+import { pendingTargetFor, normalizePendingTarget, MAX_PENDING_TARGET } from '@/lib/bossclaw/collectionGoal';
 import { bridgeStatus } from '@/lib/bridgeClient';
 import { electronApi } from '@/lib/electronApi';
 import {
@@ -97,7 +98,7 @@ import { cleanSalary } from '@/lib/bossclaw/jobDisplay';
 import { camoufoxStatus, camoufoxLogin, camoufoxLogout, camoufoxStop, type CamoufoxStatus } from '@/lib/bossclaw/camoufox';
 import {
   PLATFORM_META, PLATFORM_IDS, platformEnabled, platformPriority,
-  platformDailyCap, PLATFORM_DEFAULT_DAILY_TARGET,
+  platformDailyCap,
   type JobPlatform,
 } from '@/lib/bossclaw/platforms';
 import type { LLMProvider } from '@/store/useSettingsStore';
@@ -430,16 +431,19 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
     });
   };
 
-  // 调整某平台的每日投递目标（多平台独立配额，0 表示不限；上限按平台适配——输入值被本平台上限
-  // min(平台侧上限, MAX_SAFE_DAILY=150) 封顶，如智联最多 100/日）
-  const setPlatformDailyTarget = (p: JobPlatform, v: number) => {
-    const cap = platformDailyCap(p);
+  // 每天累计筛选入队的岗位数；投递/确认后计数不回退。投递额度独立执行。
+  const setPlatformPendingTarget = (p: JobPlatform, v: number) => {
     setConfig({
       platforms: {
         ...(config.platforms || {}),
-        [p]: { ...(config.platforms || {})[p], dailyTarget: Math.max(0, Math.min(Number(v) || 0, cap)) },
+        [p]: { ...(config.platforms || {})[p], pendingTarget: normalizePendingTarget(v) },
       },
     });
+  };
+  const setPlatformDailyTarget = (p: JobPlatform, v: number) => {
+    setConfig({ platforms: { ...config.platforms,
+      [p]: { ...config.platforms[p], dailyTarget: Math.max(0, Math.min(Number(v) || 0, platformDailyCap(p))) },
+    } });
   };
 
   // 平台搜索/投递优先级：与相邻平台交换 priority（数字小=排前=先搜索/先投递）。
@@ -805,7 +809,7 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
             />
             <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 13 }}>
               {config.executionMode === 'auto'
-                ? '全自动投递：岗位由 AI 评估符合要求后自动确认，直接进入「待投递」并按顺序发送。'
+                ? '全自动投递：通过筛选及最低入队分、招呼语完整的岗位自动确认进入「待投递」；引擎运行时按顺序发送。分析失败或链接不完整等异常仍需人工处理。'
                 : '人工确认：由 AI 筛选评分后，岗位停在「待确认」，需在工作台点「确认」或「批量确认」后才进入「待投递」。'}
             </Paragraph>
           </div>
@@ -939,9 +943,8 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                 const lastEnabledOnly = enabled && enabledPlatformCount === 1;
                 // 本平台上限（平台侧收窄后，如智联=100；其余=MAX_SAFE_DAILY=150）与适配后的每日目标
                 const dailyCap = platformDailyCap(p);
-                const storedTarget = Number(config.platforms?.[p]?.dailyTarget ?? PLATFORM_DEFAULT_DAILY_TARGET[p]) || 0;
-                const dailyTarget = storedTarget > 0 ? Math.min(storedTarget, dailyCap) : storedTarget;
-                const overCap = storedTarget > dailyCap;
+                const pendingTarget = pendingTargetFor(config, p);
+                const dailyTarget = Math.max(0, Math.min(Number(config.platforms?.[p]?.dailyTarget) || 0, dailyCap));
                 const orderIdx = [...PLATFORM_IDS].sort((a, b) => platformPriority(config, a) - platformPriority(config, b)).indexOf(p);
                 const canUp = orderIdx > 0;
                 const canDown = orderIdx < PLATFORM_IDS.length - 1;
@@ -1023,24 +1026,30 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                       </tbody>
                     </table>
                     {meta.dailyHint && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--fg-muted)' }}>{meta.dailyHint}</div>}
-                    {/* 每日投递目标（多平台独立配额；上限按平台适配收窄） */}
+                    {/* 待确认目标按当天累计入队计数，达到后只停止采集。 */}
                     <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
                         <AimOutlined style={{ marginRight: 4 }} />
-                        每日投递目标
+                        待确认目标
                       </span>
                       <InputNumber
                         size="small"
-                        min={0}
-                        max={dailyCap}
-                        placeholder="0=不限"
-                        value={dailyTarget}
-                        onChange={(v) => setPlatformDailyTarget(p, v ?? 0)}
+                        min={1}
+                        max={MAX_PENDING_TARGET}
+                        precision={0}
+                        value={pendingTarget}
+                        onChange={(v) => { if (v !== null) setPlatformPendingTarget(p, v); }}
                         style={{ width: 120 }}
                       />
-                      <span style={{ fontSize: 11, color: overCap ? '#d46b08' : 'var(--fg-subtle)' }}>
-                        条 / 天；0 表示不限，本平台上限 {dailyCap} 条{overCap ? `（原设置 ${storedTarget} 已超出，按上限执行）` : '（按平台侧限制 / 防封号适配）'}
+                      <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+                        个 / 天；累计筛选入队达到目标后停止采集，确认或投递后不减少。
                       </span>
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>每日投递上限</span>
+                      <InputNumber size="small" min={0} max={dailyCap} precision={0} value={dailyTarget}
+                        onChange={v => { if (v !== null) setPlatformDailyTarget(p, v); }} style={{ width: 120 }} />
+                      <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>条 / 天；0 使用平台上限 {dailyCap} 条。</span>
                     </div>
                   </div>
                 );

@@ -12,12 +12,14 @@ import type {
   JobAnalysis,
   ImageResume,
   QualifiedJobExport,
+  AppConfig,
 } from '@/lib/bossclaw/types';
 import { DEFAULT_STATS, DEFAULT_PROFILE, DEFAULT_PROFILE_DRAFT, DEFAULT_DIRECTION_PLAN, today } from '@/lib/bossclaw/defaults';
 import { cleanCompanyName } from '@/lib/bossclaw/jobDisplay';
 import type { ResumeWritingPreferences } from '@/lib/bossclaw/resumeWriting';
 import type { ResumeVariant } from '@/lib/bossclaw/resumeVariants';
 import { normalizeJobDetailMetadata, repairZhaopinPending, ZHAOPIN_LINK_ERROR } from '@/lib/bossclaw/jobDetailLink';
+import { collectionGoal, collectionCountFor, collectionDay, collectionIdentity, isQualifiedPending, seedCollectionCounts, type DailyCollectionCounts } from '@/lib/bossclaw/collectionGoal';
 
 /** 达标岗位本地缓存上限：最多保留最近 N 天（按日期分组）的达标岗位数据，超出自动清理更早几天的数据，防止 localStorage 撑爆。
  *  实测按每天约 460 个达标岗位、叠加图片简历+导入文件后，保留 7 天（≈3200 条）仍能把整 store 稳定在 5MB 配额约 60% 以内；90 天会随累计溢出。 */
@@ -79,6 +81,7 @@ interface DataState {
   profileDraft: ProfileDraft | null;
   directionPlan: DirectionPlan | null;
   pending: PendingItem[];
+  collectionCounts: DailyCollectionCounts;
   taskRuns: TaskRun[];
   stats: Stats;
   /** 达标岗位导出记录（持久化）：按「日期 → 该日已导出的达标岗位」累积，用于当天内去重 */
@@ -101,7 +104,7 @@ interface DataState {
   setProfileDraft: (d: ProfileDraft | null) => void;
   setDirectionPlan: (p: DirectionPlan | null) => void;
 
-  addPendingItem: (item: PendingItem) => void;
+  addPendingItem: (item: PendingItem, collectionConfig?: AppConfig) => boolean;
   updatePending: (id: string, patch: Partial<PendingItem>) => void;
   setPending: (items: PendingItem[]) => void;
 
@@ -147,6 +150,7 @@ export const useDataStore = create<DataState>()(
       profileDraft: DEFAULT_PROFILE_DRAFT,
       directionPlan: DEFAULT_DIRECTION_PLAN,
       pending: [],
+      collectionCounts: {},
       taskRuns: [],
       stats: DEFAULT_STATS,
       qualifiedExports: {},
@@ -192,7 +196,8 @@ export const useDataStore = create<DataState>()(
       setProfileDraft: (d) => set({ profileDraft: d }),
       setDirectionPlan: (p) => set({ directionPlan: p }),
 
-      addPendingItem: (item) =>
+      addPendingItem: (item, collectionConfig) => {
+        let added = false;
         set((s) => {
           // 同岗位查重：同一岗位（归一化去 query/hash 后 URL **或** jobId 任一相同）已入队则不再叠卡。
           // 归一化 URL 在某些采集场景仍会漏（同一岗位 anchor href 与 dataJobId 构造 url 可能不同），
@@ -210,8 +215,20 @@ export const useDataStore = create<DataState>()(
             sameJobSoft(item.job, p.job)
           );
           if (hit) return s;
-          return { pending: [item, ...s.pending] };
-        }),
+          const pf = item.job.platform || 'boss', now = Date.now();
+          const date = collectionDay(now), saved = s.collectionCounts[pf];
+          const identities = saved?.date === date ? saved.identities || [] : [];
+          const identity = collectionIdentity(item.job), alreadyCounted = identities.includes(identity);
+          if (collectionConfig && alreadyCounted) return s;
+          if (collectionConfig && collectionGoal(collectionConfig, s.pending, s.collectionCounts, pf, now).reached) return s;
+          const collectionCounts = isQualifiedPending(item)
+            ? { ...s.collectionCounts, [pf]: { date, count: collectionCountFor(s.pending, s.collectionCounts, pf, now) + (alreadyCounted ? 0 : 1), identities: alreadyCounted ? identities : [...identities, identity] } }
+            : s.collectionCounts;
+          added = true;
+          return { pending: [item, ...s.pending], collectionCounts };
+        });
+        return added;
+      },
       updatePending: (id, patch) =>
         set((s) => ({ pending: s.pending.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
       setPending: (items) => set({ pending: items }),
@@ -287,6 +304,7 @@ export const useDataStore = create<DataState>()(
           resumeVariants: (Array.isArray(saved.resumeVariants) ? saved.resumeVariants : []).filter(v => v && typeof v.id === 'string' && typeof v.name === 'string' && typeof v.text === 'string'),
           defaultResumeVariantId: typeof saved.defaultResumeVariantId === 'string' ? saved.defaultResumeVariantId : '',
           autoResumeRouting: saved.autoResumeRouting !== false,
+          collectionCounts: seedCollectionCounts(Array.isArray(saved.pending) ? saved.pending : [], saved.collectionCounts || {}),
         };
       },
       migrate: (state) => {

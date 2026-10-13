@@ -177,7 +177,8 @@ export interface AppConfig {
    * 用户可在「设置 → 招聘平台」每个平台卡片中调整。取代原先顶层 AppConfig.dailyTarget / maxDailySent
    * （后两者已废弃，仅作旧数据兼容读取）。
    */
-  platforms: Record<JobPlatform, { enabled: boolean; priority: number; dailyTarget: number }>;
+  // pendingTarget: each platform's daily cumulative qualified collection goal; confirmation never decrements it.
+  platforms: Record<JobPlatform, { enabled: boolean; priority: number; dailyTarget: number; pendingTarget?: number }>;
   /**
    * Camoufox 隐身引擎（可选增强，来自 boss-auto-job-main 的方案）：
    * C++ 级 Firefox 指纹伪装 + humanize 类人行为，用于降低「正常操作被误判为机器人（code 37）」的概率。

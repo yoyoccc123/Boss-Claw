@@ -103,10 +103,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   platforms: {
     // dailyTarget：每平台每日投递目标（多平台独立配额；0 表示不限，受 MAX_SAFE_DAILY=150 与平台侧上限双重约束）。
     // 默认值按平台适配（PLATFORM_DEFAULT_DAILY_TARGET）：BOSS/猎聘/51Job=120，智联=100（贴合平台侧 ~100/日 上限）
-    boss: { enabled: true, priority: 1, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.boss },
-    liepin: { enabled: false, priority: 2, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.liepin },
-    zhaopin: { enabled: false, priority: 3, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.zhaopin },
-    job51: { enabled: false, priority: 4, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.job51 },
+    boss: { enabled: true, priority: 1, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.boss, pendingTarget: 50 },
+    liepin: { enabled: false, priority: 2, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.liepin, pendingTarget: 50 },
+    zhaopin: { enabled: false, priority: 3, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.zhaopin, pendingTarget: 50 },
+    job51: { enabled: false, priority: 4, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.job51, pendingTarget: 50 },
   },
   // Camoufox 隐身引擎子配置（os / pages / prefer 与 engineMode='camoufox' 共用）；
   // 启用标志在设置页由 engineMode 切换时联动翻转（workbench 仍以本 enabled 作为
