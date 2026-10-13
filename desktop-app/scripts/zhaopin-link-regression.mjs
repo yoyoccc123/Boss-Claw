@@ -93,6 +93,7 @@ const context = {
   useDataStore: { getState: () => ({ pending: queue }) }, useSettingsStore: { getState: () => ({ config: { executionMode: 'manual', camoufox: { enabled: false } } }) },
   useAppStore: { getState: () => ({ autoAssist: true }) }, rerankPending: p => p, isDeliveryClaimed: () => false,
   visualActiveRef: { current: false }, cfxActiveRef: { current: false }, searchTriggered: { current: false }, lastApplyStageRef: { current: '' },
+  deliverySubmittedRef: { current: false },
   setActiveId: () => {}, setApplyStage: () => {}, addLog: () => {}, setRunning: () => {}, setAutoAssist: () => {}, startCollect: () => {},
   resolveJobDetailUrl, isZhaopinCardFragment, ZHAOPIN_LINK_ERROR: 'incomplete detail link',
   updatePending: (id, patch) => { queue = queue.map(p => p.id === id ? { ...p, ...patch } : p); }, recomputeStats: () => {},

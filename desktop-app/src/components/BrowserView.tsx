@@ -136,7 +136,7 @@ export interface WebviewApi {
    * platform-apply，终态经 platform-apply-result 回传 resolve。返回 {ok, stage, external?, code?, message?, error?, tabId}。
    * stage: success | external | skip | stop | risk | failed。
    */
-  platformApply: (url: string, platform: JobPlatform, job: any, greeting?: string) => Promise<{
+  platformApply: (url: string, platform: JobPlatform, job: any, greeting?: string, control?: { canStart: () => boolean; onStart: () => void }) => Promise<{
     ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean;
   }>;
   /**
@@ -937,8 +937,9 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   // 一旦该标记因任何原因未置位（详见 handleRegister 上方「身份稳定 ref 回调」的根因说明），
   // 就会把「页面 2s 内早已可用」误判成「详情页加载超时」——本次报告的智联投递失败即此。
   const platformApply = useCallback(
-    (url: string, platform: JobPlatform, job: any, greeting = ''): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean }> =>
+    (url: string, platform: JobPlatform, job: any, greeting = '', control?: { canStart: () => boolean; onStart: () => void }): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean }> =>
       new Promise((resolve) => {
+        if (control && !control.canStart()) { resolve({ ok: false, stage: 'cancelled' }); return; }
         const tabId = openInNewTab(url, PLATFORM_META[platform]?.label || '岗位投递', 'detail');
         if (!tabId) {
           // 白名单拦截 / 标签上限：旧实现拿到空 tabId 会静默等到超时，这里直接给出真实原因
@@ -946,18 +947,26 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           return;
         }
         const startedAt = Date.now();
+        const cancelledBeforeStart = () => {
+          if ((!control || control.canStart()) && hasTab(tabId)) return false;
+          closeTabById(tabId);
+          resolve({ ok: false, stage: 'cancelled', tabId });
+          return true;
+        };
         const start = () => {
+          if (cancelledBeforeStart()) return;
           const seq = String((seqRef.current += 1));
           const timer = setTimeout(() => {
             if (apiResolvers.current.has(seq)) {
               apiResolvers.current.delete(seq);
-              resolve({ ok: false, stage: 'failed', error: '投递结果未在规定时间内确认，请人工核对', needsReview: platform === 'liepin', tabId });
+              resolve({ ok: false, stage: 'failed', error: '投递请求已下发，但结果未在规定时间内确认；请核对平台投递记录后再重试', needsReview: true, tabId });
             }
           }, platform === 'liepin' ? 55000 : 26000);
           apiResolvers.current.set(seq, (payload: any) => {
             clearTimeout(timer);
             resolve({ ...(payload || {}), tabId });
           });
+          control?.onStart();
           sendInTab(tabId, 'platform-apply', {
             seq,
             platform,
@@ -972,6 +981,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           let overlay = false;
           while (aliveRef.current && Date.now() - startedAt < APPLY_PAGE_READY_MS) {
             await sleep(300);
+            if (cancelledBeforeStart()) return;
             if (!aliveRef.current) break;
             preloadFlag = isPreloadReady(tabId);
             overlay = isLoading(tabId);
@@ -986,6 +996,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
               if (usable && (!overlay || Date.now() - startedAt > 2000)) { start(); return; }
             }
           }
+          if (cancelledBeforeStart()) return;
           resolve({
             ok: false,
             stage: 'failed',
@@ -996,7 +1007,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           });
         })();
       }),
-    [openInNewTab, isPreloadReady, isLoading, sendInTab, pageStatus],
+    [openInNewTab, isPreloadReady, isLoading, sendInTab, pageStatus, hasTab, closeTabById],
   );
 
   // ===== 暴露 apiRef（多标签版本）=====
