@@ -3,6 +3,11 @@
 // DOM only. Never inspect Vue private state or invoke a platform send API.
 const normalize = value => String(value || '').replace(/\s+/g, '').trim();
 const titleKey = value => normalize(value).replace(/^(职位|岗位)[：:]/, '').replace(/[【\[].*?[】\]]/g, '').replace(/（[^）]*(?:区|市|地点)[^）]*）/g, '');
+const companyKey = value => normalize(value).replace(/(?:股份有限公司|有限责任公司|有限公司)$/, '');
+function jobNumberFromUrl(href) {
+  try { const u = new URL(href); return u.protocol === 'https:' && u.hostname === 'www.zhaopin.com'
+    ? u.pathname.match(/^\/jobdetail\/([a-z0-9]+)\.html?$/i)?.[1].toUpperCase() || '' : ''; } catch { return ''; }
+}
 function visible(el) {
   if (!el || !el.isConnected) return false;
   for (let p = el; p?.nodeType === 1; p = p.parentElement) {
@@ -36,8 +41,16 @@ function readZhaopinChat(doc, href, job = {}, expectedSessionId = '') {
   const name = text(header.querySelector('.im-chat-header__name'));
   const company = text(header.querySelector('.im-chat-header__meta-text'));
   const title = text(header.querySelector('.im-chat-header__job-title'));
-  if (!normalize(job.company) || !titleKey(job.title) || normalize(company) !== normalize(job.company) || titleKey(title) !== titleKey(job.title)) return fail('聊天中的公司或岗位与目标不一致');
-  if (normalize(text(entry.querySelector('.im-session-item__company-name'))) !== normalize(company)
+  const details = nodes(header, 'a.im-chat-header__detail[href]');
+  const expectedJob = jobNumberFromUrl(job.url) || String(job.jobId || '').replace(/\.html?$/i, '').toUpperCase();
+  const actualJob = details.length === 1 ? jobNumberFromUrl(details[0].href) : '';
+  if (details.length && (details.length !== 1 || !expectedJob || actualJob !== expectedJob)) return fail('聊天中的详情链接与目标岗位编号不一致');
+  if (details[0]?.classList.contains('is-offline')) return fail('聊天中的岗位已下线');
+  // Legal suffix aliases are accepted only with the same official job-detail number.
+  // No substring or fuzzy company matching; salary and actions are outside the leaf title.
+  const sameCompany = (a, b) => normalize(a) === normalize(b) || (actualJob && actualJob === expectedJob && companyKey(a).length >= 4 && companyKey(a) === companyKey(b));
+  if (!normalize(job.company) || !titleKey(job.title) || !sameCompany(company, job.company) || titleKey(title) !== titleKey(job.title)) return fail('聊天中的公司或岗位与目标不一致');
+  if (!sameCompany(text(entry.querySelector('.im-session-item__company-name')), company)
     || titleKey(text(entry.querySelector('.im-session-item__job'))) !== titleKey(title)
     || normalize(text(entry.querySelector('.im-session-item__name'))) !== normalize(name)) return fail('选中会话与聊天标题不一致');
   if (job.recruiterName && normalize(job.recruiterName) !== normalize(name)) return fail('聊天招聘方与目标不一致');
@@ -45,12 +58,15 @@ function readZhaopinChat(doc, href, job = {}, expectedSessionId = '') {
   if (panels.length !== 1 || editors.length !== 1 || editors[0].disabled) return fail('聊天输入框尚未就绪');
   const panel = panels[0], editor = editors[0];
   if (!panel.contains(editor) || nodes(panel, '.im-main-panel__timeline').length !== 1) return fail('聊天消息区尚未就绪');
-  return { ready: true, sessionId, header, panel, editor, signature: [sessionId, name, company, title].map(normalize).join('|') };
+  return { ready: true, sessionId, header, panel, editor, signature: [sessionId, actualJob, name, companyKey(company), titleKey(title)].map(normalize).join('|') };
 }
 function readZhaopinDeliveryState(target, greeting = '', defaultGreeting = '') {
   // The official job-page modal's fallback sentence is also recognized for older deliveries.
   // Dynamic prologues require the exact text captured from this job's native success modal.
-  const wanted = normalize(greeting), knownDefault = normalize(defaultGreeting || '您好，我对这个职位很感兴趣，想进一步了解一下。');
+  const wanted = normalize(greeting), defaults = new Set([
+    defaultGreeting, '您好，我对这个职位很感兴趣，想进一步了解一下。',
+    '您好，我对该职位很感兴趣，请您看下我的简历，如果合适可以随时联系我，谢谢。',
+  ].filter(Boolean).map(normalize));
   const rows = nodes(target.panel.querySelector('.im-main-panel__timeline'), '.im-message__bubble');
   const outgoing = [], incoming = [], matching = [], nonDefaultOutgoing = [];
   for (const bubble of rows) {
@@ -65,7 +81,7 @@ function readZhaopinDeliveryState(target, greeting = '', defaultGreeting = '') {
       outgoing.push(bubble);
       const receipt = normalize(text(row?.querySelector('.im-message__receipt')));
       if (wanted && body === wanted && !unconfirmed && /^(送达|已读)$/.test(receipt)) matching.push(bubble);
-      else if (!(knownDefault && body === knownDefault)) nonDefaultOutgoing.push(bubble);
+      else if (!defaults.has(body)) nonDefaultOutgoing.push(bubble);
     } else incoming.push(bubble);
   }
   const buttons = nodes(target.panel, 'button.im-sender__send-btn').filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && normalize(text(el)) === '发送');

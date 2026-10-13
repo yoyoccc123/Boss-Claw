@@ -62,6 +62,7 @@ import { createAnalysisQueue, type AnalysisQueueStats } from '@/lib/bossclaw/ana
 import { assessJobAddress } from '@/lib/bossclaw/addressRisk';
 import { companySizeOfJob } from '@/lib/bossclaw/companySize';
 import { DEFAULT_WORKBENCH_FILTERS, normalizeWorkbenchFilters, filterWorkbenchJobs, invalidSalaryFilter } from '@/lib/bossclaw/workbenchFilters';
+import { canSupplementZhaopinGreeting } from '@/lib/bossclaw/zhaopinGreetingRetry';
 
 const { Text } = Typography;
 
@@ -811,11 +812,11 @@ export default function Workbench() {
   const onSupplementGreeting = (id: string) => {
     const item = useDataStore.getState().pending.find(p => p.id === id);
     if (!item || item.job.platform !== 'zhaopin' || item.status !== 'sent' || item.greetingStatus === 'sent') return;
-    if (item.greetingStatus === 'needs_review') {
+    if (!canSupplementZhaopinGreeting(item)) {
       message.warning('上次发送结果未确认，请先打开聊天核对；复制招呼语可人工补发，程序不会自动重发');
       return;
     }
-    updatePending(id, { status: 'approved_queue', resumeDeliveredAt: item.resumeDeliveredAt || item.sentAt || Date.now(), greetingStatus: 'pending', error: '', approvedAt: Date.now() });
+    updatePending(id, { status: 'approved_queue', resumeDeliveredAt: item.resumeDeliveredAt || item.sentAt || Date.now(), greetingStatus: 'pending', greetingSendAttempted: false, error: '', approvedAt: Date.now() });
     addLog('info', `已将智联岗位加入补发招呼语队列（不再提交简历）：${item.job.title || '岗位'}`);
     startDelivery();
   };
@@ -2056,7 +2057,7 @@ export default function Workbench() {
     if (pf === 'zhaopin' && res.resumeDelivered) {
       const chat = res.chat || {};
       if (chat.greetingConfirmed || chat.stage === 'skip') {
-        updatePending(candidate.id, { status: 'sent', greetingStatus: chat.greetingConfirmed ? 'sent' : 'skipped', error: '' });
+        updatePending(candidate.id, { status: 'sent', greetingStatus: chat.greetingConfirmed ? 'sent' : 'skipped', greetingSendAttempted: chat.sendAttempted === true, error: '' });
         addLog(chat.greetingConfirmed ? 'success' : 'warn', `智联${chat.stage === 'already_sent' ? '会话中已有相同文案，未重复发送' : chat.greetingConfirmed ? '工作台招呼语已确认发送' : chat.message || '会话已有其他文字，未自动补发'}：${nTitle}`);
         if (res.alreadyDelivered) {
           if (res.tabId) webviewApi.current?.closeTab(res.tabId);
@@ -2067,7 +2068,8 @@ export default function Workbench() {
       }
       const stopped = chat.stage === 'cancelled';
       const error = `简历已投递；${stopped ? '用户已停止，工作台招呼语未发送' : chat.error || chat.message || '工作台招呼语未确认发送，请人工核对'}`;
-      updatePending(candidate.id, { status: 'sent', greetingStatus: stopped ? 'pending' : 'needs_review', error, retryable: false });
+      const notSent = stopped || chat.sendAttempted === false;
+      updatePending(candidate.id, { status: 'sent', greetingStatus: notSent ? 'pending' : 'needs_review', greetingSendAttempted: notSent ? false : chat.sendAttempted, error, retryable: false });
       addLog('warn', `智联：${nTitle}（${error}）`);
       setApplyStage(null); recomputeStats();
       if (!stopped) pauseAssist(error);
@@ -3263,7 +3265,7 @@ export default function Workbench() {
                     <div style={{ marginTop: 6 }}><Tag>基础简历：{storedResumeForJob(p.job).source.name}</Tag></div>
                     {p.job.platform === 'zhaopin' && p.status === 'sent' && (
                       <div style={{ marginTop: 6 }}><Tag color={p.greetingStatus === 'sent' ? 'green' : 'orange'}>
-                        {p.greetingStatus === 'sent' ? '工作台招呼语已发送' : p.greetingStatus === 'needs_review' ? '招呼语待核对' : p.greetingStatus === 'skipped' ? '会话已有其他文字，未补发' : '工作台招呼语未确认发送'}
+                        {p.greetingStatus === 'sent' ? '工作台招呼语已发送' : p.greetingStatus === 'needs_review' ? (canSupplementZhaopinGreeting(p) ? '招呼语未发送，可补发' : '招呼语待核对') : p.greetingStatus === 'skipped' ? '会话已有其他文字，未补发' : p.greetingSendAttempted === false ? '工作台招呼语未发送' : '工作台招呼语未确认发送'}
                       </Tag></div>
                     )}
                     {p.error && <div className="job-error">⚠ {p.error}</div>}
@@ -3311,7 +3313,7 @@ export default function Workbench() {
                           <div className="job-actions-right">
                             {p.job.platform === 'zhaopin' && p.status === 'sent' && p.id !== activeId && p.greetingStatus !== 'sent' && (
                               <>
-                                {p.greetingStatus !== 'needs_review' && p.greetingStatus !== 'skipped' && <Button size="small" onClick={() => onSupplementGreeting(p.id)}>补发招呼语</Button>}
+                                {canSupplementZhaopinGreeting(p) && <Button size="small" onClick={() => onSupplementGreeting(p.id)}>补发招呼语</Button>}
                                 <Button size="small" onClick={() => copyGreeting(p.id)}>复制招呼语</Button>
                               </>
                             )}
