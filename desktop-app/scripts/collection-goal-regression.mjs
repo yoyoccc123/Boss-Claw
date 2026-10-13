@@ -91,7 +91,7 @@ async function host(){
   let timerId=0, searchCount=0, deliveryCount=0;
   const c={...T,Promise,Date:Clock,Math,useCallback:fn=>fn,useDataStore:{getState:()=>data},useSettingsStore:{getState:()=>({config:cfg})},useAppStore:{getState:()=>app},
     webviewApi:{current:{sendInTab:(...args)=>sent.push(args),hasTab:()=>true}},visualTabRef:{current:'tab'},visualActiveRef:{current:true},cfxActiveRef:{current:false},
-    collectDoneResolve:{current:null},collectSequenceRef:{current:0},collectAwaitingSeqRef:{current:null},collectBottomTimerRef:{current:null},collectBatchGenerationRef:{current:0},
+    collectDoneResolve:{current:null},collectSequenceRef:{current:0},collectAwaitingSeqRef:{current:null},collectBottomTimerRef:{current:null},collectBatchGenerationRef:{current:0},collectTerminalRef:{current:''},collectPhaseRef:{current:'collecting'},
     collectingPlatformRef:{current:'boss'},goalLoggedRef:{current:new Set()},visualItemBufRef:{current:{}},visualsRafRef:{current:1},collectListReadyLoggedRef:{current:false},visualLoginBlockedRef:{current:''},
     analysisQueueRef:{current:null},setVisualCollecting:()=>{},setVisualPaused:()=>{},setCfxCollecting:()=>{},setVisualItem:()=>{},
     searchTriggered:{current:false},platformLabel:p=>p,searchPlatforms:['boss'],setRunning:()=>{},setAutoAssist:v=>{app.autoAssist=v;},
