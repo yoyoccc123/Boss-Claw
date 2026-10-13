@@ -13,6 +13,15 @@ function visible(el) {
 }
 const nodes = (root, selector) => [...root.querySelectorAll(selector)].filter(visible);
 const text = el => String(el?.innerText || el?.textContent || '').trim();
+function readZhaopinHistory(doc) {
+  const timelines = nodes(doc, '.im-main-panel__timeline');
+  if (timelines.length !== 1) return { ready: false, reason: '消息区尚未就绪' };
+  const timeline = timelines[0], tips = nodes(timeline, '.im-main-panel__tip');
+  if (nodes(timeline, '.im-main-panel__history-tip.is-loading').length || tips.some(el => /加载中/.test(text(el)))) return { ready: false, reason: '聊天历史仍在加载' };
+  if (tips.some(el => normalize(text(el)) !== normalize('暂无消息，打个招呼吧'))) return { ready: false, reason: '聊天历史未成功加载，请人工核对' };
+  const ready = nodes(timeline, '.im-message').length > 0 || tips.some(el => normalize(text(el)) === normalize('暂无消息，打个招呼吧'));
+  return { ready, reason: ready ? '' : '聊天历史加载结果未确认' };
+}
 function sessionIdFromUrl(href) {
   try { const u = new URL(href); return u.protocol === 'https:' && u.hostname === 'i.zhaopin.com' && /^\/im\/?$/.test(u.pathname)
     ? u.searchParams.get('sessionId') || u.searchParams.get('sessionid') || '' : ''; } catch { return ''; }
@@ -20,6 +29,7 @@ function sessionIdFromUrl(href) {
 function readZhaopinChat(doc, href, job = {}, expectedSessionId = '') {
   const sessionId = sessionIdFromUrl(href), fail = reason => ({ ready: false, sessionId, reason });
   if (!sessionId || (expectedSessionId && sessionId !== expectedSessionId)) return fail('聊天会话链接未确认或已变化');
+  const history = readZhaopinHistory(doc); if (!history.ready) return fail(history.reason);
   const headers = nodes(doc, '.im-chat-header'), selected = nodes(doc, '.im-session-item.is-active');
   if (headers.length !== 1 || selected.length !== 1) return fail('未找到唯一的当前会话');
   const header = headers[0], entry = selected[0];
@@ -47,7 +57,8 @@ function readZhaopinDeliveryState(target, greeting = '', defaultGreeting = '') {
     const body = normalize(text(bubble.querySelector('.im-message__bubble-inner') || bubble));
     if (!body) continue;
     const row = bubble.closest('.im-message') || bubble.parentElement;
-    if (row?.matches('.im-message--tip, .im-message--image, .im-message--custom')) continue;
+    if (row?.matches('.im-message--tip')) continue;
+    if (bubble.classList.contains('im-message__bubble--me') && row?.matches('.im-message--image, .im-message--custom')) continue;
     const state = row?.querySelector('.im-message__send-state');
     const unconfirmed = !!row?.querySelector('.im-message__fail-btn') || (!!state && !/^(已发送|发送成功)$/.test(normalize(text(state))));
     if (bubble.classList.contains('im-message__bubble--me')) {
@@ -60,4 +71,4 @@ function readZhaopinDeliveryState(target, greeting = '', defaultGreeting = '') {
   const buttons = nodes(target.panel, 'button.im-sender__send-btn').filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && normalize(text(el)) === '发送');
   return { outgoing, incoming, matching, nonDefaultOutgoing, editorText: String(target.editor.value || '').trim(), sendButton: buttons.length === 1 ? buttons[0] : null };
 }
-module.exports = { readZhaopinChat, readZhaopinDeliveryState, sessionIdFromUrl };
+module.exports = { readZhaopinChat, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl };

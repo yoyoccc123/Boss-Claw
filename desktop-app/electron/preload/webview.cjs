@@ -24,7 +24,7 @@ const { ipcRenderer } = require('electron');
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
 const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
-const { readZhaopinChat, readZhaopinDeliveryState, sessionIdFromUrl } = require('./zhaopin-im.cjs');
+const { readZhaopinChat, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl } = require('./zhaopin-im.cjs');
 const OFFICE = require('./office-address.cjs');
 const COMPANY = require('./company-size.cjs');
 const { readOfficeAddress } = require('./office-address-reader.cjs');
@@ -2523,7 +2523,7 @@ function pageStatusData() {
     readyState: String(document.readyState || ''),
     bodyLen: bodyText.length,
     applyBlock: PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null,
-    zhaopinChatReady: PLATFORM === 'zhaopin' && !!sessionIdFromUrl(location.href) && all('textarea.im-sender__input').some(el => visible(el) && !el.disabled),
+    zhaopinChatReady: PLATFORM === 'zhaopin' && !!sessionIdFromUrl(location.href) && readZhaopinHistory(document).ready && all('textarea.im-sender__input').some(el => visible(el) && !el.disabled),
     cards,
     counts,
     listRootCls: listRoot ? String(listRoot.className || '').slice(0, 120) : '',

@@ -19,7 +19,7 @@ const helper=readFileSync(join(root,'electron/preload/zhaopin-im.cjs'),'utf8'), 
 const job={platform:'zhaopin',company:'测试科技有限公司',title:'Python开发实习生 【 广州-海珠区 】',url:'https://www.zhaopin.com/jobdetail/ZL000000000J00000000000.htm'};
 const greeting='有Python脚本维护经验，熟悉接口数据处理，希望了解贵公司岗位。', platformDefault='您好，我对这个职位很感兴趣，想进一步了解一下。';
 const message=(body,{me=true,status='success',extra=''}={})=>`<div class="im-message ${extra}"><div class="im-message__bubble ${me?'im-message__bubble--me':''}"><div class="im-message__bubble-inner">${body}</div></div>${status==='sending'?'<div class="im-message__send-state">发送中</div>':status==='fail'?'<div class="im-message__send-state"><button class="im-message__fail-btn" aria-label="发送失败，点击重发"></button></div>':me?'<div class="im-message__receipt">送达</div>':''}</div>`;
-const html=(history='',alter='')=>`<div class="im-session-item is-active"><span class="im-session-item__name">测试招聘者</span><span class="im-session-item__company-name">测试科技有限公司</span><span class="im-session-item__job">Python开发实习生</span></div><div class="im-main-panel"><div class="im-chat-header"><span class="im-chat-header__name">测试招聘者</span><span class="im-chat-header__meta-text">测试科技有限公司</span><span class="im-chat-header__meta-text">招聘经理</span><span class="im-chat-header__job-title">Python开发实习生</span></div><div class="im-main-panel__timeline">${history}</div><textarea class="im-sender__input" placeholder="从这里开启对话…"></textarea><button class="im-sender__send-btn">发送</button></div>${alter}`;
+const html=(history='',alter='')=>`<div class="im-session-item is-active"><span class="im-session-item__name">测试招聘者</span><span class="im-session-item__company-name">测试科技有限公司</span><span class="im-session-item__job">Python开发实习生</span></div><div class="im-main-panel"><div class="im-chat-header"><span class="im-chat-header__name">测试招聘者</span><span class="im-chat-header__meta-text">测试科技有限公司</span><span class="im-chat-header__meta-text">招聘经理</span><span class="im-chat-header__job-title">Python开发实习生</span></div><div class="im-main-panel__timeline">${history||'<div class="im-main-panel__tip">暂无消息，打个招呼吧</div>'}</div><textarea class="im-sender__input" placeholder="从这里开启对话…"></textarea><button class="im-sender__send-btn">发送</button></div>${alter}`;
 const base={html:html(message(platformDefault)),defaultGreeting:platformDefault,stage:'success',sends:1};
 const cases=[
   {...base,name:'平台默认句后补发工作台文本'},
@@ -56,6 +56,12 @@ const cases=[
   {...base,name:'缺少继续沟通不再次投简历',open:true,html:'<button>立即投递</button>',stage:'failed',sends:0},
   {...base,name:'打开会话前验证不点按钮',open:true,block:true,stage:'risk',sends:0},
   {...base,name:'打开会话前空招呼语不点按钮',open:true,short:true,stage:'failed',sends:0},
+  {...base,name:'首次历史加载中不能填发',html:html('<div class="im-main-panel__tip">消息加载中…</div>'),stage:'failed',sends:0},
+  {...base,name:'历史读取失败不能当空会话',html:html('<div class="im-main-panel__tip">读取失败 <a>重试</a></div>'),stage:'failed',sends:0},
+  {...base,name:'加载旧历史时不漏去重',html:html(message(platformDefault)+'<div class="im-main-panel__history-tip is-loading">加载中…</div>'),stage:'failed',sends:0},
+  {...base,name:'隐藏历史加载提示不阻断',html:html(message(platformDefault)+'<div style="display:none"><div class="im-main-panel__tip">消息加载中…</div></div>')},
+  {...base,name:'准备后重新加载历史停止发送',historyAfterPrepare:true,stage:'failed',sends:0},
+  {...base,name:'已有HR面试卡片不再首次招呼',html:html(message('面试邀请',{me:false,extra:'im-message--custom'})),stage:'skip',sends:0},
 ];
 const names=['visible','textOf','findPlatformAction','firstVisible','zhaopinChatStep'];
 const script=c=>`(async()=>{const c=${JSON.stringify(c)},greeting=${JSON.stringify(greeting)};
@@ -70,7 +76,7 @@ ${names.map(n=>preload.functions.get(n)).join('\n')}
 ${c.before||''}
 const args={seq:'test',job:c.job||${JSON.stringify(job)},sessionId:c.sessionId||'target',greeting:c.short?'':greeting,defaultGreeting:c.defaultGreeting};
 let result=await zhaopinChatStep({...args,action:c.open?'open':'prepare'}),replayed;
-if(result.stage==='prepared'){if(c.changeAfterPrepare)location.href='https://i.zhaopin.com/im?sessionId=other';const send={...args,action:'send',token:result.token};result=await zhaopinChatStep(send);if(c.replay)replayed=await zhaopinChatStep(send);}
+if(result.stage==='prepared'){if(c.changeAfterPrepare)location.href='https://i.zhaopin.com/im?sessionId=other';if(c.historyAfterPrepare)document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend','<div class="im-main-panel__history-tip is-loading">加载中…</div>');const send={...args,action:'send',token:result.token};result=await zhaopinChatStep(send);if(c.replay)replayed=await zhaopinChatStep(send);}
 if(c.open)await new Promise(resolve=>setTimeout(resolve,10));
 return {name:c.name,result,sends,replayed,editor:document.querySelector('textarea')?.value};})()`;
 cases.forEach(c=>new vm.Script(script(c)));
