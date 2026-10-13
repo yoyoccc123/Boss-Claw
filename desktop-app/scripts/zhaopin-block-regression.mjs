@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 const require=createRequire(import.meta.url),root=dirname(dirname(fileURLToPath(import.meta.url))),work=mkdtempSync(join(tmpdir(),'bossclaw-zhaopin-block-'));
 const A=require(join(root,'electron/preload/platform-adapters.cjs'));
-const {sessionIdFromUrl}=require(join(root,'electron/preload/zhaopin-im.cjs'));
+const imHelper=readFileSync(join(root,'electron/preload/zhaopin-im.cjs'),'utf8');
 function parse(file) {
   const source=ts.createSourceFile(file,readFileSync(join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions=new Map(),vars=new Map();
   const visit=node=>{if(ts.isFunctionDeclaration(node)&&node.name)functions.set(node.name.text,node.getText(source));if(ts.isVariableDeclaration(node)&&ts.isIdentifier(node.name)&&node.initializer)vars.set(node.name.text,node.initializer.getText(source));ts.forEachChild(node,visit);};visit(source);return{functions,vars};
@@ -59,7 +59,7 @@ const readZhaopinPageBlock=(()=>{const module={exports:{}};${helper};return modu
 const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};ADAPTERS.labelHit=${A.labelHit.toString()};ADAPTERS.labelExactHit=${A.labelExactHit.toString()};ADAPTERS.normLabelText=${A.normLabelText.toString()};ADAPTERS.classifyBlockedText=${A.classifyBlockedText.toString()};
 const normLabelText=ADAPTERS.normLabelText,labelHit=ADAPTERS.labelHit,PLATFORM_APPLY_SPEC=ADAPTERS.PLATFORM_APPLY_SPEC;
 const PLATFORM='zhaopin',location={href:fixture.href||window.location.href},PLATFORM_NORM=ADAPTERS.normLabelText;
-const sessionIdFromUrl=${sessionIdFromUrl.toString()};
+const {readZhaopinChatReady}=(()=>{const module={exports:{}};${imHelper};return module.exports;})();
 const all=(s,scope=document)=>Array.from(scope.querySelectorAll(s)),events=[],clicks=[];
 const PLATFORM_LIST_SELECTORS={zhaopin:[]},LINK_SELECTOR='a',LIST_ROOT_SELECTORS=['.fixture-list'],$=s=>document.querySelector(s),collectCards=()=>[],loginWallDetected=()=>false;
 const notify=(channel,payload)=>events.push({channel,payload});

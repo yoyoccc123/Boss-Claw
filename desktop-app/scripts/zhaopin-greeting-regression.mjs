@@ -22,11 +22,13 @@ const message=(body,{me=true,status='success',extra=''}={})=>`<div class="im-mes
 const html=(history='',alter='')=>`<div class="im-session-item is-active"><span class="im-session-item__name">测试招聘者</span><span class="im-session-item__company-name">测试科技有限公司</span><span class="im-session-item__job">Python开发实习生</span></div><div class="im-main-panel"><div class="im-chat-header"><span class="im-chat-header__name">测试招聘者</span><span class="im-chat-header__meta-text">测试科技有限公司</span><span class="im-chat-header__meta-text">招聘经理</span><span class="im-chat-header__job-title">Python开发实习生</span></div><div class="im-main-panel__timeline">${history||'<div class="im-main-panel__tip">暂无消息，打个招呼吧</div>'}</div><textarea class="im-sender__input" placeholder="从这里开启对话…"></textarea><button class="im-sender__send-btn">发送</button></div>${alter}`;
 const base={html:html(message(platformDefault)),defaultGreeting:platformDefault,stage:'success',sends:1};
 const detail = url => `<a class="im-chat-header__detail" href="${url}">查看详情</a>`;
-const linked = content => content.replace('</div><div class="im-main-panel__timeline">', `${detail(job.url.replace('.htm','.html'))}</div><div class="im-main-panel__timeline">`);
+const linked = content => content.includes('im-chat-header__detail') ? content : content.replace('</div><div class="im-main-panel__timeline">', `${detail(job.url.replace('.htm','.html'))}</div><div class="im-main-panel__timeline">`);
 const reportedDefault='您好，我对该职位很感兴趣，请您看下我的简历，如果合适可以随时联系我，谢谢。';
 const reportedLayout=linked(html(message(reportedDefault)+message('示例简历.pdf',{extra:'im-message--custom'})))
   .replaceAll('测试科技有限公司','广东测试知识产权').replaceAll('Python开发实习生','AI产品经理')
   .replace('<span class="im-chat-header__job-title">AI产品经理</span>','<div class="im-chat-header__job"><span class="im-chat-header__job-title" title="AI产品经理">AI产品经理</span><span class="im-chat-header__salary">1.5-2万·13薪</span></div>');
+const branchLayout=reportedLayout.replaceAll('广东测试知识产权','海湾环球商业服务(广东)').replaceAll('AI产品经理','AI Engineer');
+const branchJob={...job,title:'AI Engineer',company:'海湾环球商业服务(广东)有限公司深圳分公司'};
 const cases=[
   {...base,name:'平台默认句后补发工作台文本'},
   {...base,name:'无默认消息也可发送',html:html()},
@@ -38,8 +40,8 @@ const cases=[
   {...base,name:'不能把未知默认句当已确认默认',html:html(message('未能确认来源的历史文案')),defaultGreeting:'',stage:'skip',sends:0},
   {...base,name:'同文案还在发送不能再发',html:html(message(greeting,{status:'sending'})),stage:'skip',sends:0},
   {...base,name:'已有草稿保留',before:"document.querySelector('textarea').value='用户的草稿';",stage:'failed',sends:0},
-  {...base,name:'错误公司不发送',job:{...job,company:'另一家公司'},stage:'failed',sends:0},
-  {...base,name:'错误岗位不发送',job:{...job,title:'测试工程师'},stage:'failed',sends:0},
+  {...base,name:'同岗位编号不受采集公司名差异影响',job:{...job,company:'采集到的其他公司名'}},
+  {...base,name:'同岗位编号不受采集旧标题影响',job:{...job,title:'采集到的旧岗位标题'}},
   {...base,name:'错误HR不发送',job:{...job,recruiterName:'另一个人'},stage:'failed',sends:0},
   {...base,name:'错误session不发送',sessionId:'other',stage:'failed',sends:0},
   {...base,name:'多个活跃会话不发送',html:html(message(platformDefault),'<div class="im-session-item is-active">另一会话</div>'),stage:'failed',sends:0},
@@ -70,17 +72,34 @@ const cases=[
   {...base,name:'已有HR面试卡片不再首次招呼',html:html(message('面试邀请',{me:false,extra:'im-message--custom'})),stage:'skip',sends:0},
   {...base,name:'截图中的公司简称和默认招呼',html:reportedLayout,job:{...job,title:'AI产品经理',company:'广东测试知识产权有限公司'},defaultGreeting:''},
   {...base,name:'法律后缀差异需同岗位链接',html:linked(html(message(platformDefault))).replaceAll('测试科技有限公司','测试科技')},
-  {...base,name:'简称没有岗位链接仍停止',html:html(message(platformDefault)).replaceAll('测试科技有限公司','测试科技'),stage:'failed',sends:0},
+  {...base,name:'简称没有岗位链接仍停止',html:html(message(platformDefault)).replaceAll('测试科技有限公司','测试科技'),noDetails:true,stage:'failed',sends:0},
   {...base,name:'同名岗位但编号不同停止',html:linked(html(message(platformDefault))).replaceAll('ZL000000000J00000000000.html','ZL111111111J11111111111.html'),stage:'failed',sends:0},
   {...base,name:'详情链接域名错误停止',html:linked(html(message(platformDefault))).replace('https://www.zhaopin.com/jobdetail','https://evil.invalid/jobdetail'),stage:'failed',sends:0},
-  {...base,name:'不同公司不能用编号抹平',html:linked(html(message(platformDefault))).replaceAll('测试科技有限公司','另一家公司'),stage:'failed',sends:0},
+  {...base,name:'公司展示变化以同岗位编号确认',html:linked(html(message(platformDefault))).replaceAll('测试科技有限公司','公司展示名称')},
   {...base,name:'显示简称列表全称且同岗位',html:linked(html(message(platformDefault))).replace('<span class="im-chat-header__meta-text">测试科技有限公司</span>','<span class="im-chat-header__meta-text">测试科技</span>')},
   {...base,name:'默认文案后附实际交流不能忽略',html:html(message(reportedDefault+'我已确认面试时间。')),defaultGreeting:'',stage:'skip',sends:0},
   {...base,name:'发送前详情编号变化停止',html:linked(html(message(platformDefault))),detailAfterPrepare:true,stage:'failed',sends:0},
+  {...base,name:'分公司全称与聊天母公司简称同岗位',html:branchLayout,job:branchJob,defaultGreeting:''},
+  {...base,name:'同岗位公司全半角括号等价',html:branchLayout.replaceAll('(广东)','（广东）'),job:branchJob,defaultGreeting:''},
+  {...base,name:'列表分公司全称与聊天母公司简称',html:branchLayout.replace('<span class="im-session-item__company-name">海湾环球商业服务(广东)</span>',`<span class="im-session-item__company-name">${branchJob.company}</span>`),job:branchJob,defaultGreeting:''},
+  {...base,name:'分公司别名没有岗位编号不发送',html:branchLayout.replace(detail(job.url.replace('.htm','.html')),''),noDetails:true,job:branchJob,stage:'failed',sends:0},
+  {...base,name:'分公司同名但岗位编号不同不发送',html:branchLayout.replaceAll('ZL000000000J00000000000.html','ZL111111111J11111111111.html'),job:branchJob,stage:'failed',sends:0},
+  {...base,name:'同岗位编号不依赖母公司展示名',html:branchLayout.replaceAll('海湾环球商业服务','其他公司展示名'),job:branchJob,defaultGreeting:''},
+  {...base,name:'同岗位编号不依赖展示公司地区',html:branchLayout.replaceAll('(广东)','(广西)'),job:branchJob,defaultGreeting:''},
+  {...base,name:'同岗位编号不依赖公司后缀写法',html:branchLayout,job:{...branchJob,company:branchJob.company+'其他'},defaultGreeting:''},
+  {...base,name:'公司全称精确相等也不能替代岗位编号',html:branchLayout.replaceAll('海湾环球商业服务(广东)',branchJob.company).replace(detail(job.url.replace('.htm','.html')),''),noDetails:true,job:branchJob,stage:'failed',sends:0},
+  {...base,name:'同岗位编号可接受目标旧标题',html:branchLayout,job:{...branchJob,title:'旧岗位名称'},defaultGreeting:''},
+  {...base,name:'同岗位编号不要求公司标题采集字段',job:{...job,company:'',title:''}},
+  {...base,name:'列表公司显示不同仍以岗位编号为准',html:linked(html(message(platformDefault))).replace('<span class="im-session-item__company-name">测试科技有限公司</span>','<span class="im-session-item__company-name">列表展示简称</span>')},
+  {...base,name:'列表岗位与聊天岗位尚未同步不发送',html:linked(html(message(platformDefault))).replace('<span class="im-session-item__job">Python开发实习生</span>','<span class="im-session-item__job">其他岗位</span>'),stage:'failed',sends:0},
+  {...base,name:'列表招聘方与聊天招聘方尚未同步不发送',html:linked(html(message(platformDefault))).replace('<span class="im-session-item__name">测试招聘者</span>','<span class="im-session-item__name">另一招聘者</span>'),stage:'failed',sends:0},
+  {...base,name:'多个聊天详情编号不发送',html:linked(html(message(platformDefault))).replace('</div><div class="im-main-panel__timeline">',`${detail(job.url)}</div><div class="im-main-panel__timeline">`),stage:'failed',sends:0},
+  {...base,name:'聊天详情编号隐藏不使用公司名兜底',before:"document.querySelector('.im-chat-header__detail').style.display='none';",stage:'failed',sends:0},
+  {...base,name:'详情链接延迟渲染先等待后发送',noDetails:true,delayedDetail:true},
 ];
 const names=['visible','textOf','findPlatformAction','firstVisible','zhaopinChatStep'];
 const script=c=>`(async()=>{const c=${JSON.stringify(c)},greeting=${JSON.stringify(greeting)};
-const {readZhaopinChat,readZhaopinDeliveryState,sessionIdFromUrl}=(()=>{const module={exports:{}};${helper};return module.exports;})();
+const {readZhaopinChat,readZhaopinChatReady,readZhaopinDeliveryState,sessionIdFromUrl}=(()=>{const module={exports:{}};${helper};return module.exports;})();
 const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};ADAPTERS.labelHit=${A.labelHit.toString()};ADAPTERS.normLabelText=${A.normLabelText.toString()};const normLabelText=ADAPTERS.normLabelText;
 const location={href:c.open?${JSON.stringify(job.url)}:'https://i.zhaopin.com/im?sessionId=target'},PLATFORM_NORM=ADAPTERS.normLabelText;
 const all=(s,r=document)=>[...r.querySelectorAll(s)],readZhaopinPageBlock=()=>c.block?{kind:'risk',message:'人工验证'}:null;
@@ -89,20 +108,27 @@ const trustedInput=async(action,value)=>{if(c.inputFail)return{ok:false};documen
 const clickElement=async el=>{sends++;if(c.open)return;document.querySelector('textarea').value='';if(!c.noBubble){document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend',${JSON.stringify(message(greeting))});const row=document.querySelector('.im-main-panel__timeline').lastElementChild;if(c.sendStatus==='sending'||c.sendStatus==='fail'){row.querySelector('.im-message__receipt').remove();row.insertAdjacentHTML('beforeend',c.sendStatus==='sending'?'<div class="im-message__send-state">发送中</div>':'<div class="im-message__send-state"><button class="im-message__fail-btn"></button></div>');}if(c.noReceipt)row.querySelector('.im-message__receipt').remove();}};
 ${names.map(n=>preload.functions.get(n)).join('\n')}
 ${c.before||''}
+const readyBefore=readZhaopinChatReady(document,location.href);
+if(c.delayedDetail)document.querySelector('.im-chat-header').insertAdjacentHTML('beforeend',${JSON.stringify(detail(job.url.replace('.htm','.html')))});
+const readyAfter=readZhaopinChatReady(document,location.href);
 const args={seq:'test',job:c.job||${JSON.stringify(job)},sessionId:c.sessionId||'target',greeting:c.short?'':greeting,defaultGreeting:c.defaultGreeting};
 let result=await zhaopinChatStep({...args,action:c.open?'open':'prepare'}),replayed;
 if(result.stage==='prepared'){if(c.changeAfterPrepare)location.href='https://i.zhaopin.com/im?sessionId=other';if(c.detailAfterPrepare)document.querySelector('.im-chat-header__detail').href='https://www.zhaopin.com/jobdetail/ZL111111111J11111111111.html';if(c.historyAfterPrepare)document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend','<div class="im-main-panel__history-tip is-loading">加载中…</div>');const send={...args,action:'send',token:result.token};result=await zhaopinChatStep(send);if(c.replay)replayed=await zhaopinChatStep(send);}
 if(c.open)await new Promise(resolve=>setTimeout(resolve,10));
-return {name:c.name,result,sends,replayed,editor:document.querySelector('textarea')?.value};})()`;
+return {name:c.name,result,sends,replayed,readyBefore,readyAfter,editor:document.querySelector('textarea')?.value};})()`;
 cases.forEach(c=>new vm.Script(script(c)));
-cases.forEach((c,i)=>writeFileSync(join(work,'fixture-'+i+'.html'),'<meta charset="utf-8"><style>body{font:16px sans-serif}textarea{width:400px;height:70px}button{height:30px}div,span{min-height:20px}</style>'+c.html));
+cases.forEach((c,i)=>writeFileSync(join(work,'fixture-'+i+'.html'),'<meta charset="utf-8"><style>body{font:16px sans-serif}textarea{width:400px;height:70px}button{height:30px}div,span{min-height:20px}</style>'+(c.open||c.noDetails?c.html:linked(c.html))));
 const report=join(work,'report.json'),entry=join(work,'main.cjs');
 writeFileSync(entry,`const {app,BrowserWindow}=require('electron'),fs=require('fs');app.setPath('userData',${JSON.stringify(join(work,'profile'))});app.setPath('sessionData',${JSON.stringify(join(work,'profile'))});app.whenReady().then(async()=>{const w=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true}});w.webContents.session.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(_,cb)=>cb({cancel:true}));let code=0;try{const reports=[],scripts=${JSON.stringify(cases.map(script))};for(let i=0;i<scripts.length;i++){await w.loadFile(${JSON.stringify(work)}+'/fixture-'+i+'.html');reports.push(await w.webContents.executeJavaScript(scripts[i]));}fs.writeFileSync(${JSON.stringify(report)},JSON.stringify(reports));}catch(e){fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({error:e.stack}));code=1;}finally{w.destroy();app.exit(code);}});`);
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 const run=spawnSync(process.env.BOSSCLAW_ELECTRON||require('electron'),[entry],{env,windowsHide:true,timeout:45000,encoding:'utf8'});
 assert.equal(run.status,0,run.error?.message||run.stderr);
 const results=JSON.parse(readFileSync(report,'utf8'));assert.ok(!results.error,results.error);
-for(let i=0;i<cases.length;i++){const c=cases[i],r=results[i];assert.equal(r.result.stage,c.stage,c.name);assert.equal(r.sends,c.sends,c.name);if(!c.open&&r.result.stage==='failed')assert.equal(r.result.sendAttempted,r.sends>0,c.name+' send boundary');if(c.replay)assert.equal(r.replayed.stage,'failed');}
+for(let i=0;i<cases.length;i++){const c=cases[i],r=results[i];assert.equal(r.result.stage,c.stage,c.name);assert.equal(r.sends,c.sends,c.name);if(!c.open&&r.result.stage==='failed')assert.equal(r.result.sendAttempted,r.sends>0,c.name+' send boundary');if(c.replay)assert.equal(r.replayed.stage,'failed');
+  if(c.name==='分公司同名但岗位编号不同不发送')assert.match(r.result.error,/聊天岗位编号与目标不一致.*目标：ZL000.*当前：ZL111/);
+  if(c.noDetails){assert.equal(r.readyBefore,false);if(c.delayedDetail)assert.equal(r.readyAfter,true);else assert.match(r.result.error,/岗位编号尚未确认/);}
+  if(['平台默认句后补发工作台文本','分公司全称与聊天母公司简称同岗位'].includes(c.name))assert.equal(r.readyBefore,true);
+}
 console.log(`PASS Zhaopin greeting: ${cases.length} isolated official-template DOM cases; ${report}`);
 
 // Host navigation and Stop boundaries: run actual production BrowserView function.
