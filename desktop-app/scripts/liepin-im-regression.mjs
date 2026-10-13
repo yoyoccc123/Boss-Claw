@@ -18,7 +18,7 @@ const section = (start, end) => source.slice(source.indexOf(start), source.index
 const injected = [
   section('function visible(el)', '// 原始文本行'),
   section('const all = (sel', 'async function waitFor'),
-  section('const PLATFORM_NORM', '// ===== 智联「继续沟通」入口'),
+  section('const PLATFORM_NORM', '// 智联原生「继续沟通」入口'),
   section('async function platformApply', '// platform-apply：非 BOSS'),
   `const normLabelText = ${A.normLabelText.toString()};`,
   `const ADAPTERS = {labelHit: ${A.labelHit.toString()}, labelExactHit: ${A.labelExactHit.toString()}, LOGIN_WALL_TEXT_RE: ${A.LOGIN_WALL_TEXT_RE}};`,

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 const require=createRequire(import.meta.url),root=dirname(dirname(fileURLToPath(import.meta.url))),work=mkdtempSync(join(tmpdir(),'bossclaw-zhaopin-block-'));
 const A=require(join(root,'electron/preload/platform-adapters.cjs'));
+const {sessionIdFromUrl}=require(join(root,'electron/preload/zhaopin-im.cjs'));
 function parse(file) {
   const source=ts.createSourceFile(file,readFileSync(join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions=new Map(),vars=new Map();
   const visit=node=>{if(ts.isFunctionDeclaration(node)&&node.name)functions.set(node.name.text,node.getText(source));if(ts.isVariableDeclaration(node)&&ts.isIdentifier(node.name)&&node.initializer)vars.set(node.name.text,node.initializer.getText(source));ts.forEachChild(node,visit);};visit(source);return{functions,vars};
@@ -52,12 +53,13 @@ const cases=[
   {name:'按钮点击结果不明保留',html:normal,stage:'failed',review:true,clicks:1},
 ];
 const helper=readFileSync(join(root,'electron/preload/zhaopin-page-block.cjs'),'utf8');
-const names=['visible','textOf','findPlatformAction','externalApplyDetected','firstVisible','zhaopinContinueChat','platformApplyOnce','pageStatusData'];names.forEach(n=>assert.ok(preload.functions.has(n),n));
+const names=['visible','textOf','findPlatformAction','externalApplyDetected','firstVisible','platformApplyOnce','pageStatusData'];names.forEach(n=>assert.ok(preload.functions.has(n),n));
 const fixtureCode=fixture=>`(async()=>{const fixture=${JSON.stringify(fixture)};
 const readZhaopinPageBlock=(()=>{const module={exports:{}};${helper};return module.exports.readZhaopinPageBlock;})();
 const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};ADAPTERS.labelHit=${A.labelHit.toString()};ADAPTERS.labelExactHit=${A.labelExactHit.toString()};ADAPTERS.normLabelText=${A.normLabelText.toString()};ADAPTERS.classifyBlockedText=${A.classifyBlockedText.toString()};
 const normLabelText=ADAPTERS.normLabelText,labelHit=ADAPTERS.labelHit,PLATFORM_APPLY_SPEC=ADAPTERS.PLATFORM_APPLY_SPEC;
 const PLATFORM='zhaopin',location={href:fixture.href||window.location.href},PLATFORM_NORM=ADAPTERS.normLabelText;
+const sessionIdFromUrl=${sessionIdFromUrl.toString()};
 const all=(s,scope=document)=>Array.from(scope.querySelectorAll(s)),events=[],clicks=[];
 const PLATFORM_LIST_SELECTORS={zhaopin:[]},LINK_SELECTOR='a',LIST_ROOT_SELECTORS=['.fixture-list'],$=s=>document.querySelector(s),collectCards=()=>[],loginWallDetected=()=>false;
 const notify=(channel,payload)=>events.push({channel,payload});
@@ -83,7 +85,7 @@ const bundle=join(work,'safety.cjs');await build({stdin:{contents:"export * from
 const safety=require(bundle);
 let hostChecks=0;
 for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId:'verify'},{ok:false,stage:'login',message:'扫码登录',tabId:'verify'},{ok:false,stage:'failed',needsReview:true,error:'入口无法确认',tabId:'verify'}]) {
-  const item={id:'actual-job',status:'approved_queue',job:{platform:'zhaopin',title:'测试岗位'},deliveryGreeting:'测试文案'},following={id:'next-job',status:'approved_queue'};
+  const item={id:'actual-job',status:'approved_queue',job:{platform:'zhaopin',title:'测试岗位'},deliveryGreeting:'测试岗位用的完整招呼语'},following={id:'next-job',status:'approved_queue'};
   const pending=[item,following],closed=[],pauses=[],state={autoAssist:true};let scheduled=0;
   const c={Promise,useCallback:fn=>fn,activeId:null,deliveryEpochRef:{current:0},deliverySubmittedRef:{current:false},
     useAppStore:{getState:()=>state},useDataStore:{getState:()=>({pending})},useSettingsStore:{getState:()=>({config:{}})},

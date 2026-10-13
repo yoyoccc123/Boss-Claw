@@ -25,7 +25,7 @@ const subscription=wb.effects.find(s=>s.includes('useAppStore.subscribe')&&s.inc
 assert.ok(subscription);
 async function environment(platform='zhaopin') {
   let listener;
-  const item={id:'one',status:'approved_queue',job:{platform,title:'测试岗位',url:'https://example.invalid/jobdetail/one'},deliveryGreeting:'测试招呼文字',analysis:{}};
+  const item={id:'one',status:'approved_queue',job:{platform,title:'测试岗位',url:'https://example.invalid/jobdetail/one'},deliveryGreeting:'测试岗位需要发送的招呼文字',analysis:{}};
   const pending=[item],state={autoAssist:true};
   const gap=deferred(),sent=[],delivered=[],released=[],closed=[];
   const c={Promise,Date,setTimeout,clearTimeout,console,

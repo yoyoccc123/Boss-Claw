@@ -296,6 +296,10 @@ export function camoufoxChat(
     replyText?: string;
   }
 ): Promise<CamoufoxChatResult> {
+  if (opts?.platform === 'zhaopin' || opts?.platform === 'job51') {
+    return Promise.resolve({ ok: false, sent: false, code: 405, needsReview: true,
+      error: opts.platform === 'zhaopin' ? '智联招呼语请通过工作台发送；隐身沟通通道不会再次提交简历' : '前程无忧隐身通道仅支持简历投递，不能发送聊天文案' });
+  }
   return camoufoxCall<CamoufoxChatResult>('chat', {
     jobId,
     greeting,

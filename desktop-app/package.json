@@ -1,6 +1,6 @@
 {
   "name": "bossclaw-desktop",
-  "version": "2.5.29",
+  "version": "2.5.30",
   "description": "BossClaw —— 面向求职者的本地 AI 投递助手",
   "private": true,
   "author": "YanQuan",
@@ -36,7 +36,8 @@
     "test:resume-variants": "node scripts/resume-variants-regression.mjs",
     "test:zhaopin-link": "node scripts/zhaopin-link-regression.mjs",
     "test:delivery-stop": "node scripts/delivery-stop-regression.mjs",
-    "test:zhaopin-block": "node scripts/zhaopin-block-regression.mjs"
+    "test:zhaopin-block": "node scripts/zhaopin-block-regression.mjs",
+    "test:zhaopin-greeting": "node scripts/zhaopin-greeting-regression.mjs"
   },
   "build": {
     "appId": "com.bossclaw.desktop",
