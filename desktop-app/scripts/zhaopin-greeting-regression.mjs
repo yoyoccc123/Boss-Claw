@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 const require=createRequire(import.meta.url), root=dirname(dirname(fileURLToPath(import.meta.url))), work=mkdtempSync(join(tmpdir(),'bossclaw-zhaopin-greeting-'));
 function parse(file) {
   const source=ts.createSourceFile(file,readFileSync(join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions=new Map(),vars=new Map();
@@ -153,7 +154,7 @@ for(let i=0;i<cases.length;i++){const c=cases[i],r=results[i];assert.equal(r.res
 }
 console.log(`PASS Zhaopin greeting: ${cases.length} isolated official-template DOM cases; ${report}`);
 
-// Actual main-process provenance factory: only a registered guest's armed native window.open binds.
+// Actual main-process provenance factory, including page-initiated same-frame navigation wiring.
 const {createZhaopinNativeChatBindings}=require(join(root,'electron/zhaopin-native-chat.cjs'));
 let nativeChecks=0;
 function nativeCase(test){let clock=1000,next=0;const bindings=createZhaopinNativeChatBindings({now:()=>clock,nonce:()=>String(++next)}),wc={id:1,url:job.url,getURL(){return this.url;}},other={id:2,url:job.url,getURL(){return this.url;}};bindings.attachGuest(wc);const arm=()=>bindings.arm(wc,job.url),chat='https://i.zhaopin.com/im?sessionId=shared',verify=token=>bindings.verify(wc,{jobUrl:job.url,nativeChatToken:token,expectedSessionId:'shared'}),capture=()=>{assert.equal(bindings.captureWindowOpen(wc,chat),true);wc.url=chat;};test({bindings,wc,other,arm,chat,verify,capture,setClock:n=>clock=n});nativeChecks++;}
@@ -175,6 +176,17 @@ nativeCase(({arm,capture,verify,setClock})=>{const a=arm();capture();setClock(92
 nativeCase(({wc,arm,capture,verify})=>{const a=arm();capture();wc.url=job.url;arm();assert.equal(verify(a.nativeChatToken).ok,false);});
 nativeCase(({bindings,wc,arm,capture,verify})=>{const a=arm();capture();bindings.releaseGuest(wc.id);assert.equal(verify(a.nativeChatToken).ok,false);});
 nativeCase(({bindings,wc,arm,capture,verify})=>{const a=arm();assert.equal(bindings.captureWindowOpen(wc,'about:blank'),false);capture();assert.equal(verify(a.nativeChatToken).ok,true);});
+for (const mode of ['event-url','legacy-url','subframe','released','duplicate-attach']) {
+  const bindings=createZhaopinNativeChatBindings(), wc=Object.assign(new EventEmitter(),{id:1,url:job.url,getURL(){return this.url;}});
+  bindings.attachGuest(wc);if(mode==='duplicate-attach')bindings.attachGuest(wc);
+  assert.equal(wc.listenerCount('will-navigate'),1);
+  const armed=bindings.arm(wc,job.url), chat='https://i.zhaopin.com/im?sessionId=shared';
+  if(mode==='released'){bindings.releaseGuest(wc.id);assert.equal(wc.listenerCount('will-navigate'),0);}
+  wc.emit('will-navigate',mode==='legacy-url'?{}:{url:chat,isMainFrame:mode!=='subframe'},chat);
+  wc.url=chat;
+  assert.equal(bindings.verify(wc,{jobUrl:job.url,nativeChatToken:armed.nativeChatToken,expectedSessionId:'shared'}).ok,!['subframe','released'].includes(mode));
+  nativeChecks++;
+}
 console.log(`PASS native chat binding: ${nativeChecks} production guest/origin/session/token/expiry checks.`);
 
 // Host navigation and Stop boundaries: run actual production BrowserView function.
