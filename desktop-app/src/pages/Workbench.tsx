@@ -1132,15 +1132,16 @@ export default function Workbench() {
   enrichWelfareRef.current = enrichCollectedWelfare;
 
   // ===== 统一风控处理（API 投递码 / DOM 兜底 risk 事件共用）=====
-  const handleRisk = useCallback((code: number | null | undefined, rawMessage: string) => {
+  const handleRisk = useCallback((code: number | null | undefined, rawMessage: string, candidateId?: string) => {
     const signal = classifyRiskCode(code);
     const msg = String(rawMessage || signal?.message || '检测到平台风控信号');
     const severity = signal?.severity || 'challenge';
     // 唯一权威解析：按「设置页的风控冷却（autoCooldownMinutes）」× 风险级别比例，
     // 并受该级别绝对下限约束（详见 safety.ts::resolveCooldownMs）。
     const cooldownMs = resolveCooldownMs(useSettingsStore.getState().config, signal);
-    if (activeId) {
-      updatePending(activeId, { status: 'failed', error: msg, retryable: signal?.retryable === true, riskBlocked: severity === 'banned' });
+    const targetId = candidateId || activeId;
+    if (targetId) {
+      updatePending(targetId, { status: 'failed', error: msg, retryable: signal?.retryable === true, riskBlocked: severity === 'banned', deliveryNeedsReview: severity === 'challenge' || severity === 'env' });
     }
     addLog(severity === 'banned' || severity === 'challenge' ? 'error' : 'warn', `风控拦截：${msg}`);
     setApplyStage(null);
@@ -1152,7 +1153,7 @@ export default function Workbench() {
       useSettingsStore.getState().setConfig({ pausedUntil: nextCooldownUntil(useSettingsStore.getState().config, signal) });
       pauseAssist(`${msg}。已暂停并进入退避冷却 ${Math.ceil(cooldownMs / 60000)} 分钟，之后可重新投递。`);
     } else {
-      pauseAssist(`${msg}。已暂停投递：若右侧浏览器出现安全验证，请人工完成后再点"重新投递"。`);
+      pauseAssist(`${msg}。已暂停投递并保留页面：请人工完成验证，再点该岗位的“核对后重试”。`);
     }
   }, [activeId, updatePending, addLog, recomputeStats, pauseAssist]);
 
@@ -2056,14 +2057,13 @@ export default function Workbench() {
     }
     if (res.stage === 'login') {
       // 该平台未登录：后续岗位必然同样失败 → 立即收口并暂停引擎（与采集侧 login-required 同口径，不逐个白试）
-      updatePending(candidate.id, { status: 'skipped', error: res.message || '平台未登录，已跳过该岗位' });
-      if (res.tabId) webviewApi.current?.closeTab(res.tabId);
+      updatePending(candidate.id, { status: 'failed', error: res.message || '平台要求登录，请在当前页面完成登录后再重试', deliveryNeedsReview: true, retryable: false });
       setApplyStage(null); recomputeStats();
       pauseAssist(`${res.message || '平台未登录'}。已暂停投递引擎：请在对应平台标签页完成登录后重新启动投递。`);
       return;
     }
     if (res.stage === 'risk') {
-      handleRisk(res.code, res.message || ''); // 保留标签供人工核对
+      handleRisk(res.code, res.message || '', candidate.id); // 保留标签供人工核对
       return;
     }
     const errMsg = res.error || res.message || '投递失败';
@@ -2297,7 +2297,7 @@ export default function Workbench() {
     }
     if (domResult.mode === 'risk') {
       // 保留标签供人工完成安全验证
-      handleRisk(domResult.payload?.code, domResult.payload?.message || '');
+      handleRisk(domResult.payload?.code, domResult.payload?.message || '', candidate.id);
       return;
     }
     if (domResult.mode === 'skip') {

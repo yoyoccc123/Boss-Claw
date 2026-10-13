@@ -457,7 +457,7 @@ export interface PendingItem {
   retryCount?: number;
   error?: string;
   retryable?: boolean;
-  /** 平台请求已下发但结果未确认，需核对后手动重试，不能批量重投。 */
+  /** 平台页面或投递结果未确认，需核对后手动重试，不能批量重投。 */
   deliveryNeedsReview?: boolean;
   /** 成功投递时间戳（用于单日投递上限统计） */
   sentAt?: number;

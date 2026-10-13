@@ -987,8 +987,13 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             overlay = isLoading(tabId);
             if (preloadFlag && !overlay) { start(); return; } // 快路径：宿主标记齐全，不额外探测
             const st = await pageStatus(tabId);
+            if (cancelledBeforeStart()) return;
             if (st && !st.error) {
               lastProbe = st;
+              if (st.applyBlock?.kind === 'risk' || st.applyBlock?.kind === 'login') {
+                resolve({ ok: false, stage: st.applyBlock.kind, code: st.applyBlock.kind === 'risk' ? 35 : undefined, message: st.applyBlock.message, tabId });
+                return; // 验证页可能只有 iframe、正文为零；立即保留页面交人工，不下发投递。
+              }
               // 探测有响应 ⇒ preload 已注入（比宿主标记更可靠）；文档已解析（非 loading）且正文成形
               const usable = String(st.readyState || '') !== 'loading'
                 && (Number(st.bodyLen) > 200 || Number(st.cards) > 0);
@@ -1000,6 +1005,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           resolve({
             ok: false,
             stage: 'failed',
+            needsReview: true,
             error: aliveRef.current
               ? `详情页加载超时（preload ${preloadFlag ? '就绪' : '未就绪'}，加载遮罩 ${overlay ? '未收敛' : '已隐藏'}${describeApplyProbe(lastProbe)}）`
               : '组件已卸载 / 标签页已关闭，投递探测中止',

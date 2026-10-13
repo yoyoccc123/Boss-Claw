@@ -215,9 +215,10 @@ for (const response of [{ ok: false, stage: 'failed', needsReview: true, error: 
   const currentGreeting = greeting + '这是最新修改后的招呼语。';
   const context = vm.createContext({
     claimDelivery: () => true, releaseDelivery: () => calls.released++, setApplyStage: () => {}, addLog: () => {},
-    awaitDeliveryGap: async () => {}, platformLabel: () => '猎聘',
+    awaitDeliveryGap: async () => true, platformLabel: () => '猎聘',
+    deliveryEpochRef: { current: 0 }, deliverySubmittedRef: { current: false }, canContinueDelivery: () => true,
     useDataStore: { getState: () => ({ pending: [{ id: 'test', deliveryGreeting: currentGreeting }] }) },
-    webviewApi: { current: { platformApply: async (...args) => {calls.applyArgs=args;return response;}, closeTab: () => calls.closed++ } },
+    webviewApi: { current: { platformApply: async (...args) => {calls.applyArgs=args;args[4]?.onStart();return response;}, closeTab: () => calls.closed++ } },
     useAppStore: { getState: () => ({ autoAssist: true }) },
     handleDelivered: () => calls.delivered++, updatePending: (_id, data) => calls.statuses.push(data.status),
     recomputeStats: () => {}, pauseAssist: () => calls.paused++, requestRunNext: () => calls.next++,
