@@ -2202,7 +2202,9 @@ async function scrollJobListLoadMore(processed, opts = {}) {
 // 每轮重新 collectCards()，用 cardKey 去重（processed Set），index 递增，避免持有失效 DOM。
 // 当本批卡片处理完（index 越界）时，从最后岗位滑块位置渐进下拉加载更多，直到达到 maxJobs
 // 兜底上限，或滚到列表物理底部则停止（对齐 AI-BossJob-plus autoScrollJobList 的 maxHistory=3 判定）。
+const collectNotify = notify;
 async function visualCollect(opts = {}) {
+  const notify = (channel, data) => collectNotify(channel, { ...data, seq: opts.seq });
   // 平台自检：宿主传入的 platform 与页面 hostname 判定不一致时回传诊断（以页面事实为准，不阻断）
   if (opts.platform && opts.platform !== PLATFORM) {
     notify('collect-progress', { phase: 'platform-mismatch', status: `宿主指定平台 ${opts.platform} 与页面判定 ${PLATFORM} 不一致，已按页面判定为准` });
@@ -2843,6 +2845,7 @@ function reportJdFillSummary() {
 }
 
 async function visualCollectListOnly(opts = {}) {
+  const notify = (channel, data) => collectNotify(channel, { ...data, seq: opts.seq });
   collectCtl.paused = false;
   collectCtl.stopped = false;
   collectCtl.settleMs = Math.max(400, Number(opts.settleMs) || 1200);
@@ -2991,7 +2994,8 @@ if (PLATFORM === 'boss') {
 //   其余平台：列表级采集（滚动 + 高亮，不点击卡片 —— 无内联详情，见 visualCollectListOnly 头注释）
 ipcRenderer.on('visual-collect', (_e, arg) => {
   const opts = (arg && typeof arg === 'object') ? arg : {};
-  visualCollect(opts).catch((e) => notify('collect-done', { listUrl: location.href, processed: 0, total: 0, error: String(e?.message || e) }));
+  visualCollect(opts).catch((e) => notify('collect-done', { seq: opts.seq, listUrl: location.href, processed: 0, total: 0, error: String(e?.message || e) }))
+    .finally(() => notify('collect-done', { seq: opts.seq, finalized: true }));
 });
 // collect-control：运行时控制（暂停 / 继续 / 停止 / 调速）—— **全平台注册**
 ipcRenderer.on('collect-control', (_e, arg) => {
