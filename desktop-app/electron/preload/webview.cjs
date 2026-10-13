@@ -19,7 +19,8 @@
 // 不绕过平台安全措施。code 36/32/35/37/38 统一映射风控码，由上层（Workbench + safety.ts）处理。
 'use strict';
 
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, webFrame } = require('electron');
+const { buildBossChatProbeScript } = require('./boss-chat-context.cjs');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
@@ -1146,7 +1147,7 @@ async function trustedClickElement(el, opts = {}) {
   const from = lastCursor || { x: Math.max(0, to.x - 70 - Math.round(Math.random() * 40)), y: Math.max(0, to.y - 50 - Math.round(Math.random() * 30)) };
   const path = humanize.buildMousePath(from, to);
   if (opts.settle !== false) await sleep(humanize.settleDelayMs());
-  const r = await trustedInput('clickAt', '', { x: to.x, y: to.y, path });
+  const r = await trustedInput('clickAt', '', { x: to.x, y: to.y, path, ...(opts.bossTarget ? { bossTarget: opts.bossTarget } : {}) });
   if (r && r.ok) lastCursor = { x: to.x, y: to.y };
   await jitterDelay(opts.afterMs || 160);
   return Boolean(r && r.ok);
@@ -1186,6 +1187,7 @@ async function humanClickElement(el, opts = {}) {
   recentClickAt.set(el, Date.now());
   const okTrusted = await trustedClickElement(el, opts);
   if (okTrusted) return true;
+  if (opts.bossTarget) return false; // A rejected target guard must never fall back to an unchecked DOM click.
   try { await clickElement(el); return false; } catch { return false; }
 }
 
@@ -1318,6 +1320,36 @@ function notifyDiag(prefix) {
 // 注意：整页跳转（job_detail → 聊天页）会换文档、preload 重新注入，标志自然复位，
 // 因此上层「检测到聊天页后重发 start-apply 补写招呼语」的既定链路不受影响。
 let domApplyInFlight = false;
+
+async function bossChatContext(job, options = {}) {
+  return webFrame.executeJavaScript(buildBossChatProbeScript(job, options));
+}
+
+async function selectBossChatContact(job, greeting = '') {
+  const marker = `boss-${Date.now().toString(36)}`;
+  const deadline = Date.now() + 18000;
+  let last = { reason: '联系人页面尚未加载' }, clicked = false, scrolled = false;
+  notify('apply-stage', { stage: 'verify_chat_target', label: '按岗位编号选中目标联系人' });
+  while (Date.now() < deadline) {
+    if (pageStatusData().collectionBlocked) throw new Error('BOSS 安全验证，需要人工完成验证');
+    last = await bossChatContext(job, { marker, mark: true, greeting });
+    if (last.ready) return last;
+    if (last.canClick && !clicked) {
+      const target = document.querySelector(`[data-bossclaw-chat-target="${marker}"]`);
+      if (target) {
+        target.scrollIntoView({ block: 'nearest' });
+        await humanClickElement(target, { dedupeMs: 2000 });
+        clicked = true;
+      }
+    } else if (last.canScroll && !scrolled) {
+      const scroller = document.querySelector(`[data-bossclaw-chat-scroll="${marker}"]`);
+      if (scroller) { scroller.scrollTop = last.scrollTop; scrolled = true; }
+    }
+    if (/编号缺失|多个联系人/.test(last.reason || '')) break;
+    await sleep(350);
+  }
+  throw new Error(`BOSS 会话未就绪：${last.reason || '无法核对目标联系人'}，工作台招呼语未发送`);
+}
 async function domApply(arg) {
   if (domApplyInFlight) {
     notify('apply-stage', { stage: 'log', message: '已有投递流程进行中，忽略本次重复下发的 start-apply' });
@@ -1338,17 +1370,15 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       notify('apply-stage', { stage: 'failed', error: '求职招呼语为空或过短，已停止发送' });
       return;
     }
-    // 判断是否为「继续沟通」入口：主沟通按钮是「继续沟通」而非「立即沟通」——
-    // 说明该岗位已与 HR 建立过会话，需移入自动沟通队列不再由工作台直接投招呼语
-    if (isContinueChatEntry()) {
-      notify('apply-stage', { stage: 'continue_chat', label: '已检测到继续沟通入口，移入自动沟通队列' });
-      return;
-    }
+    // A friend relation alone does not prove that the workbench greeting has been sent.
+    // Inspect the selected conversation before deciding whether this is an existing discussion.
     notify('apply-stage', { stage: 'open_chat', label: '打开沟通窗口' });
     let input = chatInput();
+    let verifiedContext = null;
     // 已进入聊天页但输入框未就绪（渲染慢）：给足等待，不立即失败
     if (!input && /(\/web\/geek\/chat|\/chat(?:\/|\?|$))/i.test(location.href)) {
-      input = await waitFor(() => chatInput(), 30000, '聊天输入框就绪');
+      verifiedContext = await selectBossChatContact(job, safeGreeting);
+      input = chatInput();
     }
     if (!input) input = await enterChat();
     if (!input) {
@@ -1360,6 +1390,15 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       if (communicateButton()) { notify('apply-stage', { stage: 'navigating', message: '沟通入口需要跳转聊天页，等待聊天窗口就绪…' }); return; }
       notify('apply-stage', { stage: 'failed', error: '未找到真实可编辑的聊天输入框，已暂停' });
       return;
+    }
+
+    const fullChat = /^\/web\/geek\/chat\/?$/.test(location.pathname);
+    if (fullChat) {
+      const context = verifiedContext || await selectBossChatContact(job, safeGreeting);
+      input = chatInput();
+      if (context.hasExactGreeting) { notify('apply-stage', { stage: 'verify_result', label: '目标会话已有工作台招呼语', ok: true }); return; }
+      if (context.hasUnconfirmedGreeting) { notify('apply-stage', { stage: 'failed', error: '目标会话已有相同招呼语，但发送回执未确认，请人工核对' }); return; }
+      if (context.hasConversation) { notify('apply-stage', { stage: 'continue_chat', label: '目标会话已有实际沟通，移入自动沟通队列' }); return; }
     }
 
     notify('apply-stage', { stage: 'fill_message', label: '填写招呼语' });
@@ -1374,7 +1413,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     let ins = { ok: false };
     for (let i = 0; i < 3 && !ins.ok; i++) {
       if (i > 0) { focusEditableScoped(editor); await jitterDelay(400); }
-      ins = await trustedInput('insertText', safeGreeting);
+      ins = await trustedInput('insertText', safeGreeting, fullChat ? { bossTarget: job } : undefined);
       if (ins.ok) {
         const got = normalizeChatText(editor?.innerText || editor?.value || '');
         if (got && got.includes(needle20)) break; // 已落盘 → 成功
@@ -1405,15 +1444,22 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     const btn = sendButton(input, { allowDisabled: true });
     if (btn) {
       try { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch {}
-      await waitFor(() => !isDisabledish(btn), 4000, '发送按钮启用');
+      const enabled = await waitFor(() => !isDisabledish(btn), 4000, '发送按钮启用');
+      if (!enabled || (fullChat && !(await bossChatContext(job, { greeting: safeGreeting })).ready)) {
+        notify('apply-stage', { stage: 'failed', error: 'BOSS 发送按钮未就绪或当前会话已改变，招呼语保留为草稿，请人工核对' }); return;
+      }
       // 「发送」是 BOSS 受控组件按钮，与「立即沟通」同属只认 isTrusted 的那一类 → 真实点击优先
-      await humanClickElement(btn, { dedupeMs: 1200 });
+      const clicked = await humanClickElement(btn, { dedupeMs: 1200, ...(fullChat ? { bossTarget: job } : {}) });
+      if (fullChat && !clicked) { notify('apply-stage', { stage: 'failed', error: 'BOSS 当前会话未确认，已取消发送并保留草稿' }); return; }
     } else {
       // 未找到按钮：弹窗 textarea 内回车是换行、不会发送，直接交人工；
       // 其余输入（contenteditable 聊天页等）仍退回回车发送兜底。
       const isDialogTextarea = input.matches('textarea');
       if (!isDialogTextarea) {
-        const enter = await trustedInput('pressEnter');
+        if (fullChat && !(await bossChatContext(job, { greeting: safeGreeting })).ready) {
+          notify('apply-stage', { stage: 'failed', error: 'BOSS 当前会话已改变，招呼语保留为草稿，请人工核对' }); return;
+        }
+        const enter = await trustedInput('pressEnter', '', fullChat ? { bossTarget: job } : undefined);
         if (!enter.ok) {
           notify('apply-stage', { stage: 'failed', error: '未找到发送按钮且回车发送失败，已暂停' });
           return;
@@ -1426,7 +1472,9 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
 
     // 文字气泡确认（安全不变量）
     notify('apply-stage', { stage: 'verify_message', label: '确认文字已发送' });
-    const confirmed = await waitFor(() => confirmOwnMessage(safeGreeting), 8000, '文字气泡确认');
+    const confirmed = fullChat
+      ? await waitFor(async () => { const c = await bossChatContext(job, { greeting: safeGreeting }); return c.ready && c.hasExactGreeting; }, 8000, '目标会话文字气泡确认')
+      : await waitFor(() => confirmOwnMessage(safeGreeting), 8000, '文字气泡确认');
     if (!confirmed) {
       notify('apply-stage', { stage: 'failed', error: '未能确认文字气泡已发送，请人工核对后重试' });
       return;
