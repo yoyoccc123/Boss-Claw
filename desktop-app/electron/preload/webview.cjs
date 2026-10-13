@@ -27,6 +27,7 @@ const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readL
 const OFFICE = require('./office-address.cjs');
 const COMPANY = require('./company-size.cjs');
 const { readOfficeAddress } = require('./office-address-reader.cjs');
+const { readZhaopinPageBlock } = require('./zhaopin-page-block.cjs');
 // 人类化输入计划（纯函数，零 DOM 依赖 → 单测见 desktop-app/scripts/humanize-regression.mjs）。
 // 只负责「怎么动」，不发事件；真实点击/输入仍走 jc:webview-input 主进程通道。
 const humanize = require('./humanize.cjs');
@@ -2520,6 +2521,7 @@ function pageStatusData() {
     title: document.title,
     readyState: String(document.readyState || ''),
     bodyLen: bodyText.length,
+    applyBlock: PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null,
     cards,
     counts,
     listRootCls: listRoot ? String(listRoot.className || '').slice(0, 120) : '',
@@ -3121,6 +3123,11 @@ async function platformApplyOnce(args = {}) {
     } else {
       notify('apply-stage', { stage: 'open_job', label: '打开岗位', platform });
     }
+    // 验证/登录拦截优先于岗位按钮与外部网申判定；只读识别，不操作验证控件。
+    if (platform === 'zhaopin') {
+      const block = readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {});
+      if (block) return fail(block.kind, { code: block.kind === 'risk' ? 35 : undefined, message: block.message });
+    }
     // 外部网申：安全不变量，命中直接跳过
     if (externalApplyHints && externalApplyDetected(externalApplyHints)) {
       return fail('external', { external: true, message: '该岗位为外部网申，按安全规则自动跳过' });
@@ -3329,13 +3336,13 @@ async function platformApplyOnce(args = {}) {
     if (platform === 'zhaopin') {
       // 选择器 / 文案口径集中在适配表（PLATFORM_APPLY_SPEC.zhaopin，真机详情页源码 + 投递组件 bundle）
       const spec = (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {};
+      const pageBlock = (missingAction = false) => readZhaopinPageBlock(document, location.href, spec, { missingAction });
       const btnSelectors = spec.buttonSelectors || ['button', 'a'];
       const bodyText = () => PLATFORM_NORM(document.body ? document.body.innerText : '');
       const applyLabels = spec.applyLabels || ['投递'];
       const appliedLabels = spec.appliedLabels || ['已投递'];
       const successTexts = spec.successTexts || ['投递成功'];
       const limitTexts = spec.limitTexts || ['达到上限'];
-      const riskTexts = spec.riskTexts || ['安全验证'];
 
       // 1) 已投递短路：主按钮态已是「已投递/已申请」→ 不重复点击（避免重复打扰同一 HR）
       //    只认投递入口自身的按钮态（appliedSelectors）+ 精确文案兜底，
@@ -3357,7 +3364,11 @@ async function platformApplyOnce(args = {}) {
       }
       // 3) 主按钮：优先详情页真机结构（.summary-planes__action / .job-apply-button__btn），再退回文案
       const btn = findPlatformAction(btnSelectors, applyLabels);
-      if (!btn) return fail('failed', { error: '未找到「立即投递」按钮（岗位可能已下架或已转为外部网申）' });
+      if (!btn) {
+        const block = pageBlock(true);
+        if (block) return fail(block.kind, { code: block.kind === 'risk' ? 35 : undefined, message: block.message });
+        return fail('failed', { needsReview: true, error: '智联页面没有可用的投递入口，可能需要验证、仍在加载或已跳转；已暂停并保留页面，请人工核对后再重试' });
+      }
       notify('apply-stage', { stage: 'send_message', label: '投递简历', platform });
       await clickElement(btn);
 
@@ -3368,22 +3379,12 @@ async function platformApplyOnce(args = {}) {
       //    风控只在「风控类容器」内判定（URL 特征 + 验证码控件 + 弹层/横幅/提示容器文案），
       //    **不做全页正文扫描**——岗位描述里出现「验证码」「行为异常」等词是常见业务诉求
       //    （如反欺诈/风控开发岗），全页扫描会把正常岗位误判成风控并暂停引擎。
-      const RISK_SCOPE = (spec.riskScopeSelectors || ['.a-job-apply-workflow', '[class*="dialog"]']).join(', ');
-      const riskHit = () => {
-        if (/pwaf_challenge|security-check|captcha/i.test(location.href)) return true;
-        if (firstVisible(['[class*="geetest"]', '[class*="waf"]', '[id*="captcha"]'])) return true;
-        for (const el of all(RISK_SCOPE)) {
-          if (!visible(el)) continue;
-          const t = PLATFORM_NORM(textOf(el));
-          if (t && riskTexts.some((k) => t.includes(k))) return true;
-        }
-        return false;
-      };
       let confirmedSig = '';
       const judged = await waitFor(async () => {
         const body = bodyText();
         // 风控/账号阻断：立即停止本页任何点击动作，交人工
-        if (riskHit()) return 'risk';
+        const block = pageBlock();
+        if (block) return block.kind;
         if (limitTexts.some((t) => body.includes(t))) return 'stop';
         // 成功信号：成功面板 / 成功文案 / 主按钮态翻转为「已投递」/ 打招呼弹窗（deliver-greeting-modal）
         if (firstVisible(spec.successSelectors)) return 'success';
@@ -3423,7 +3424,7 @@ async function platformApplyOnce(args = {}) {
       if (judged && judged.indexOf('blocked:') === 0) {
         return fail('stop', { message: '智联投递被平台阻断：' + judged.slice(8) });
       }
-      return fail('failed', { error: '未确认「投递成功」：按钮已点击但页面无任何成功信号，请人工核对' });
+      return fail('failed', { needsReview: true, error: '投递按钮已点击但结果未确认；已暂停并保留页面，请核对平台记录后再重试' });
     }
 
     if (platform === 'job51') {
