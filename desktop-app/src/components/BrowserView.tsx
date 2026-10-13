@@ -1055,7 +1055,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     const sessionId = 'sessionId' in ready ? ready.sessionId : '';
     if (!sessionId) return failed('智联会话编号未确认，未发送');
     if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
-    const args = { job, greeting, sessionId, defaultGreeting: opened.defaultGreeting || '' };
+    const args = { job, greeting, sessionId, nativeChatToken: opened.nativeChatToken, defaultGreeting: opened.defaultGreeting || '' };
     const prepared = await cmdOnce('zhaopin-chat', { ...args, action: 'prepare' }, 10000, tabId);
     if (prepared?.ok && prepared.stage !== 'prepared') return { ...prepared, tabId };
     if (!prepared?.ok) return { ...failed(prepared?.error || prepared?.message || '智联文案准备未确认'), ...prepared, tabId };

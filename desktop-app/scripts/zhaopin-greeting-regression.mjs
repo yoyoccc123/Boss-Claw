@@ -29,6 +29,8 @@ const reportedLayout=linked(html(message(reportedDefault)+message('示例简历.
   .replace('<span class="im-chat-header__job-title">AI产品经理</span>','<div class="im-chat-header__job"><span class="im-chat-header__job-title" title="AI产品经理">AI产品经理</span><span class="im-chat-header__salary">1.5-2万·13薪</span></div>');
 const branchLayout=reportedLayout.replaceAll('广东测试知识产权','海湾环球商业服务(广东)').replaceAll('AI产品经理','AI Engineer');
 const branchJob={...job,title:'AI Engineer',company:'海湾环球商业服务(广东)有限公司深圳分公司'};
+const sharedLayout=linked(html(message(reportedDefault))).replaceAll('ZL000000000J00000000000.html','ZL111111111J11111111111.html');
+const shared={...base,html:sharedLayout,defaultGreeting:'',nativeBinding:{ok:true,source:'native-continue',jobNumber:'ZL000000000J00000000000',sessionId:'target'}};
 const cases=[
   {...base,name:'平台默认句后补发工作台文本'},
   {...base,name:'无默认消息也可发送',html:html()},
@@ -96,6 +98,24 @@ const cases=[
   {...base,name:'多个聊天详情编号不发送',html:linked(html(message(platformDefault))).replace('</div><div class="im-main-panel__timeline">',`${detail(job.url)}</div><div class="im-main-panel__timeline">`),stage:'failed',sends:0},
   {...base,name:'聊天详情编号隐藏不使用公司名兜底',before:"document.querySelector('.im-chat-header__detail').style.display='none';",stage:'failed',sends:0},
   {...base,name:'详情链接延迟渲染先等待后发送',noDetails:true,delayedDetail:true},
+  {...shared,name:'原生CT岗位与HR旧岗位共用会话可补发'},
+  {...shared,name:'共享会话需原生入口证明确认',nativeBinding:{ok:false},stage:'failed',sends:0},
+  {...shared,name:'原生关联不能用于另一目标岗位',nativeBinding:{...shared.nativeBinding,jobNumber:'ZL222222222J22222222222'},stage:'failed',sends:0},
+  {...shared,name:'原生关联不能用于另一会话',nativeBinding:{...shared.nativeBinding,sessionId:'other'},stage:'failed',sends:0},
+  {...shared,name:'原生关联过期不能放行',expiredBinding:true,stage:'failed',sends:0},
+  {...shared,name:'其他来源的关联不能放行',nativeBinding:{...shared.nativeBinding,source:'untrusted'},stage:'failed',sends:0},
+  {...shared,name:'原生共享会话仍核对目标招聘方',job:{...job,recruiterName:'另一招聘方'},stage:'failed',sends:0},
+  {...shared,name:'共享会话发送前切换会话停止',changeAfterPrepare:true,stage:'failed',sends:0},
+  {...shared,name:'共享会话授权发送前失效停止',bindingRejectedAfterPrepare:true,stage:'failed',sends:0},
+  {...shared,name:'同一原生会话的展示岗位变化不阻断',detailAfterPrepare:true},
+  {...shared,name:'共享会话已确认同文案不重复',html:sharedLayout.replace(reportedDefault,greeting),stage:'already_sent',sends:0},
+  {...shared,name:'共享会话已有真实回复不重复打扰',html:sharedLayout.replace(reportedDefault,'招聘方已回复').replace('im-message__bubble im-message__bubble--me','im-message__bubble'),stage:'skip',sends:0},
+  {...shared,name:'只读核对原生共享会话不填写不发送',inspect:true,stage:'identified',sends:0},
+  {...base,name:'平台查看简历回执不视为HR真实回复',html:html(message(platformDefault)+message('感谢您的投递，HR正在仔细查看简历',{me:false}))},
+  {...base,name:'平台回执波浪号版本不阻断',html:html(message(platformDefault)+message('感谢您的投递，HR正在仔细查看简历~',{me:false}))},
+  {...base,name:'回执后附真实面试内容仍是回复',html:html(message(platformDefault)+message('感谢您的投递，HR正在仔细查看简历，请明天来面试',{me:false})),stage:'skip',sends:0},
+  {...base,name:'本人文字引用HR回执不能视为默认消息',html:html(message('感谢您的投递，HR正在仔细查看简历')),stage:'skip',sends:0},
+  {...shared,name:'实际共享会话默认句回执附件后发工作台文案',html:sharedLayout.replace(message(reportedDefault),message(reportedDefault)+message('感谢您的投递，HR正在仔细查看简历',{me:false})+message('附件.pdf',{extra:'im-message--custom'}))},
 ];
 const names=['visible','textOf','findPlatformAction','firstVisible','zhaopinChatStep'];
 const script=c=>`(async()=>{const c=${JSON.stringify(c)},greeting=${JSON.stringify(greeting)};
@@ -104,6 +124,7 @@ const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};AD
 const location={href:c.open?${JSON.stringify(job.url)}:'https://i.zhaopin.com/im?sessionId=target'},PLATFORM_NORM=ADAPTERS.normLabelText;
 const all=(s,r=document)=>[...r.querySelectorAll(s)],readZhaopinPageBlock=()=>c.block?{kind:'risk',message:'人工验证'}:null;
 let zhaopinPrepared=null,sends=0;const waitFor=async fn=>{for(let i=0;i<4;i++){const r=await fn();if(r)return r;}return null;};
+let verifyCalls=0;const ipcRenderer={invoke:async(channel,payload)=>{if(channel!=='jc:zhaopin-native-chat')throw Error('Unexpected IPC');if(payload.action==='arm')return{ok:true,nativeChatToken:'native-test'};verifyCalls++;return c.bindingRejectedAfterPrepare&&verifyCalls>1?{ok:false}:{...c.nativeBinding,expiresAt:Date.now()+(c.expiredBinding?-1:90000)};}};
 const trustedInput=async(action,value)=>{if(c.inputFail)return{ok:false};document.activeElement.value=value;if(c.afterInput)document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend',c.afterInput);return{ok:true};};
 const clickElement=async el=>{sends++;if(c.open)return;document.querySelector('textarea').value='';if(!c.noBubble){document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend',${JSON.stringify(message(greeting))});const row=document.querySelector('.im-main-panel__timeline').lastElementChild;if(c.sendStatus==='sending'||c.sendStatus==='fail'){row.querySelector('.im-message__receipt').remove();row.insertAdjacentHTML('beforeend',c.sendStatus==='sending'?'<div class="im-message__send-state">发送中</div>':'<div class="im-message__send-state"><button class="im-message__fail-btn"></button></div>');}if(c.noReceipt)row.querySelector('.im-message__receipt').remove();}};
 ${names.map(n=>preload.functions.get(n)).join('\n')}
@@ -111,8 +132,8 @@ ${c.before||''}
 const readyBefore=readZhaopinChatReady(document,location.href);
 if(c.delayedDetail)document.querySelector('.im-chat-header').insertAdjacentHTML('beforeend',${JSON.stringify(detail(job.url.replace('.htm','.html')))});
 const readyAfter=readZhaopinChatReady(document,location.href);
-const args={seq:'test',job:c.job||${JSON.stringify(job)},sessionId:c.sessionId||'target',greeting:c.short?'':greeting,defaultGreeting:c.defaultGreeting};
-let result=await zhaopinChatStep({...args,action:c.open?'open':'prepare'}),replayed;
+const args={seq:'test',job:c.job||${JSON.stringify(job)},sessionId:c.sessionId||'target',greeting:c.short?'':greeting,defaultGreeting:c.defaultGreeting,nativeChatToken:c.nativeBinding?'native-test':undefined};
+let result=await zhaopinChatStep({...args,action:c.open?'open':c.inspect?'inspect':'prepare'}),replayed;
 if(result.stage==='prepared'){if(c.changeAfterPrepare)location.href='https://i.zhaopin.com/im?sessionId=other';if(c.detailAfterPrepare)document.querySelector('.im-chat-header__detail').href='https://www.zhaopin.com/jobdetail/ZL111111111J11111111111.html';if(c.historyAfterPrepare)document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend','<div class="im-main-panel__history-tip is-loading">加载中…</div>');const send={...args,action:'send',token:result.token};result=await zhaopinChatStep(send);if(c.replay)replayed=await zhaopinChatStep(send);}
 if(c.open)await new Promise(resolve=>setTimeout(resolve,10));
 return {name:c.name,result,sends,replayed,readyBefore,readyAfter,editor:document.querySelector('textarea')?.value};})()`;
@@ -128,8 +149,33 @@ for(let i=0;i<cases.length;i++){const c=cases[i],r=results[i];assert.equal(r.res
   if(c.name==='分公司同名但岗位编号不同不发送')assert.match(r.result.error,/聊天岗位编号与目标不一致.*目标：ZL000.*当前：ZL111/);
   if(c.noDetails){assert.equal(r.readyBefore,false);if(c.delayedDetail)assert.equal(r.readyAfter,true);else assert.match(r.result.error,/岗位编号尚未确认/);}
   if(['平台默认句后补发工作台文本','分公司全称与聊天母公司简称同岗位'].includes(c.name))assert.equal(r.readyBefore,true);
+  if(c.inspect){assert.equal(r.result.nativeChatVerified,true);assert.equal(r.editor,'');}
 }
 console.log(`PASS Zhaopin greeting: ${cases.length} isolated official-template DOM cases; ${report}`);
+
+// Actual main-process provenance factory: only a registered guest's armed native window.open binds.
+const {createZhaopinNativeChatBindings}=require(join(root,'electron/zhaopin-native-chat.cjs'));
+let nativeChecks=0;
+function nativeCase(test){let clock=1000,next=0;const bindings=createZhaopinNativeChatBindings({now:()=>clock,nonce:()=>String(++next)}),wc={id:1,url:job.url,getURL(){return this.url;}},other={id:2,url:job.url,getURL(){return this.url;}};bindings.attachGuest(wc);const arm=()=>bindings.arm(wc,job.url),chat='https://i.zhaopin.com/im?sessionId=shared',verify=token=>bindings.verify(wc,{jobUrl:job.url,nativeChatToken:token,expectedSessionId:'shared'}),capture=()=>{assert.equal(bindings.captureWindowOpen(wc,chat),true);wc.url=chat;};test({bindings,wc,other,arm,chat,verify,capture,setClock:n=>clock=n});nativeChecks++;}
+nativeCase(({arm})=>assert.equal(arm().ok,true));
+nativeCase(({bindings,other})=>assert.equal(bindings.arm(other,job.url).ok,false));
+nativeCase(({wc,arm})=>{wc.url=job.url.replace('00000.htm','11111.htm');assert.equal(arm().ok,false);});
+nativeCase(({wc,arm})=>{wc.url=job.url.replace('www.zhaopin.com','evil.invalid');assert.equal(arm().ok,false);});
+nativeCase(({bindings,wc,arm})=>{arm();assert.equal(bindings.captureWindowOpen(wc,'https://evil.invalid/im?sessionId=shared'),false);});
+nativeCase(({arm,capture,verify})=>{const a=arm();capture();assert.equal(verify(a.nativeChatToken).ok,true);});
+nativeCase(({bindings,wc,arm,chat,capture})=>{arm();capture();assert.equal(bindings.captureWindowOpen(wc,chat),false);});
+nativeCase(({bindings,wc,arm,capture})=>{const a=arm();capture();assert.equal(bindings.verify(wc,{jobUrl:job.url.replace('00000.htm','11111.htm'),nativeChatToken:a.nativeChatToken,expectedSessionId:'shared'}).ok,false);});
+nativeCase(({arm,capture,verify})=>{arm();capture();assert.equal(verify('wrong').ok,false);});
+nativeCase(({bindings,wc,arm,capture})=>{const a=arm();capture();assert.equal(bindings.verify(wc,{jobUrl:job.url,nativeChatToken:a.nativeChatToken,expectedSessionId:'other'}).ok,false);});
+nativeCase(({wc,arm,capture,verify})=>{const a=arm();capture();wc.url='https://i.zhaopin.com/im?sessionId=other';assert.equal(verify(a.nativeChatToken).ok,false);});
+nativeCase(({bindings,other,arm,capture,chat})=>{const a=arm();capture();bindings.attachGuest(other);other.url=chat;assert.equal(bindings.verify(other,{jobUrl:job.url,nativeChatToken:a.nativeChatToken,expectedSessionId:'shared'}).ok,false);});
+nativeCase(({bindings,wc,arm,chat})=>{arm();wc.url=job.url.replace('00000.htm','11111.htm');assert.equal(bindings.captureWindowOpen(wc,chat),false);});
+nativeCase(({bindings,wc,arm,chat,setClock})=>{arm();setClock(47000);assert.equal(bindings.captureWindowOpen(wc,chat),false);});
+nativeCase(({arm,capture,verify,setClock})=>{const a=arm();capture();setClock(92000);assert.equal(verify(a.nativeChatToken).ok,false);});
+nativeCase(({wc,arm,capture,verify})=>{const a=arm();capture();wc.url=job.url;arm();assert.equal(verify(a.nativeChatToken).ok,false);});
+nativeCase(({bindings,wc,arm,capture,verify})=>{const a=arm();capture();bindings.releaseGuest(wc.id);assert.equal(verify(a.nativeChatToken).ok,false);});
+nativeCase(({bindings,wc,arm,capture,verify})=>{const a=arm();assert.equal(bindings.captureWindowOpen(wc,'about:blank'),false);capture();assert.equal(verify(a.nativeChatToken).ok,true);});
+console.log(`PASS native chat binding: ${nativeChecks} production guest/origin/session/token/expiry checks.`);
 
 // Host navigation and Stop boundaries: run actual production BrowserView function.
 let hostChecks=0;
@@ -137,7 +183,7 @@ for(const stopAt of ['never','before-open','after-navigation','after-prepare','a
   let allowed=true,reads=0,sends=0,opens=0,started=0;
   const context={Promise,URL,Date,useCallback:fn=>fn,aliveRef:{current:true},openInNewTab:()=> 'tab',hasTab:()=>true,sleep:async()=>{},
     pageStatus:async()=>{reads++;if(stopAt==='before-open'&&reads===1)allowed=false;if(stopAt==='after-navigation'&&reads===2)allowed=false;return reads===1?{bodyLen:300,readyState:'complete',url:job.url}:{bodyLen:500,readyState:'complete',url:'https://i.zhaopin.com/im?sessionId=target',zhaopinChatReady:true};},
-    cmdOnce:async(channel,args)=>{if(args.action==='open'){opens++;return{ok:true,defaultGreeting:platformDefault};}if(args.action==='prepare'){if(stopAt==='after-prepare')allowed=false;return{ok:true,stage:'prepared',token:'t'};}sends++;if(stopAt==='after-send')allowed=false;return{ok:true,stage:'success',greetingConfirmed:true};}};
+    cmdOnce:async(channel,args)=>{if(args.action==='open'){opens++;return{ok:true,defaultGreeting:platformDefault,nativeChatToken:'native-host-token'};}assert.equal(args.nativeChatToken,'native-host-token');if(args.action==='prepare'){if(stopAt==='after-prepare')allowed=false;return{ok:true,stage:'prepared',token:'t'};}sends++;if(stopAt==='after-send')allowed=false;return{ok:true,stage:'success',greetingConfirmed:true};}};
   vm.createContext(context);vm.runInContext((await transform(`globalThis.greet=${browser.vars.get('zhaopinGreet')};`,{loader:'tsx'})).code,context);
   const result=await context.greet(job,greeting,{canStart:()=>allowed,onStart:()=>started++});
   assert.equal(sends,['never','after-send'].includes(stopAt)?1:0,stopAt);assert.equal(started,sends);assert.equal(result.greetingConfirmed===true,sends===1);hostChecks++;

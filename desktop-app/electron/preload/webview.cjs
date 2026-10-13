@@ -3455,14 +3455,21 @@ async function zhaopinChatStep(args = {}) {
     if (!btn) return failed('简历已投递，但未找到智联“继续沟通”；工作台招呼语未发送，已保留页面');
     const modal = firstVisible(spec.deliverGreetingModalSelectors);
     const defaultGreeting = modal ? textOf(modal.querySelector('.deliver-greeting-modal__content-text')).trim() : '';
+    const armed = await ipcRenderer.invoke('jc:zhaopin-native-chat', { action: 'arm', jobUrl: args.job.url });
+    if (!armed?.ok) return failed(armed?.error || '智联原生会话关联准备失败，未发送');
     // Reply before navigating; the old preload will be destroyed by window.location.href.
     setTimeout(() => { if (!block()) clickElement(btn).catch(() => {}); }, 0);
-    return { ok: true, stage: 'opening', defaultGreeting };
+    return { ok: true, stage: 'opening', defaultGreeting, nativeChatToken: armed.nativeChatToken };
   }
-  const target = readZhaopinChat(document, location.href, args.job, args.sessionId);
+  const nativeBinding = args.nativeChatToken ? await ipcRenderer.invoke('jc:zhaopin-native-chat', {
+    action: 'verify', jobUrl: args.job?.url, expectedSessionId: args.sessionId, nativeChatToken: args.nativeChatToken,
+  }) : null;
+  const target = readZhaopinChat(document, location.href, args.job, args.sessionId, nativeBinding);
   if (!target.ready) return failed(`智联${target.reason}，工作台招呼语未发送`);
   const state = () => readZhaopinDeliveryState(target, greeting, args.defaultGreeting);
   const before = state();
+  if (args.action === 'inspect') return { ok: true, stage: 'identified', nativeChatVerified: nativeBinding?.ok === true,
+    greetingDisposition: before.matching.length ? 'already_sent' : before.incoming.length || before.nonDefaultOutgoing.length ? 'skip' : before.editorText ? 'draft' : 'ready' };
   if (args.action === 'prepare') {
     zhaopinPrepared = null;
     if (before.matching.length) return { ok: true, stage: 'already_sent', greetingConfirmed: true };
@@ -3474,7 +3481,7 @@ async function zhaopinChatStep(args = {}) {
     target.editor.dispatchEvent(new target.editor.ownerDocument.defaultView.Event('input', { bubbles: true }));
     const ready = await waitFor(() => {
       const risk = block(); if (risk) return { block: risk };
-      const current = readZhaopinChat(document, location.href, args.job, args.sessionId);
+      const current = readZhaopinChat(document, location.href, args.job, args.sessionId, nativeBinding);
       if (!current.ready || current.signature !== target.signature || current.editor !== target.editor) return { changed: true };
       const s = readZhaopinDeliveryState(current, greeting, args.defaultGreeting);
       return s.editorText === greeting && s.sendButton ? s : null;
@@ -3495,7 +3502,7 @@ async function zhaopinChatStep(args = {}) {
     await clickElement(before.sendButton);
     const confirmed = await waitFor(() => {
       const risk = block(); if (risk) return { block: risk };
-      const current = readZhaopinChat(document, location.href, args.job, args.sessionId);
+      const current = readZhaopinChat(document, location.href, args.job, args.sessionId, nativeBinding);
       if (!current.ready || current.signature !== target.signature) return { changed: true };
       const s = readZhaopinDeliveryState(current, greeting, prepared.defaultGreeting);
       return !s.editorText && s.matching.some(el => !previous.has(el)) ? { sent: true } : null;

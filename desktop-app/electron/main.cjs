@@ -10,6 +10,8 @@ const fs = require('node:fs');
 const { spawn, execFile } = require('node:child_process');
 // 本地控制桥（供外部 agent / MCP 操作运行中的应用；默认关闭，见 control-bridge.cjs 的开启条件）
 const { startControlBridge, resolveEnablement } = require('./control-bridge.cjs');
+const { createZhaopinNativeChatBindings } = require('./zhaopin-native-chat.cjs');
+const zhaopinNativeChats = createZhaopinNativeChatBindings();
 // 内置浏览器「主世界」反检测补丁 + 指纹自检（补丁本体与探针同一模块，见文件头说明）
 const stealth = require('./preload/stealth.cjs');
 
@@ -1180,6 +1182,9 @@ async function createMainWindow() {
     }, true);
   })();`;
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
+    zhaopinNativeChats.attachGuest(wc);
+    const nativeChatGuestId = wc.id;
+    wc.once('destroyed', () => zhaopinNativeChats.releaseGuest(nativeChatGuestId));
     // ===== 弹窗 / 新标签（target=_blank / window.open）处理：当前标签内导航 =====
     // 根因：Electron <webview> 不会向宿主派发 new-window DOM 事件（webViewEvents 白名单
     // 不含它，渲染层 addEventListener('new-window') 永远不触发），且 webview 未设
@@ -1191,6 +1196,7 @@ async function createMainWindow() {
     try {
       wc.setWindowOpenHandler(({ url }) => {
         const u = String(url || '');
+        zhaopinNativeChats.captureWindowOpen(wc, u);
         if (/^https?:\/\//i.test(u)) { try { wc.loadURL(u); } catch {} }
         return { action: 'deny' };
       });
@@ -2048,6 +2054,14 @@ safeHandle('jc:boss-logout', async (_event, platform) => {
 //           boss-auto-job-main 用 Playwright fill()/type()（底层同为 CDP 真实输入）。
 // Electron <webview> 无 CDP，等价物是 webContents.insertText()/selectAll()/delete()/sendInputEvent()。
 // 由 webview preload（webview.cjs）直接 ipcRenderer.send 到本主进程，event.sender 即 guest webContents。
+safeHandle('jc:zhaopin-native-chat', (event, payload = {}) => {
+  const frame = event.senderFrame;
+  if (!frame || frame.parent !== null || frame.url !== event.sender.getURL()) return { ok: false, error: '仅接受当前主页面的智联会话核对' };
+  if (payload.action === 'arm') return zhaopinNativeChats.arm(event.sender, payload.jobUrl);
+  if (payload.action === 'verify') return zhaopinNativeChats.verify(event.sender, payload);
+  return { ok: false, error: '未知智联原生会话核对操作' };
+});
+
 ipcMain.on('jc:webview-input', (event, payload) => {
   const wc = event.sender;
   // P4-12：主进程侧频率兜底（渲染层自律之外的最后防线）。
