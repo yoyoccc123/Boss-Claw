@@ -24,6 +24,7 @@ const { ipcRenderer } = require('electron');
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
 const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
+const { readZhaopinChat, readZhaopinDeliveryState, sessionIdFromUrl } = require('./zhaopin-im.cjs');
 const OFFICE = require('./office-address.cjs');
 const COMPANY = require('./company-size.cjs');
 const { readOfficeAddress } = require('./office-address-reader.cjs');
@@ -2522,6 +2523,7 @@ function pageStatusData() {
     readyState: String(document.readyState || ''),
     bodyLen: bodyText.length,
     applyBlock: PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null,
+    zhaopinChatReady: PLATFORM === 'zhaopin' && !!sessionIdFromUrl(location.href) && all('textarea.im-sender__input').some(el => visible(el) && !el.disabled),
     cards,
     counts,
     listRootCls: listRoot ? String(listRoot.className || '').slice(0, 120) : '',
@@ -3076,29 +3078,7 @@ function firstVisible(selectors) {
   return null;
 }
 
-// ===== 智联「继续沟通」入口：点击进入聊天（保留动作），招呼语发送移入「自动沟通」队列 =====
-// 口径来源（2026-09 真机详情页源码）：
-//   · 已投递/已建会话岗位，详情页主操作按钮文案是「继续沟通」（`.summary-planes__action button`）；
-//     投递成功还会弹「打招呼弹窗」（`.deliver-greeting-modal`，标题「已向对方发送简历和打招呼语」，
-//     主按钮同为「继续沟通」）。
-//   · 这里**只点击**「继续沟通」（让工作台/用户看到聊天窗口已打开），招呼语的填写与发送
-//     由「自动沟通」引擎负责 —— 与 BOSS 的 continue_chat 收口口径一致（避免 platform-apply
-//     里做整套填发确认导致 25s 超时）。
-//   返回值：{ ok:true, clicked:true } 已点击；{ ok:false, error } 未找到入口/点击失败。
-async function zhaopinContinueChat(spec) {
-  const continueLabels = spec.continueChatLabels || ['继续沟通'];
-
-  // 1) 定位「继续沟通」按钮：打招呼弹窗主按钮优先 → 详情页主操作按钮兜底
-  const btn = findPlatformAction(spec.deliverGreetingSendSelectors || ['[class*="deliver-greeting-modal"] [class*="--primary"]'], continueLabels)
-    || findPlatformAction(spec.continueChatSelectors || ['.summary-planes__action button', '.summary-planes__right button', '.job-apply-button button'], continueLabels);
-  if (!btn) return { ok: false, error: '未找到「继续沟通」入口（聊天未建立或岗位已下架）' };
-
-  notify('apply-stage', { stage: 'open_chat', label: '点击「继续沟通」，打开聊天窗口', platform: 'zhaopin' });
-  await clickElement(btn);
-  // 合成点击后给页面一点反应时间（聊天窗口渲染），但不在这里填/发招呼语 —— 交自动沟通。
-  await jitterDelay(400);
-  return { ok: true, clicked: true };
-}
+// 智联原生「继续沟通」入口会整页导航，宿主必须等新页面 preload 后再填发文案。
 
 async function platformApply(args = {}) {
   if (platformApply.busy) {
@@ -3350,17 +3330,11 @@ async function platformApplyOnce(args = {}) {
       const readAppliedState = () => findPlatformAction(spec.appliedSelectors || btnSelectors, appliedLabels)
         || all('button, a, [role="button"]').find((el) => visible(el) && ADAPTERS.labelExactHit(textOf(el), appliedLabels))
         || null;
-      if (readAppliedState()) {
-        return fail('skip', { message: '该岗位在智联已是「已投递」状态，跳过（不重复打扰同一 HR）' });
-      }
-      // 2) 「继续沟通」入口（已投递/已建会话岗位，详情页主按钮是「继续沟通」而非「立即投递」）：
-      //    命中即点击进入聊天窗口（保留动作），但不在这里填/发招呼语 —— 岗位移交「自动沟通」
-      //    队列（continue_chat），与 BOSS 收口口径一致（platform-apply 已取消发送信息职责）。
+      if (readAppliedState()) return ok({ resumeDelivered: true, alreadyDelivered: true, greetingConfirmed: false });
+      // 2) 已有「继续沟通」时不重复提交简历；宿主单独打开会话并发送工作台文案。
       const continueEntry = findPlatformAction(spec.continueChatSelectors || ['.summary-planes__action button'], spec.continueChatLabels || ['继续沟通']);
       if (continueEntry) {
-        const chat = await zhaopinContinueChat(spec);
-        if (!chat.ok) return fail('failed', { error: chat.error || '点击「继续沟通」失败，请人工核对' });
-        return fail('continue_chat', { message: '已点击「继续沟通」，岗位移入自动沟通队列' });
+        return ok({ resumeDelivered: true, alreadyDelivered: true, greetingConfirmed: false });
       }
       // 3) 主按钮：优先详情页真机结构（.summary-planes__action / .job-apply-button__btn），再退回文案
       const btn = findPlatformAction(btnSelectors, applyLabels);
@@ -3413,10 +3387,9 @@ async function platformApplyOnce(args = {}) {
         return null;
       }, 15000, '智联投递结果');
 
-      // 5) 成功收口：简历已投递。招呼语发送已移交「自动沟通」队列（platform-apply 不再发送信息），
-      //    这里直接 ok —— 不在此补点「继续沟通」（避免弹窗/聊天链路在 platform-apply 内整体超时）。
+      // 简历提交与自定义消息是两次独立确认。平台默认招呼不代表工作台文案已发送。
       if (judged === 'success') {
-        return ok({ method: 'dom' });
+        return ok({ method: 'dom', resumeDelivered: true, greetingConfirmed: false });
       }
       if (judged === 'stop') return fail('stop', { message: '智联今日投递已达到上限，已停止该岗位' });
       if (judged === 'risk') return fail('risk', { code: 35, message: '检测到安全验证/账号风控提示，已暂停，请人工处理' });
@@ -3460,6 +3433,80 @@ async function platformApplyOnce(args = {}) {
 ipcRenderer.on('platform-apply', (_e, arg) => {
   const a = (arg && typeof arg === 'object') ? arg : {};
   platformApply(a).catch((e) => notify('platform-apply-result', { seq: a.seq, ok: false, stage: 'failed', error: String((e && e.message) || e) }));
+});
+
+let zhaopinPrepared = null;
+async function zhaopinChatStep(args = {}) {
+  const spec = (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {};
+  const block = () => readZhaopinPageBlock(document, location.href, spec);
+  const failed = error => ({ ok: false, stage: 'failed', needsReview: true, error });
+  const blocked = b => ({ ok: false, stage: b.kind, needsReview: true, code: b.kind === 'risk' ? 35 : undefined, message: b.message });
+  const b = block(); if (b) return blocked(b);
+  const greeting = String(args.greeting || '').trim();
+  if (greeting.length < 8) return failed('智联工作台招呼语为空或过短，未发送');
+  if (args.action === 'open') {
+    // Only the native entry in the exact requested job may choose a session. Never guess an HR.
+    let actual, expected;
+    try { actual = new URL(location.href); expected = new URL(args.job?.url); } catch { return failed('智联岗位链接无法核对'); }
+    if (actual.hostname !== expected.hostname || actual.pathname !== expected.pathname || !/\.zhaopin\.com$/.test(actual.hostname)) return failed('智联当前详情页与目标岗位不一致');
+    const btn = findPlatformAction(spec.deliverGreetingSendSelectors || [], spec.continueChatLabels || ['继续沟通'])
+      || findPlatformAction(spec.continueChatSelectors || [], spec.continueChatLabels || ['继续沟通']);
+    if (!btn) return failed('简历已投递，但未找到智联“继续沟通”；工作台招呼语未发送，已保留页面');
+    const modal = firstVisible(spec.deliverGreetingModalSelectors);
+    const defaultGreeting = modal ? textOf(modal.querySelector('.deliver-greeting-modal__content-text')).trim() : '';
+    // Reply before navigating; the old preload will be destroyed by window.location.href.
+    setTimeout(() => { if (!block()) clickElement(btn).catch(() => {}); }, 0);
+    return { ok: true, stage: 'opening', defaultGreeting };
+  }
+  const target = readZhaopinChat(document, location.href, args.job, args.sessionId);
+  if (!target.ready) return failed(`智联${target.reason}，工作台招呼语未发送`);
+  const state = () => readZhaopinDeliveryState(target, greeting, args.defaultGreeting);
+  const before = state();
+  if (args.action === 'prepare') {
+    zhaopinPrepared = null;
+    if (before.matching.length) return { ok: true, stage: 'already_sent', greetingConfirmed: true };
+    if (before.incoming.length || before.nonDefaultOutgoing.length) return { ok: true, stage: 'skip', message: before.incoming.length ? '目标会话已有招聘方回复，已跳过首次招呼语' : '目标会话已有未识别为平台默认句的本人文字，未自动补发，请人工核对' };
+    if (before.editorText) return failed('智联输入框已有草稿，已保留，请人工核对');
+    target.editor.focus();
+    const inserted = await trustedInput('insertText', greeting);
+    if (!inserted.ok) return failed('智联真实输入失败，已保留页面');
+    target.editor.dispatchEvent(new target.editor.ownerDocument.defaultView.Event('input', { bubbles: true }));
+    const ready = await waitFor(() => {
+      const risk = block(); if (risk) return { block: risk };
+      const current = readZhaopinChat(document, location.href, args.job, args.sessionId);
+      if (!current.ready || current.signature !== target.signature || current.editor !== target.editor) return { changed: true };
+      const s = readZhaopinDeliveryState(current, greeting, args.defaultGreeting);
+      return s.editorText === greeting && s.sendButton ? s : null;
+    }, 5000, '智联文案与发送按钮');
+    if (ready?.block) return blocked(ready.block);
+    if (!ready || ready.changed) return failed('智联输入内容或目标会话未确认，已保留草稿');
+    if (ready.matching.length || ready.incoming.length || ready.nonDefaultOutgoing.length) return failed('智联填写期间会话出现新沟通，已保留草稿');
+    const token = `${args.seq}:${Date.now()}`;
+    zhaopinPrepared = { token, greeting, target, defaultGreeting: args.defaultGreeting, job: args.job };
+    return { ok: true, stage: 'prepared', token };
+  }
+  if (args.action === 'send') {
+    const prepared = zhaopinPrepared; zhaopinPrepared = null; // a token can send at most once
+    if (!prepared || args.token !== prepared.token || greeting !== prepared.greeting || target.signature !== prepared.target.signature || target.editor !== prepared.target.editor) return failed('智联发送授权或会话已变化，未发送');
+    if (before.editorText !== greeting || !before.sendButton || before.matching.length || before.incoming.length || before.nonDefaultOutgoing.length) return failed('智联发送前内容或会话发生变化，已保留草稿');
+    const previous = new Set(before.matching);
+    await clickElement(before.sendButton);
+    const confirmed = await waitFor(() => {
+      const risk = block(); if (risk) return { block: risk };
+      const current = readZhaopinChat(document, location.href, args.job, args.sessionId);
+      if (!current.ready || current.signature !== target.signature) return { changed: true };
+      const s = readZhaopinDeliveryState(current, greeting, prepared.defaultGreeting);
+      return !s.editorText && s.matching.some(el => !previous.has(el)) ? { sent: true } : null;
+    }, 12000, '智联工作台文字发送确认');
+    if (confirmed?.block) return blocked(confirmed.block);
+    if (!confirmed?.sent) return failed('智联工作台招呼语发送结果未确认，已保留聊天页，请人工核对；不会自动重发');
+    return { ok: true, stage: 'success', greetingConfirmed: true };
+  }
+  return failed('未知智联聊天步骤');
+}
+ipcRenderer.on('zhaopin-chat', (_e, args) => {
+  zhaopinChatStep(args).then(result => notify('zhaopin-chat-result', { seq: args?.seq, ...result }))
+    .catch(e => notify('zhaopin-chat-result', { seq: args?.seq, ok: false, stage: 'failed', needsReview: true, error: String(e?.message || e) }));
 });
 
 // ===== 通用 UI 接管（ui-eval）：仅 query/click/type/scroll 白名单，禁止任意脚本执行 / 跳转 =====
@@ -3576,7 +3623,7 @@ const ipcChannels = PLATFORM === 'boss'
      'spa-back', 'spa-forward', 'force-resize']
   // 非 BOSS 平台自 2026-09-15 起也支持「可视化采集（列表级）」→ 这两个通道必须注册，
   // 否则宿主 sendInTab('visual-collect') 无监听器、collect-done 永不回传，界面会静默卡到兜底超时（最长 15min）。
-  : ['extract-job', 'platform-apply', 'visual-collect', 'collect-control', 'webview-command', 'page-read', 'page-status', 'prefill-greeting', 'ui-eval',
+  : ['extract-job', 'platform-apply', 'zhaopin-chat', 'visual-collect', 'collect-control', 'webview-command', 'page-read', 'page-status', 'prefill-greeting', 'ui-eval',
      'spa-back', 'spa-forward', 'force-resize'];
 ipcChannels.forEach((channel) => {
   const orig = ipcRenderer.listeners(channel).slice();

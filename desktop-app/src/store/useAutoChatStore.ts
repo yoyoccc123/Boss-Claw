@@ -246,6 +246,12 @@ async function chatJob(item: PendingItem): Promise<ChatJobOutcome> {
     addLog('error', `${item.job.title || '智联岗位'}：${ZHAOPIN_LINK_ERROR}`);
     return 'failed';
   }
+  if (item.job.platform === 'zhaopin' || item.job.platform === 'job51') {
+    const msg = item.job.platform === 'zhaopin' ? '智联招呼语请在工作台投递或使用“补发招呼语”；隐身自动沟通不会再次提交简历' : '前程无忧隐身通道不支持聊天文案发送，请在工作台投递简历';
+    addLog('warn', msg);
+    addChatLog({ level: 'warn', stage: 'system', jobTitle: item.job.title || '', company: item.job.company || '', msg });
+    return 'stop';
+  }
   const job = normalizeJobDetailMetadata(item.job);
   if (job !== item.job) { updatePending(item.id, { job }); item = { ...item, job }; }
   const cfg = useSettingsStore.getState().config;

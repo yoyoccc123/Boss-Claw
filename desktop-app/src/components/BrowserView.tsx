@@ -137,8 +137,9 @@ export interface WebviewApi {
    * stage: success | external | skip | stop | risk | failed。
    */
   platformApply: (url: string, platform: JobPlatform, job: any, greeting?: string, control?: { canStart: () => boolean; onStart: () => void }) => Promise<{
-    ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean;
+    ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean; resumeDelivered?: boolean; alreadyDelivered?: boolean;
   }>;
+  zhaopinGreet?: (job: any, greeting: string, control: { canStart: () => boolean; onStart: () => void }, tabId?: string) => Promise<any>;
   /**
    * 只读探测页面自身的就绪事实（readyState / 岗位卡片命中数 / 选择器计数 / 骨架屏启发式）。
    * 采集侧以此为**权威**判定「搜索页是否真的加载完成」——加载遮罩状态机只作参考，
@@ -517,6 +518,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
         case 'job-office-address-result':
         case 'page-status-result':
         case 'prefill-greeting-result':
+        case 'zhaopin-chat-result':
         // ui-eval-result：通用 UI 接管（query/click/type/scroll）的回执。此前 preload 侧
         // webview.cjs 会 notify('ui-eval-result')，但此处漏了该 case → cmdOnce('ui-eval') 的
         // seq 永不 resolve、必然超时，导致控制桥对内置浏览器的 UI 接管全链路失效（一并修复）。
@@ -1016,6 +1018,53 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     [openInNewTab, isPreloadReady, isLoading, sendInTab, pageStatus, hasTab, closeTabById],
   );
 
+  // A native Continue entry navigates away and destroys preload. Rebind after navigation,
+  // prepare a draft, then check Stop again before issuing a separate send command.
+  const zhaopinGreet = useCallback(async (job: any, greeting: string, control: { canStart: () => boolean; onStart: () => void }, existingTab?: string) => {
+    if (!control.canStart()) return { ok: false, stage: 'cancelled' };
+    const tabId = existingTab || openInNewTab(job.url, '智联招呼语', 'detail');
+    const failed = (error: string) => ({ ok: false, stage: 'failed', needsReview: true, error, tabId });
+    if (!tabId) return failed('未能创建智联沟通标签页');
+    const cancelled = () => !control.canStart() || !hasTab(tabId) || !aliveRef.current;
+    const waitReady = async (chat: boolean) => {
+      const start = Date.now(); let sessionId = '';
+      while (Date.now() - start < 30000) {
+        if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
+        const probe = await pageStatus(tabId);
+        if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
+        if (probe?.applyBlock) return { ok: false, stage: probe.applyBlock.kind, code: probe.applyBlock.kind === 'risk' ? 35 : undefined, message: probe.applyBlock.message, needsReview: true, tabId };
+        if (!probe?.error && probe?.readyState !== 'loading') {
+          if (!chat && probe.bodyLen > 100) return { ok: true };
+          if (chat) {
+            let current = '';
+            try { const url = new URL(probe.url); if (url.hostname === 'i.zhaopin.com' && /^\/im\/?$/.test(url.pathname)) current = url.searchParams.get('sessionId') || url.searchParams.get('sessionid') || ''; } catch {}
+            if (current && sessionId && current !== sessionId) return failed('智联跳转期间目标会话发生变化，未发送');
+            if (current) sessionId = current;
+            if (current && probe.zhaopinChatReady) return { ok: true, sessionId };
+          }
+        }
+        await sleep(400);
+      }
+      return failed(chat ? '智联未能确认目标聊天页，工作台招呼语未发送' : '智联沟通详情页未就绪，未发送');
+    };
+    const loaded = await waitReady(false); if (!loaded.ok) return loaded;
+    if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
+    const opened = await cmdOnce('zhaopin-chat', { action: 'open', job, greeting }, 8000, tabId);
+    if (!opened?.ok) return { ...failed(opened?.error || opened?.message || '智联继续沟通未确认'), ...opened, tabId };
+    const ready = await waitReady(true); if (!ready.ok) return ready;
+    const sessionId = 'sessionId' in ready ? ready.sessionId : '';
+    if (!sessionId) return failed('智联会话编号未确认，未发送');
+    if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
+    const args = { job, greeting, sessionId, defaultGreeting: opened.defaultGreeting || '' };
+    const prepared = await cmdOnce('zhaopin-chat', { ...args, action: 'prepare' }, 10000, tabId);
+    if (prepared?.ok && prepared.stage !== 'prepared') return { ...prepared, tabId };
+    if (!prepared?.ok) return { ...failed(prepared?.error || prepared?.message || '智联文案准备未确认'), ...prepared, tabId };
+    if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
+    control.onStart();
+    const sent = await cmdOnce('zhaopin-chat', { ...args, action: 'send', token: prepared.token }, 18000, tabId);
+    return sent?.ok ? { ...sent, tabId } : { ...failed(sent?.error || sent?.message || '智联招呼语发送结果未确认，请人工核对'), ...sent, tabId };
+  }, [openInNewTab, hasTab, pageStatus, cmdOnce]);
+
   // ===== 暴露 apiRef（多标签版本）=====
   // 位置要求：必须在 pageStatus / cmdOnce 等成员定义之后（否则 TDZ 报错）
   useEffect(() => {
@@ -1036,6 +1085,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       bossApi,
       fetchJobOfficeAddress,
       platformApply,
+      zhaopinGreet,
       pageStatus,
       getActiveTabId: () => activeIdRef.current || '',
       getFirstTabId: () => tabsRef.current[0]?.id || '',
@@ -1046,7 +1096,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
         return (main || list.find((t) => resolvePlatform(t.url) === platform))?.id || '';
       },
     };
-  }, [apiRef, send, loadURL, closeTabById, openInNewTab, openEngineTab, loadURLInTab, sendInTab, hasTab, isPreloadReady, isLoading, getMainTabId, getDetailTabIds, bossApi, fetchJobOfficeAddress, platformApply, pageStatus]);
+  }, [apiRef, send, loadURL, closeTabById, openInNewTab, openEngineTab, loadURLInTab, sendInTab, hasTab, isPreloadReady, isLoading, getMainTabId, getDetailTabIds, bossApi, fetchJobOfficeAddress, platformApply, zhaopinGreet, pageStatus]);
   const prefillGreeting = useCallback((greeting: string) => cmdOnce('prefill-greeting', { greeting }, 20000), [cmdOnce]);
   const runDomDump = useCallback((tabId?: string) => {
     sendInTab(tabId || '', 'webview-command', { action: 'dom-dump' });

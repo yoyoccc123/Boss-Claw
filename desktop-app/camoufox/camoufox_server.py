@@ -2190,6 +2190,10 @@ class CamoufoxHandler(BaseHTTPRequestHandler):
                 if platform == 'boss':
                     result = chat_greeting(job_id, greeting, os_name, send_resume_image, send_online_resume,
                                            expected, resume_images, mode, reply_text, attachment_delay_seconds)
+                elif platform in ('zhaopin', 'job51'):
+                    # /chat must never delegate to a resume-only deliver() and report text sent.
+                    result = {"ok": False, "sent": False, "code": 405, "needsReview": True,
+                              "error": "该隐身平台通道不支持聊天发送；智联工作台可单独补发招呼语，不会再次投递简历"}
                 else:
                     job = {
                         "jobId": job_id,

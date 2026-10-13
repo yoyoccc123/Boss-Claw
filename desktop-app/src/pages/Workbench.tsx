@@ -808,6 +808,26 @@ export default function Workbench() {
     addLog('info', '已重置该岗位，可重新分析/投递');
   };
 
+  const onSupplementGreeting = (id: string) => {
+    const item = useDataStore.getState().pending.find(p => p.id === id);
+    if (!item || item.job.platform !== 'zhaopin' || item.status !== 'sent' || item.greetingStatus === 'sent') return;
+    if (item.greetingStatus === 'needs_review') {
+      message.warning('上次发送结果未确认，请先打开聊天核对；复制招呼语可人工补发，程序不会自动重发');
+      return;
+    }
+    updatePending(id, { status: 'approved_queue', resumeDeliveredAt: item.resumeDeliveredAt || item.sentAt || Date.now(), greetingStatus: 'pending', error: '', approvedAt: Date.now() });
+    addLog('info', `已将智联岗位加入补发招呼语队列（不再提交简历）：${item.job.title || '岗位'}`);
+    startDelivery();
+  };
+
+  const copyGreeting = async (id: string) => {
+    const item = useDataStore.getState().pending.find(p => p.id === id);
+    const greeting = String(item?.deliveryGreeting || item?.analysis?.greeting || '').trim();
+    if (!greeting) { message.warning('暂无招呼语'); return; }
+    try { await navigator.clipboard.writeText(greeting); message.success('已复制工作台招呼语'); }
+    catch { message.error('复制失败，请展开岗位卡片复制招呼语'); }
+  };
+
   const onIgnore = (id: string) => updatePending(id, { status: 'ignored' });
   const onSkip = (id: string) => updatePending(id, { status: 'skipped' });
 
@@ -1159,7 +1179,7 @@ export default function Workbench() {
 
   // ===== 投递成功处理（API / DOM 兜底共用）=====
   const handleDelivered = useCallback((candidateId: string, tabId?: string) => {
-    updatePending(candidateId, { status: 'sent', error: '', sentAt: Date.now() });
+    updatePending(candidateId, { status: 'sent', error: '', sentAt: useDataStore.getState().pending.find(p => p.id === candidateId)?.sentAt || Date.now() });
     const c = useDataStore.getState().pending.find((p) => p.id === candidateId);
     addLog('success', `投递成功：${c?.job?.title || ''}（${c?.job?.company || ''}）`);
     setApplyStage(null);
@@ -1980,8 +2000,8 @@ export default function Workbench() {
     const pf = String(candidate.job?.platform || 'boss') as JobPlatform;
     const liveCandidate = useDataStore.getState().pending.find((p) => p.id === candidate.id);
     const greeting = String(liveCandidate?.deliveryGreeting || liveCandidate?.analysis?.greeting || candidate.deliveryGreeting || candidate.analysis?.greeting || '').trim();
-    if (pf === 'liepin' && greeting.length < 8) {
-      pauseAssist('猎聘招呼语为空或过短，请先补充招呼语再投递');
+    if ((pf === 'liepin' || pf === 'zhaopin') && greeting.length < 8) {
+      pauseAssist(`${platformLabel(pf)}招呼语为空或过短，请先补充招呼语再投递`);
       return;
     }
     if (!claimDelivery(candidate.id, pf)) {
@@ -1998,24 +2018,61 @@ export default function Workbench() {
     }
     setApplyStage('open_job');
     addLog('info', `通过「${platformLabel(pf)}」新标签页投递：${candidate.job?.title || '岗位'}`);
-    // 猎聘必须把本岗位实际招呼语传入聊天发送流程；智联继续沟通仍由自动沟通引擎处理。
+    // 智联先确认平台简历，再在同一标签导航到正确会话，单独确认工作台文字。
     let r: any;
     try {
       // 非 BOSS 路径的 platformApply 内部自行「打开标签页 + 下发投递」，无法把加载与节流拆开并行，
       // 因此与串行版本保持一致：先等满岗位间隔再执行（安全语义优先于观感）。
       if (!await awaitDeliveryGap(epoch) || !canContinueDelivery(epoch)) return;
-      r = await webviewApi.current?.platformApply(url, pf, candidate.job, greeting, {
-        canStart: () => canContinueDelivery(epoch),
-        onStart: () => { deliverySubmittedRef.current = true; },
-      });
+      if (pf === 'zhaopin' && candidate.resumeDeliveredAt) {
+        r = { ok: true, stage: 'success', resumeDelivered: true, alreadyDelivered: true };
+      } else {
+        r = await webviewApi.current?.platformApply(url, pf, { ...candidate.job, url }, greeting, {
+          canStart: () => canContinueDelivery(epoch),
+          onStart: () => { deliverySubmittedRef.current = true; },
+        });
+      }
+      if (pf === 'zhaopin' && r?.ok && r.resumeDelivered) {
+        const now = Date.now(), current = useDataStore.getState().pending.find(p => p.id === candidate.id);
+        const sentAt = current?.sentAt || (!r.alreadyDelivered ? now : undefined);
+        updatePending(candidate.id, { status: 'sent', resumeDeliveredAt: current?.resumeDeliveredAt || now, sentAt, greetingStatus: 'pending' });
+        addLog('success', `智联简历已投递：${candidate.job.title || '岗位'}；继续发送工作台招呼语`);
+        setApplyStage('open_chat');
+        const chat = await webviewApi.current?.zhaopinGreet?.({ ...candidate.job, url }, greeting, {
+          canStart: () => canContinueDelivery(epoch),
+          onStart: () => { deliverySubmittedRef.current = true; },
+        }, r.tabId) || { ok: false, stage: 'failed', error: '当前浏览器通道不支持智联招呼语，请在聊天中人工发送' };
+        r = { ...r, chat, tabId: chat.tabId || r.tabId };
+      }
     } catch (e) {
-      r = { ok: false, stage: 'failed', error: String((e as Error)?.message || e) };
+      const failed = { ok: false, stage: 'failed', error: String((e as Error)?.message || e), needsReview: true };
+      r = r?.resumeDelivered ? { ...r, chat: failed } : failed;
     } finally {
       releaseDelivery(candidate.id, pf); // 锁绝不泄漏
     }
     const res = r || {};
     if (res.stage === 'cancelled') return;
     const nTitle = candidate.job?.title || '岗位';
+    if (pf === 'zhaopin' && res.resumeDelivered) {
+      const chat = res.chat || {};
+      if (chat.greetingConfirmed || chat.stage === 'skip') {
+        updatePending(candidate.id, { status: 'sent', greetingStatus: chat.greetingConfirmed ? 'sent' : 'skipped', error: '' });
+        addLog(chat.greetingConfirmed ? 'success' : 'warn', `智联${chat.stage === 'already_sent' ? '会话中已有相同文案，未重复发送' : chat.greetingConfirmed ? '工作台招呼语已确认发送' : chat.message || '会话已有其他文字，未自动补发'}：${nTitle}`);
+        if (res.alreadyDelivered) {
+          if (res.tabId) webviewApi.current?.closeTab(res.tabId);
+          setApplyStage(null); recomputeStats();
+          if (useAppStore.getState().autoAssist) requestRunNext();
+        } else handleDelivered(candidate.id, res.tabId);
+        return;
+      }
+      const stopped = chat.stage === 'cancelled';
+      const error = `简历已投递；${stopped ? '用户已停止，工作台招呼语未发送' : chat.error || chat.message || '工作台招呼语未确认发送，请人工核对'}`;
+      updatePending(candidate.id, { status: 'sent', greetingStatus: stopped ? 'pending' : 'needs_review', error, retryable: false });
+      addLog('warn', `智联：${nTitle}（${error}）`);
+      setApplyStage(null); recomputeStats();
+      if (!stopped) pauseAssist(error);
+      return; // 已提交的简历永不作为失败重新投递；保留聊天页与草稿。
+    }
     if (res.ok && res.stage === 'success') {
       handleDelivered(candidate.id, res.tabId);
       return;
@@ -3105,7 +3162,9 @@ export default function Workbench() {
             <>
               {(jobsExpanded ? ranked : ranked.slice(0, 5)).map((p: PendingItem) => {
                 const chip = scoreChip(p.analysis?.score);
-                const st = p.status === 'approved_queue'
+                const st = p.id === activeId && applyStage && p.job?.platform === 'zhaopin' && p.resumeDeliveredAt
+                  ? { color: 'cyan', label: autoAssist ? '发送招呼语' : '结果核对中' }
+                  : p.status === 'approved_queue'
                   ? { color: p.id === activeId && applyStage ? 'cyan' : (autoAssist ? 'cyan' : 'blue'), label: p.id === activeId && applyStage ? (autoAssist ? '投递中' : '结果核对中') : (autoAssist ? '排队中' : '待投递') }
                   : p.deliveryNeedsReview ? { color: 'orange', label: '待核对' }
                   : STATUS_TAG[p.status] || { color: 'default', label: p.status };
@@ -3202,6 +3261,11 @@ export default function Workbench() {
                       </div>
                     )}
                     <div style={{ marginTop: 6 }}><Tag>基础简历：{storedResumeForJob(p.job).source.name}</Tag></div>
+                    {p.job.platform === 'zhaopin' && p.status === 'sent' && (
+                      <div style={{ marginTop: 6 }}><Tag color={p.greetingStatus === 'sent' ? 'green' : 'orange'}>
+                        {p.greetingStatus === 'sent' ? '工作台招呼语已发送' : p.greetingStatus === 'needs_review' ? '招呼语待核对' : p.greetingStatus === 'skipped' ? '会话已有其他文字，未补发' : '工作台招呼语未确认发送'}
+                      </Tag></div>
+                    )}
                     {p.error && <div className="job-error">⚠ {p.error}</div>}
                     <div className="job-actions">
                       {isPending ? (
@@ -3245,6 +3309,12 @@ export default function Workbench() {
                             )}
                           </div>
                           <div className="job-actions-right">
+                            {p.job.platform === 'zhaopin' && p.status === 'sent' && p.id !== activeId && p.greetingStatus !== 'sent' && (
+                              <>
+                                {p.greetingStatus !== 'needs_review' && p.greetingStatus !== 'skipped' && <Button size="small" onClick={() => onSupplementGreeting(p.id)}>补发招呼语</Button>}
+                                <Button size="small" onClick={() => copyGreeting(p.id)}>复制招呼语</Button>
+                              </>
+                            )}
                             <Button size="small" icon={<EyeOutlined />} onClick={() => p.job?.url && webviewApi.current?.openInNewTab(p.job.url, p.job?.title)}>打开</Button>
                             <Button size="small" icon={<FileTextOutlined />} onClick={() => openJobAssistant(p.id)}>定制简历</Button>
                             <Button size="small" onClick={() => onIgnore(p.id)} disabled={p.status === 'sent'}>忽略</Button>

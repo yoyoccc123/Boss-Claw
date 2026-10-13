@@ -1,0 +1,130 @@
+// Official-template isolated DOM, production preload and host functions. No recruitment network.
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import ts from 'typescript';
+import { transform } from 'esbuild';
+import { createRequire } from 'node:module';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+const require=createRequire(import.meta.url), root=dirname(dirname(fileURLToPath(import.meta.url))), work=mkdtempSync(join(tmpdir(),'bossclaw-zhaopin-greeting-'));
+function parse(file) {
+  const source=ts.createSourceFile(file,readFileSync(join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions=new Map(),vars=new Map();
+  const visit=n=>{if(ts.isFunctionDeclaration(n)&&n.name)functions.set(n.name.text,n.getText(source));if(ts.isVariableDeclaration(n)&&ts.isIdentifier(n.name)&&n.initializer)vars.set(n.name.text,n.initializer.getText(source));ts.forEachChild(n,visit);};visit(source);return{functions,vars};
+}
+const preload=parse('electron/preload/webview.cjs'),browser=parse('src/components/BrowserView.tsx'),wb=parse('src/pages/Workbench.tsx');
+const helper=readFileSync(join(root,'electron/preload/zhaopin-im.cjs'),'utf8'), A=require(join(root,'electron/preload/platform-adapters.cjs'));
+const job={platform:'zhaopin',company:'测试科技有限公司',title:'Python开发实习生 【 广州-海珠区 】',url:'https://www.zhaopin.com/jobdetail/ZL000000000J00000000000.htm'};
+const greeting='有Python脚本维护经验，熟悉接口数据处理，希望了解贵公司岗位。', platformDefault='您好，我对这个职位很感兴趣，想进一步了解一下。';
+const message=(body,{me=true,status='success',extra=''}={})=>`<div class="im-message ${extra}"><div class="im-message__bubble ${me?'im-message__bubble--me':''}"><div class="im-message__bubble-inner">${body}</div></div>${status==='sending'?'<div class="im-message__send-state">发送中</div>':status==='fail'?'<div class="im-message__send-state"><button class="im-message__fail-btn" aria-label="发送失败，点击重发"></button></div>':me?'<div class="im-message__receipt">送达</div>':''}</div>`;
+const html=(history='',alter='')=>`<div class="im-session-item is-active"><span class="im-session-item__name">测试招聘者</span><span class="im-session-item__company-name">测试科技有限公司</span><span class="im-session-item__job">Python开发实习生</span></div><div class="im-main-panel"><div class="im-chat-header"><span class="im-chat-header__name">测试招聘者</span><span class="im-chat-header__meta-text">测试科技有限公司</span><span class="im-chat-header__meta-text">招聘经理</span><span class="im-chat-header__job-title">Python开发实习生</span></div><div class="im-main-panel__timeline">${history}</div><textarea class="im-sender__input" placeholder="从这里开启对话…"></textarea><button class="im-sender__send-btn">发送</button></div>${alter}`;
+const base={html:html(message(platformDefault)),defaultGreeting:platformDefault,stage:'success',sends:1};
+const cases=[
+  {...base,name:'平台默认句后补发工作台文本'},
+  {...base,name:'无默认消息也可发送',html:html()},
+  {...base,name:'动态默认文案按弹窗原文核对',html:html(message('我希望应聘贵公司此岗位，谢谢。')),defaultGreeting:'我希望应聘贵公司此岗位，谢谢。'},
+  {...base,name:'同文案已送达不重复',html:html(message(greeting)),stage:'already_sent',sends:0},
+  {...base,name:'平台默认之外已有本人沟通',html:html(message('我明天可以参加面试。')),stage:'skip',sends:0},
+  {...base,name:'已有HR回复',html:html(message('请问什么时候到岗？',{me:false})),stage:'skip',sends:0},
+  {...base,name:'旧投递保留官方默认句兼容',defaultGreeting:''},
+  {...base,name:'不能把未知默认句当已确认默认',html:html(message('未能确认来源的历史文案')),defaultGreeting:'',stage:'skip',sends:0},
+  {...base,name:'同文案还在发送不能再发',html:html(message(greeting,{status:'sending'})),stage:'skip',sends:0},
+  {...base,name:'已有草稿保留',before:"document.querySelector('textarea').value='用户的草稿';",stage:'failed',sends:0},
+  {...base,name:'错误公司不发送',job:{...job,company:'另一家公司'},stage:'failed',sends:0},
+  {...base,name:'错误岗位不发送',job:{...job,title:'测试工程师'},stage:'failed',sends:0},
+  {...base,name:'错误HR不发送',job:{...job,recruiterName:'另一个人'},stage:'failed',sends:0},
+  {...base,name:'错误session不发送',sessionId:'other',stage:'failed',sends:0},
+  {...base,name:'多个活跃会话不发送',html:html(message(platformDefault),'<div class="im-session-item is-active">另一会话</div>'),stage:'failed',sends:0},
+  {...base,name:'多个编辑框不发送',html:html(message(platformDefault),'<textarea class="im-sender__input"></textarea>'),stage:'failed',sends:0},
+  {...base,name:'禁用编辑框不发送',before:"document.querySelector('textarea').disabled=true;",stage:'failed',sends:0},
+  {...base,name:'禁用发送按钮保留草稿',before:"document.querySelector('button').disabled=true;",stage:'failed',sends:0},
+  {...base,name:'文字输入失败不点发送',inputFail:true,stage:'failed',sends:0},
+  {...base,name:'乐观气泡发送中不能计成功',sendStatus:'sending',stage:'failed'},
+  {...base,name:'空失败按钮不能计成功',sendStatus:'fail',stage:'failed'},
+  {...base,name:'只有草稿清空不计成功',noBubble:true,stage:'failed'},
+  {...base,name:'无送达标记不能计成功',noReceipt:true,stage:'failed'},
+  {...base,name:'填写中出现HR回复停止',afterInput:message('您好，请介绍项目',{me:false}),stage:'failed',sends:0},
+  {...base,name:'发送前切换会话停止',changeAfterPrepare:true,stage:'failed',sends:0},
+  {...base,name:'验证先于填入',block:true,stage:'risk',sends:0},
+  {...base,name:'附件卡不当文字沟通',html:html(message(platformDefault)+message('附件简历.pdf',{extra:'im-message--custom'}))},
+  {...base,name:'发送token不能重放',replay:true},
+  {...base,name:'原生成功弹窗进入会话',open:true,html:`<div class="deliver-greeting-modal"><p class="deliver-greeting-modal__content-text">${platformDefault}</p><button class="deliver-greeting-modal__btn--primary">继续沟通</button></div>`,stage:'opening'},
+  {...base,name:'原生详情继续沟通',open:true,html:'<div class="summary-planes__action"><button>继续沟通</button></div>',stage:'opening'},
+  {...base,name:'打开会话前核对详情链接',open:true,job:{...job,url:job.url.replace('00000.htm','11111.htm')},stage:'failed',sends:0},
+  {...base,name:'缺少继续沟通不再次投简历',open:true,html:'<button>立即投递</button>',stage:'failed',sends:0},
+  {...base,name:'打开会话前验证不点按钮',open:true,block:true,stage:'risk',sends:0},
+  {...base,name:'打开会话前空招呼语不点按钮',open:true,short:true,stage:'failed',sends:0},
+];
+const names=['visible','textOf','findPlatformAction','firstVisible','zhaopinChatStep'];
+const script=c=>`(async()=>{const c=${JSON.stringify(c)},greeting=${JSON.stringify(greeting)};
+const {readZhaopinChat,readZhaopinDeliveryState,sessionIdFromUrl}=(()=>{const module={exports:{}};${helper};return module.exports;})();
+const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};ADAPTERS.labelHit=${A.labelHit.toString()};ADAPTERS.normLabelText=${A.normLabelText.toString()};const normLabelText=ADAPTERS.normLabelText;
+const location={href:c.open?${JSON.stringify(job.url)}:'https://i.zhaopin.com/im?sessionId=target'},PLATFORM_NORM=ADAPTERS.normLabelText;
+const all=(s,r=document)=>[...r.querySelectorAll(s)],readZhaopinPageBlock=()=>c.block?{kind:'risk',message:'人工验证'}:null;
+let zhaopinPrepared=null,sends=0;const waitFor=async fn=>{for(let i=0;i<4;i++){const r=await fn();if(r)return r;}return null;};
+const trustedInput=async(action,value)=>{if(c.inputFail)return{ok:false};document.activeElement.value=value;if(c.afterInput)document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend',c.afterInput);return{ok:true};};
+const clickElement=async el=>{sends++;if(c.open)return;document.querySelector('textarea').value='';if(!c.noBubble){document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend',${JSON.stringify(message(greeting))});const row=document.querySelector('.im-main-panel__timeline').lastElementChild;if(c.sendStatus==='sending'||c.sendStatus==='fail'){row.querySelector('.im-message__receipt').remove();row.insertAdjacentHTML('beforeend',c.sendStatus==='sending'?'<div class="im-message__send-state">发送中</div>':'<div class="im-message__send-state"><button class="im-message__fail-btn"></button></div>');}if(c.noReceipt)row.querySelector('.im-message__receipt').remove();}};
+${names.map(n=>preload.functions.get(n)).join('\n')}
+${c.before||''}
+const args={seq:'test',job:c.job||${JSON.stringify(job)},sessionId:c.sessionId||'target',greeting:c.short?'':greeting,defaultGreeting:c.defaultGreeting};
+let result=await zhaopinChatStep({...args,action:c.open?'open':'prepare'}),replayed;
+if(result.stage==='prepared'){if(c.changeAfterPrepare)location.href='https://i.zhaopin.com/im?sessionId=other';const send={...args,action:'send',token:result.token};result=await zhaopinChatStep(send);if(c.replay)replayed=await zhaopinChatStep(send);}
+if(c.open)await new Promise(resolve=>setTimeout(resolve,10));
+return {name:c.name,result,sends,replayed,editor:document.querySelector('textarea')?.value};})()`;
+cases.forEach(c=>new vm.Script(script(c)));
+cases.forEach((c,i)=>writeFileSync(join(work,'fixture-'+i+'.html'),'<meta charset="utf-8"><style>body{font:16px sans-serif}textarea{width:400px;height:70px}button{height:30px}div,span{min-height:20px}</style>'+c.html));
+const report=join(work,'report.json'),entry=join(work,'main.cjs');
+writeFileSync(entry,`const {app,BrowserWindow}=require('electron'),fs=require('fs');app.setPath('userData',${JSON.stringify(join(work,'profile'))});app.setPath('sessionData',${JSON.stringify(join(work,'profile'))});app.whenReady().then(async()=>{const w=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true}});w.webContents.session.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(_,cb)=>cb({cancel:true}));let code=0;try{const reports=[],scripts=${JSON.stringify(cases.map(script))};for(let i=0;i<scripts.length;i++){await w.loadFile(${JSON.stringify(work)}+'/fixture-'+i+'.html');reports.push(await w.webContents.executeJavaScript(scripts[i]));}fs.writeFileSync(${JSON.stringify(report)},JSON.stringify(reports));}catch(e){fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({error:e.stack}));code=1;}finally{w.destroy();app.exit(code);}});`);
+const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+const run=spawnSync(process.env.BOSSCLAW_ELECTRON||require('electron'),[entry],{env,windowsHide:true,timeout:45000,encoding:'utf8'});
+assert.equal(run.status,0,run.error?.message||run.stderr);
+const results=JSON.parse(readFileSync(report,'utf8'));assert.ok(!results.error,results.error);
+for(let i=0;i<cases.length;i++){const c=cases[i],r=results[i];assert.equal(r.result.stage,c.stage,c.name);assert.equal(r.sends,c.sends,c.name);if(c.replay)assert.equal(r.replayed.stage,'failed');}
+console.log(`PASS Zhaopin greeting: ${cases.length} isolated official-template DOM cases; ${report}`);
+
+// Host navigation and Stop boundaries: run actual production BrowserView function.
+let hostChecks=0;
+for(const stopAt of ['never','before-open','after-navigation','after-prepare','after-send']){
+  let allowed=true,reads=0,sends=0,opens=0,started=0;
+  const context={Promise,URL,Date,useCallback:fn=>fn,aliveRef:{current:true},openInNewTab:()=> 'tab',hasTab:()=>true,sleep:async()=>{},
+    pageStatus:async()=>{reads++;if(stopAt==='before-open'&&reads===1)allowed=false;if(stopAt==='after-navigation'&&reads===2)allowed=false;return reads===1?{bodyLen:300,readyState:'complete',url:job.url}:{bodyLen:500,readyState:'complete',url:'https://i.zhaopin.com/im?sessionId=target',zhaopinChatReady:true};},
+    cmdOnce:async(channel,args)=>{if(args.action==='open'){opens++;return{ok:true,defaultGreeting:platformDefault};}if(args.action==='prepare'){if(stopAt==='after-prepare')allowed=false;return{ok:true,stage:'prepared',token:'t'};}sends++;if(stopAt==='after-send')allowed=false;return{ok:true,stage:'success',greetingConfirmed:true};}};
+  vm.createContext(context);vm.runInContext((await transform(`globalThis.greet=${browser.vars.get('zhaopinGreet')};`,{loader:'tsx'})).code,context);
+  const result=await context.greet(job,greeting,{canStart:()=>allowed,onStart:()=>started++});
+  assert.equal(sends,['never','after-send'].includes(stopAt)?1:0,stopAt);assert.equal(started,sends);assert.equal(result.greetingConfirmed===true,sends===1);hostChecks++;
+}
+console.log(`PASS Zhaopin greeting host: ${hostChecks} production navigation/Stop cases; outbound commands are stubs.`);
+
+// Successful resume delivery survives a message failure, Stop, or exception. Supplement skips submission.
+let queueChecks=0;
+for(const outcome of ['success','cancelled','failed','risk','throws','supplement']){
+  const item={id:'job',status:'approved_queue',job,deliveryGreeting:greeting,...(outcome==='supplement'?{resumeDeliveredAt:10,sentAt:10}:{})};
+  let applies=0,greets=0,pauses=0,closed=0,next=0;const store={autoAssist:true};
+  const c={Promise,Date,useDataStore:{getState:()=>({pending:[item]})},useAppStore:{getState:()=>store},deliveryEpochRef:{current:0},deliverySubmittedRef:{current:false},
+    updatePending:(id,patch)=>Object.assign(item,patch),claimDelivery:()=>true,releaseDelivery:()=>{},awaitDeliveryGap:async()=>true,canContinueDelivery:()=>true,
+    addLog:()=>{},setApplyStage:()=>{},recomputeStats:()=>{},platformLabel:p=>p,requestRunNext:()=>next++,pauseAssist:()=>{pauses++;store.autoAssist=false;},
+    handleDelivered:()=>{item.status='sent';closed++;},
+    webviewApi:{current:{platformApply:async()=>{applies++;return{ok:true,stage:'success',resumeDelivered:true,tabId:'tab'};},
+      zhaopinGreet:async()=>{greets++;if(outcome==='throws')throw Error('draft failure');return outcome==='success'||outcome==='supplement'?{ok:true,stage:'success',greetingConfirmed:true,tabId:'tab'}:{ok:false,stage:outcome,error:'未确认',tabId:'tab'};},closeTab:()=>closed++}}};
+  vm.createContext(c);vm.runInContext((await transform(`globalThis.deliver=${wb.vars.get('deliverNonBoss')};`,{loader:'tsx'})).code,c);
+  await c.deliver(item,job.url);
+  assert.equal(item.status,'sent',outcome);assert.ok(item.resumeDeliveredAt);assert.equal(greets,1);assert.equal(applies,outcome==='supplement'?0:1);
+  if(['failed','risk','throws'].includes(outcome)){assert.equal(item.greetingStatus,'needs_review');assert.equal(closed,0);assert.equal(pauses,1);assert.equal(next,0);}
+  if(outcome==='cancelled'){assert.equal(item.greetingStatus,'pending');assert.equal(closed,0);}
+  if(outcome==='supplement')assert.equal(item.sentAt,10);
+  queueChecks++;
+}
+console.log(`PASS Zhaopin greeting workbench: ${queueChecks} production result/supplement cases; no actual submission or message.`);
+
+const bridge=parse('src/lib/bossclaw/camoufox.ts');let bridgeCalls=0;
+const ctx={Promise,camoufoxCall:async()=>{bridgeCalls++;return{ok:true,sent:true};}};
+vm.createContext(ctx);vm.runInContext((await transform(bridge.functions.get('camoufoxChat').replace(/^export\s+/,'')+';globalThis.chat=camoufoxChat;',{loader:'ts'})).code,ctx);
+for(const platform of ['zhaopin','job51']) {const result=await ctx.chat('job',greeting,{platform});assert.equal(result.sent,false);assert.equal(bridgeCalls,0);}
+for(const platform of ['boss','liepin'])assert.equal((await ctx.chat('job',greeting,{platform})).sent,true);
+assert.equal(bridgeCalls,2);console.log('PASS chat bridge: 4 production dispatch checks; resume-only chat makes no engine calls.');
+const py=join(work,'server_test.py');
+writeFileSync(py,`import ast,types\nfrom pathlib import Path\nfrom urllib.parse import urlparse,parse_qs\nroot=Path(${JSON.stringify(root)})\ntree=ast.parse((root/'camoufox/camoufox_server.py').read_text(encoding='utf-8-sig'))\ncls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='CamoufoxHandler')\nfn=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='do_POST')\ncalls=[]\ndef boundary(*args,**kw):\n calls.append(args);return {'ok':True,'sent':True}\nns={'urlparse':urlparse,'parse_qs':parse_qs,'PLATFORMS':('boss','liepin','zhaopin','job51'),'platform_mods':types.SimpleNamespace(deliver=boundary),'chat_greeting':boundary,'log':lambda *a:None}\nexec(compile(ast.Module(body=[fn],type_ignores=[]),'production_handler','exec'),ns)\nfor platform in ('zhaopin','job51','boss','liepin'):\n h=types.SimpleNamespace(path='/chat?token=fixture',server=types.SimpleNamespace(token='fixture'),_read_body=lambda p=platform:{'platform':p,'jobId':'job','greeting':'fixture greeting'},_send=lambda status,result:result)\n result=ns['do_POST'](h)\n assert result['sent']==(platform in ('boss','liepin'))\n assert len(calls)==(('boss','liepin').index(platform)+1 if platform in ('boss','liepin') else 0)\nprint('PASS Python /chat: 4 production handler checks; browser/send boundaries are stubs.')\n`);
+const python=spawnSync(process.env.BOSSCLAW_PYTHON||'python',[py],{windowsHide:true,timeout:10000,encoding:'utf8'});
+assert.equal(python.status,0,python.error?.message||python.stderr);console.log(python.stdout.trim());

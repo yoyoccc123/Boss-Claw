@@ -459,6 +459,9 @@ export interface PendingItem {
   retryable?: boolean;
   /** 平台页面或投递结果未确认，需核对后手动重试，不能批量重投。 */
   deliveryNeedsReview?: boolean;
+  /** 智联的平台简历提交与工作台文案发送分别记录；补发文案不可再次提交简历。 */
+  resumeDeliveredAt?: number;
+  greetingStatus?: 'pending' | 'sent' | 'skipped' | 'needs_review';
   /** 成功投递时间戳（用于单日投递上限统计） */
   sentAt?: number;
   /** HR 来消息后 AI 跟聊回复的成功时间戳（不计入单日投递上限统计；sentAt 仍为空表示仅回复未投递） */
