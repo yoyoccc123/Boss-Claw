@@ -21,6 +21,12 @@ const greeting='有Python脚本维护经验，熟悉接口数据处理，希望�
 const message=(body,{me=true,status='success',extra=''}={})=>`<div class="im-message ${extra}"><div class="im-message__bubble ${me?'im-message__bubble--me':''}"><div class="im-message__bubble-inner">${body}</div></div>${status==='sending'?'<div class="im-message__send-state">发送中</div>':status==='fail'?'<div class="im-message__send-state"><button class="im-message__fail-btn" aria-label="发送失败，点击重发"></button></div>':me?'<div class="im-message__receipt">送达</div>':''}</div>`;
 const html=(history='',alter='')=>`<div class="im-session-item is-active"><span class="im-session-item__name">测试招聘者</span><span class="im-session-item__company-name">测试科技有限公司</span><span class="im-session-item__job">Python开发实习生</span></div><div class="im-main-panel"><div class="im-chat-header"><span class="im-chat-header__name">测试招聘者</span><span class="im-chat-header__meta-text">测试科技有限公司</span><span class="im-chat-header__meta-text">招聘经理</span><span class="im-chat-header__job-title">Python开发实习生</span></div><div class="im-main-panel__timeline">${history||'<div class="im-main-panel__tip">暂无消息，打个招呼吧</div>'}</div><textarea class="im-sender__input" placeholder="从这里开启对话…"></textarea><button class="im-sender__send-btn">发送</button></div>${alter}`;
 const base={html:html(message(platformDefault)),defaultGreeting:platformDefault,stage:'success',sends:1};
+const detail = url => `<a class="im-chat-header__detail" href="${url}">查看详情</a>`;
+const linked = content => content.replace('</div><div class="im-main-panel__timeline">', `${detail(job.url.replace('.htm','.html'))}</div><div class="im-main-panel__timeline">`);
+const reportedDefault='您好，我对该职位很感兴趣，请您看下我的简历，如果合适可以随时联系我，谢谢。';
+const reportedLayout=linked(html(message(reportedDefault)+message('示例简历.pdf',{extra:'im-message--custom'})))
+  .replaceAll('测试科技有限公司','广东测试知识产权').replaceAll('Python开发实习生','AI产品经理')
+  .replace('<span class="im-chat-header__job-title">AI产品经理</span>','<div class="im-chat-header__job"><span class="im-chat-header__job-title" title="AI产品经理">AI产品经理</span><span class="im-chat-header__salary">1.5-2万·13薪</span></div>');
 const cases=[
   {...base,name:'平台默认句后补发工作台文本'},
   {...base,name:'无默认消息也可发送',html:html()},
@@ -62,6 +68,15 @@ const cases=[
   {...base,name:'隐藏历史加载提示不阻断',html:html(message(platformDefault)+'<div style="display:none"><div class="im-main-panel__tip">消息加载中…</div></div>')},
   {...base,name:'准备后重新加载历史停止发送',historyAfterPrepare:true,stage:'failed',sends:0},
   {...base,name:'已有HR面试卡片不再首次招呼',html:html(message('面试邀请',{me:false,extra:'im-message--custom'})),stage:'skip',sends:0},
+  {...base,name:'截图中的公司简称和默认招呼',html:reportedLayout,job:{...job,title:'AI产品经理',company:'广东测试知识产权有限公司'},defaultGreeting:''},
+  {...base,name:'法律后缀差异需同岗位链接',html:linked(html(message(platformDefault))).replaceAll('测试科技有限公司','测试科技')},
+  {...base,name:'简称没有岗位链接仍停止',html:html(message(platformDefault)).replaceAll('测试科技有限公司','测试科技'),stage:'failed',sends:0},
+  {...base,name:'同名岗位但编号不同停止',html:linked(html(message(platformDefault))).replaceAll('ZL000000000J00000000000.html','ZL111111111J11111111111.html'),stage:'failed',sends:0},
+  {...base,name:'详情链接域名错误停止',html:linked(html(message(platformDefault))).replace('https://www.zhaopin.com/jobdetail','https://evil.invalid/jobdetail'),stage:'failed',sends:0},
+  {...base,name:'不同公司不能用编号抹平',html:linked(html(message(platformDefault))).replaceAll('测试科技有限公司','另一家公司'),stage:'failed',sends:0},
+  {...base,name:'显示简称列表全称且同岗位',html:linked(html(message(platformDefault))).replace('<span class="im-chat-header__meta-text">测试科技有限公司</span>','<span class="im-chat-header__meta-text">测试科技</span>')},
+  {...base,name:'默认文案后附实际交流不能忽略',html:html(message(reportedDefault+'我已确认面试时间。')),defaultGreeting:'',stage:'skip',sends:0},
+  {...base,name:'发送前详情编号变化停止',html:linked(html(message(platformDefault))),detailAfterPrepare:true,stage:'failed',sends:0},
 ];
 const names=['visible','textOf','findPlatformAction','firstVisible','zhaopinChatStep'];
 const script=c=>`(async()=>{const c=${JSON.stringify(c)},greeting=${JSON.stringify(greeting)};
@@ -76,7 +91,7 @@ ${names.map(n=>preload.functions.get(n)).join('\n')}
 ${c.before||''}
 const args={seq:'test',job:c.job||${JSON.stringify(job)},sessionId:c.sessionId||'target',greeting:c.short?'':greeting,defaultGreeting:c.defaultGreeting};
 let result=await zhaopinChatStep({...args,action:c.open?'open':'prepare'}),replayed;
-if(result.stage==='prepared'){if(c.changeAfterPrepare)location.href='https://i.zhaopin.com/im?sessionId=other';if(c.historyAfterPrepare)document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend','<div class="im-main-panel__history-tip is-loading">加载中…</div>');const send={...args,action:'send',token:result.token};result=await zhaopinChatStep(send);if(c.replay)replayed=await zhaopinChatStep(send);}
+if(result.stage==='prepared'){if(c.changeAfterPrepare)location.href='https://i.zhaopin.com/im?sessionId=other';if(c.detailAfterPrepare)document.querySelector('.im-chat-header__detail').href='https://www.zhaopin.com/jobdetail/ZL111111111J11111111111.html';if(c.historyAfterPrepare)document.querySelector('.im-main-panel__timeline').insertAdjacentHTML('beforeend','<div class="im-main-panel__history-tip is-loading">加载中…</div>');const send={...args,action:'send',token:result.token};result=await zhaopinChatStep(send);if(c.replay)replayed=await zhaopinChatStep(send);}
 if(c.open)await new Promise(resolve=>setTimeout(resolve,10));
 return {name:c.name,result,sends,replayed,editor:document.querySelector('textarea')?.value};})()`;
 cases.forEach(c=>new vm.Script(script(c)));
@@ -87,7 +102,7 @@ const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 const run=spawnSync(process.env.BOSSCLAW_ELECTRON||require('electron'),[entry],{env,windowsHide:true,timeout:45000,encoding:'utf8'});
 assert.equal(run.status,0,run.error?.message||run.stderr);
 const results=JSON.parse(readFileSync(report,'utf8'));assert.ok(!results.error,results.error);
-for(let i=0;i<cases.length;i++){const c=cases[i],r=results[i];assert.equal(r.result.stage,c.stage,c.name);assert.equal(r.sends,c.sends,c.name);if(c.replay)assert.equal(r.replayed.stage,'failed');}
+for(let i=0;i<cases.length;i++){const c=cases[i],r=results[i];assert.equal(r.result.stage,c.stage,c.name);assert.equal(r.sends,c.sends,c.name);if(!c.open&&r.result.stage==='failed')assert.equal(r.result.sendAttempted,r.sends>0,c.name+' send boundary');if(c.replay)assert.equal(r.replayed.stage,'failed');}
 console.log(`PASS Zhaopin greeting: ${cases.length} isolated official-template DOM cases; ${report}`);
 
 // Host navigation and Stop boundaries: run actual production BrowserView function.
@@ -105,7 +120,7 @@ console.log(`PASS Zhaopin greeting host: ${hostChecks} production navigation/Sto
 
 // Successful resume delivery survives a message failure, Stop, or exception. Supplement skips submission.
 let queueChecks=0;
-for(const outcome of ['success','cancelled','failed','risk','throws','supplement']){
+for(const outcome of ['success','cancelled','failed','risk','throws','supplement','identity-rejected']){
   const item={id:'job',status:'approved_queue',job,deliveryGreeting:greeting,...(outcome==='supplement'?{resumeDeliveredAt:10,sentAt:10}:{})};
   let applies=0,greets=0,pauses=0,closed=0,next=0;const store={autoAssist:true};
   const c={Promise,Date,useDataStore:{getState:()=>({pending:[item]})},useAppStore:{getState:()=>store},deliveryEpochRef:{current:0},deliverySubmittedRef:{current:false},
@@ -113,16 +128,28 @@ for(const outcome of ['success','cancelled','failed','risk','throws','supplement
     addLog:()=>{},setApplyStage:()=>{},recomputeStats:()=>{},platformLabel:p=>p,requestRunNext:()=>next++,pauseAssist:()=>{pauses++;store.autoAssist=false;},
     handleDelivered:()=>{item.status='sent';closed++;},
     webviewApi:{current:{platformApply:async()=>{applies++;return{ok:true,stage:'success',resumeDelivered:true,tabId:'tab'};},
-      zhaopinGreet:async()=>{greets++;if(outcome==='throws')throw Error('draft failure');return outcome==='success'||outcome==='supplement'?{ok:true,stage:'success',greetingConfirmed:true,tabId:'tab'}:{ok:false,stage:outcome,error:'未确认',tabId:'tab'};},closeTab:()=>closed++}}};
+      zhaopinGreet:async()=>{greets++;if(outcome==='throws')throw Error('draft failure');return outcome==='success'||outcome==='supplement'?{ok:true,stage:'success',greetingConfirmed:true,tabId:'tab'}:{ok:false,stage:outcome==='identity-rejected'?'failed':outcome,...(outcome==='identity-rejected'?{sendAttempted:false}:{}),error:'未确认',tabId:'tab'};},closeTab:()=>closed++}}};
   vm.createContext(c);vm.runInContext((await transform(`globalThis.deliver=${wb.vars.get('deliverNonBoss')};`,{loader:'tsx'})).code,c);
   await c.deliver(item,job.url);
   assert.equal(item.status,'sent',outcome);assert.ok(item.resumeDeliveredAt);assert.equal(greets,1);assert.equal(applies,outcome==='supplement'?0:1);
   if(['failed','risk','throws'].includes(outcome)){assert.equal(item.greetingStatus,'needs_review');assert.equal(closed,0);assert.equal(pauses,1);assert.equal(next,0);}
   if(outcome==='cancelled'){assert.equal(item.greetingStatus,'pending');assert.equal(closed,0);}
   if(outcome==='supplement')assert.equal(item.sentAt,10);
+  if(outcome==='identity-rejected'){assert.equal(item.greetingStatus,'pending');assert.equal(item.greetingSendAttempted,false);assert.equal(closed,0);assert.equal(pauses,1);}
   queueChecks++;
 }
 console.log(`PASS Zhaopin greeting workbench: ${queueChecks} production result/supplement cases; no actual submission or message.`);
+
+const retryFile=join(work,'retry.cjs');writeFileSync(retryFile,(await transform(readFileSync(join(root,'src/lib/bossclaw/zhaopinGreetingRetry.ts'),'utf8'),{loader:'ts',format:'cjs'})).code);
+const {canSupplementZhaopinGreeting}=require(retryFile);
+const legacy={id:'old',status:'sent',job,deliveryGreeting:greeting,resumeDeliveredAt:10,sentAt:10,greetingStatus:'needs_review',error:'简历已投递；智联聊天中的公司或岗位与目标不一致，工作台招呼语未发送'};
+assert.equal(canSupplementZhaopinGreeting(legacy),true);
+for(const patch of [{error:'发送结果未确认'},{greetingSendAttempted:true},{greetingStatus:'sent'},{greetingStatus:'skipped'}])assert.equal(canSupplementZhaopinGreeting({...legacy,...patch}),false);
+assert.equal(canSupplementZhaopinGreeting({...legacy,error:'等待历史超时',greetingSendAttempted:false}),true);
+let starts=0,warnings=0;const retryContext={Date,canSupplementZhaopinGreeting,useDataStore:{getState:()=>({pending:[legacy]})},updatePending:(id,patch)=>Object.assign(legacy,patch),message:{warning:()=>warnings++},addLog:()=>{},startDelivery:()=>starts++};
+vm.createContext(retryContext);vm.runInContext((await transform(`globalThis.supplement=${wb.vars.get('onSupplementGreeting')};`,{loader:'tsx'})).code,retryContext);
+retryContext.supplement('old');assert.equal(starts,1);assert.equal(warnings,0);assert.equal(legacy.status,'approved_queue');assert.equal(legacy.resumeDeliveredAt,10);assert.equal(legacy.sentAt,10);
+console.log('PASS greeting recovery: 7 production policy/action checks; legacy no-send can supplement without resubmitting a resume.');
 
 const bridge=parse('src/lib/bossclaw/camoufox.ts');let bridgeCalls=0;
 const ctx={Promise,camoufoxCall:async()=>{bridgeCalls++;return{ok:true,sent:true};}};

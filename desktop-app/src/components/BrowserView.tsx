@@ -1023,16 +1023,16 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   const zhaopinGreet = useCallback(async (job: any, greeting: string, control: { canStart: () => boolean; onStart: () => void }, existingTab?: string) => {
     if (!control.canStart()) return { ok: false, stage: 'cancelled' };
     const tabId = existingTab || openInNewTab(job.url, '智联招呼语', 'detail');
-    const failed = (error: string) => ({ ok: false, stage: 'failed', needsReview: true, error, tabId });
+    const failed = (error: string) => ({ ok: false, stage: 'failed', needsReview: true, sendAttempted: false, error, tabId });
     if (!tabId) return failed('未能创建智联沟通标签页');
     const cancelled = () => !control.canStart() || !hasTab(tabId) || !aliveRef.current;
     const waitReady = async (chat: boolean) => {
       const start = Date.now(); let sessionId = '';
       while (Date.now() - start < 30000) {
-        if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
+        if (cancelled()) return { ok: false, stage: 'cancelled', sendAttempted: false, tabId };
         const probe = await pageStatus(tabId);
         if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
-        if (probe?.applyBlock) return { ok: false, stage: probe.applyBlock.kind, code: probe.applyBlock.kind === 'risk' ? 35 : undefined, message: probe.applyBlock.message, needsReview: true, tabId };
+        if (probe?.applyBlock) return { ok: false, stage: probe.applyBlock.kind, code: probe.applyBlock.kind === 'risk' ? 35 : undefined, message: probe.applyBlock.message, needsReview: true, sendAttempted: false, tabId };
         if (!probe?.error && probe?.readyState !== 'loading') {
           if (!chat && probe.bodyLen > 100) return { ok: true };
           if (chat) {
@@ -1062,7 +1062,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
     control.onStart();
     const sent = await cmdOnce('zhaopin-chat', { ...args, action: 'send', token: prepared.token }, 18000, tabId);
-    return sent?.ok ? { ...sent, tabId } : { ...failed(sent?.error || sent?.message || '智联招呼语发送结果未确认，请人工核对'), ...sent, tabId };
+    return sent?.ok ? { ...sent, tabId } : { ...failed(sent?.error || sent?.message || '智联招呼语发送结果未确认，请人工核对'), sendAttempted: true, ...sent, tabId };
   }, [openInNewTab, hasTab, pageStatus, cmdOnce]);
 
   // ===== 暴露 apiRef（多标签版本）=====

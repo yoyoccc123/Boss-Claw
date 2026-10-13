@@ -3437,10 +3437,11 @@ ipcRenderer.on('platform-apply', (_e, arg) => {
 
 let zhaopinPrepared = null;
 async function zhaopinChatStep(args = {}) {
+  let sendAttempted = false;
   const spec = (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {};
   const block = () => readZhaopinPageBlock(document, location.href, spec);
-  const failed = error => ({ ok: false, stage: 'failed', needsReview: true, error });
-  const blocked = b => ({ ok: false, stage: b.kind, needsReview: true, code: b.kind === 'risk' ? 35 : undefined, message: b.message });
+  const failed = error => ({ ok: false, stage: 'failed', needsReview: true, sendAttempted, error });
+  const blocked = b => ({ ok: false, stage: b.kind, needsReview: true, sendAttempted, code: b.kind === 'risk' ? 35 : undefined, message: b.message });
   const b = block(); if (b) return blocked(b);
   const greeting = String(args.greeting || '').trim();
   if (greeting.length < 8) return failed('智联工作台招呼语为空或过短，未发送');
@@ -3490,6 +3491,7 @@ async function zhaopinChatStep(args = {}) {
     if (!prepared || args.token !== prepared.token || greeting !== prepared.greeting || target.signature !== prepared.target.signature || target.editor !== prepared.target.editor) return failed('智联发送授权或会话已变化，未发送');
     if (before.editorText !== greeting || !before.sendButton || before.matching.length || before.incoming.length || before.nonDefaultOutgoing.length) return failed('智联发送前内容或会话发生变化，已保留草稿');
     const previous = new Set(before.matching);
+    sendAttempted = true;
     await clickElement(before.sendButton);
     const confirmed = await waitFor(() => {
       const risk = block(); if (risk) return { block: risk };
@@ -3500,7 +3502,7 @@ async function zhaopinChatStep(args = {}) {
     }, 12000, '智联工作台文字发送确认');
     if (confirmed?.block) return blocked(confirmed.block);
     if (!confirmed?.sent) return failed('智联工作台招呼语发送结果未确认，已保留聊天页，请人工核对；不会自动重发');
-    return { ok: true, stage: 'success', greetingConfirmed: true };
+    return { ok: true, stage: 'success', greetingConfirmed: true, sendAttempted };
   }
   return failed('未知智联聊天步骤');
 }
