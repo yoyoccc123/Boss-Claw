@@ -2537,6 +2537,9 @@ export default function Workbench() {
                 if (webviewApi.current?.isPreloadReady?.(domTab) && !webviewApi.current?.isLoading?.(domTab)) break;
                 await sleep(300);
               }
+              // A navigation can replace the preload while this wait is running. Never consume
+              // the single replay until the new document has a registered, usable listener.
+              if (!webviewApi.current?.isPreloadReady?.(domTab) || webviewApi.current?.isLoading?.(domTab)) continue;
               sendOnce();
               reSent = true;
               break;
