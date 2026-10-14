@@ -225,7 +225,7 @@ Windows 源码和依赖固定在 E:\自动投简历脚本\Boss-Claw\desktop-app�
 
 Windows 发布会升级 E:\自动投简历脚本\BossClaw-新版-2.5.15\BossClaw.exe。替换前正常退出程序，备份用户数据、引擎数据和简历文件，逐文件核验程序及用户数据的 SHA-256；安装失败恢复旧程序。安装后保持关闭，由用户启动。
 
-发布必须依次通过类型检查、生产界面构建、清理边界校验，以及 delivery-stop、collection-resume、collection-goal、delivery-throttle、boss-chat、zhaopin-greeting、resume-facts、resume-variants、resume 九组离线回归。打包后还会启动真实 EXE，核对 ASAR 界面、两份基础简历与旧 file:// 存储兼容、主窗口和网页预加载、CloakBrowser 模块、外置 Python 脚本和 Node 桥 DOCX 解析。测试使用合成数据并阻断平台网络请求。
+发布必须依次通过类型检查、生产界面构建、清理边界校验，以及 delivery-stop、collection-resume、collection-goal、delivery-throttle、boss-chat、browser-navigation、zhaopin-greeting、resume-facts、resume-variants、resume 十组离线回归。打包后还会启动真实 EXE，核对 ASAR 界面、两份基础简历与旧 file:// 存储兼容、主窗口和网页预加载、CloakBrowser 模块、外置 Python 脚本和 Node 桥 DOCX 解析。测试使用合成数据并阻断平台网络请求。browser-navigation 在真实 Electron 网页和 React BrowserView 中验证 BOSS 会话地址清理、四平台页面状态保留、预加载就绪和显式导航，防止把已观察到的网址再写回 src 导致重复刷新。
 
 当前程序通过上述验收、安装校验和 Git 推送后才标记发布成功，并清理旧的自有打包目录，只保留本次产物。旧版本源码保存在 v<version> 标签；未发布候选使用 bossclaw-source/v<version>-<commit> 源码快照标签。失败时保留当前产物、日志和回退程序，下次成功发布再清理；用户数据、简历、引擎环境和私有备份不参与产物清理。发布要求工作树已提交，使用当前仓库的 origin 推送源码与标签。
 

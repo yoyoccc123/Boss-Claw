@@ -110,7 +110,9 @@ try {
       report.smoke = await smokePackaged({ packaged, fixture: path.join(fixtures, 'packaged-smoke'), electron, env, run });
       if (report.smoke.version !== pkg.version) throw Error('Packaged EXE version mismatch');
       const archive = path.join(packaged, 'resources/app.asar'), asar = require('@electron/asar');
-      for (const relative of ['electron/main.cjs', 'electron/preload/webview.cjs', 'electron/preload/boss-chat-context.cjs', 'electron/runtime-paths.cjs']) {
+      const requiredSources = ['electron/main.cjs', 'electron/preload/webview.cjs', 'electron/preload/boss-chat-context.cjs', 'electron/runtime-paths.cjs',
+        ...P.files(path.join(project, 'dist')).map(file => path.relative(project, file))];
+      for (const relative of requiredSources) {
         const actual = asar.extractFile(archive, path.normalize(relative));
         if (crypto.createHash('sha256').update(actual).digest('hex') !== await P.sha(path.join(project, relative)))
           throw Error('Packaged source mismatch: ' + relative);

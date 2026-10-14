@@ -172,6 +172,8 @@ interface Props {
 interface TabState {
   id: string;
   url: string;
+  /** Only the first mount uses src. Observed redirects/History changes must not reload the guest. */
+  initialUrl: string;
   title: string;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -183,6 +185,7 @@ let tabSeq = 0;
 const makeTab = (url: string, title = '', kind: 'main' | 'detail' = 'main'): TabState => ({
   id: `tab_${Date.now().toString(36)}_${(tabSeq += 1).toString(36)}`,
   url,
+  initialUrl: url,
   title,
   canGoBack: false,
   canGoForward: false,
@@ -567,6 +570,8 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     el.addEventListener('did-start-navigation', ((event: any, _url?: string, _isInPlace?: boolean, legacyIsMainFrame?: boolean) => {
       const isMainFrame = typeof event?.isMainFrame === 'boolean' ? event.isMainFrame : legacyIsMainFrame !== false;
       if (!isMainFrame) return;
+      // pushState/replaceState retain the same document and its registered preload listeners.
+      if (event?.isInPlace || _isInPlace) return;
       if (!event?.isInPlace && !_isInPlace) callbacksRef.current.onCollectInterrupted?.({ tabId, reason: '采集网页发生刷新或整页跳转' });
       preloadReady.current[tabId] = false;
       loadSeqRef.current[tabId] = (loadSeqRef.current[tabId] || 0) + 1; // 导航代际 +1，令旧定时器失效
@@ -765,7 +770,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     if (el) {
       try { (el.loadURL(url) as unknown as Promise<unknown>).catch(() => {}); } catch {}
     }
-    patchTab(tabId, { url, canGoForward: false });
+    patchTab(tabId, { url, ...(!el ? { initialUrl: url } : {}), canGoForward: false });
   }, [patchTab]);
 
   // ===== 向指定标签页发送 IPC 消息（按 tabId 真正派发）=====
@@ -819,8 +824,8 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     if (!hasOthers) {
       // 最后一个标签：退化为占位（导航回当前默认平台首页，保留一个 webview/登录态）
       const home = PLATFORM_META[newTabPlatform === NEW_TAB_PAGE_URL ? 'boss' : newTabPlatform] || PLATFORM_META.boss;
-      patchTab(id, { url: home.homeUrl, title: home.label, canGoBack: false, canGoForward: false });
       const el = webviewEls.current[id];
+      patchTab(id, { url: home.homeUrl, ...(!el ? { initialUrl: home.homeUrl } : {}), title: home.label, canGoBack: false, canGoForward: false });
       if (el) {
         try { (el.loadURL(home.homeUrl) as unknown as Promise<unknown>).catch(() => {}); } catch {}
       }
@@ -1313,7 +1318,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       <div ref={viewportRef} className="browser-viewport">
         {tabs.map((t) => {
           // 空白标签页（便签页）：React 渲染的白名单快捷页，无 <webview>
-          if (t.kind === 'main' && t.url === NEW_TAB_PAGE_URL) {
+          if (t.kind === 'main' && t.initialUrl === NEW_TAB_PAGE_URL) {
             return (
               <div key={t.id} className={'browser-pane browser-pane-newtab' + (t.id === activeId ? ' is-active' : '')}>
                 <BrowserNewTabPage
@@ -1344,7 +1349,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
                 // backgroundThrottling=no：工作台切到其它模块时隐藏但保持挂载，
                 // 禁用 Chromium 后台节流，保证采集/投递的 guest 页 setTimeout/rAF 全速运行
                 webpreferences="sandbox=no, backgroundThrottling=no"
-                src={t.url}
+                src={t.initialUrl}
               />
               {/* 加载中遮罩：仅在 active 标签且正在加载时可见，避免影响其他标签。
                   采集期间由 overlaySuppressed 抑制——遮罩会盖住可视化采集的滚动/高亮动画。 */}
