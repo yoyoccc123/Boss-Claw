@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url), root = dirname(dirname(fileURLToPath(import.meta.url)));
-const { readBossChatContext, buildBossChatProbeScript, dispatchBossChatInput } = require(join(root, 'electron/preload/boss-chat-context.cjs'));
+const { readBossChatContext, buildBossChatProbeScript, clickBossChatContact, buildBossChatContactClickScript, dispatchBossChatInput } = require(join(root, 'electron/preload/boss-chat-context.cjs'));
 let checks = 0;
 const check = (value, label) => { assert.ok(value, label); checks++; };
 const href = 'https://www.zhipin.com/web/geek/chat';
@@ -34,6 +34,8 @@ function fixture() {
     : s.startsWith('[data-bossclaw-chat-scroll=') ? list : null };
   f.doc = doc;
   f.select = id => { f.selected = id; for (const r of rows) { r.__vue__.$props.selected = id === null ? '' : sources[id].uniqueId; r.button.classList.remove('selected'); } if (id !== null) rows[id].button.classList.add('selected'); record.__vue__.$data.boss = id === null ? null : sources[id]; };
+  f.contactClicks = 0;
+  rows.forEach((r, i) => { r.button.click = () => { f.contactClicks++; f.select(i); }; });
   f.read = options => readBossChatContext(doc, href, { ...job, greeting, ...options });
   f.select(0); return f;
 }
@@ -65,27 +67,46 @@ function fixture() {
 }
 const source = ts.createSourceFile('webview.cjs', readFileSync(join(root, 'electron/preload/webview.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const functions = new Map(); const visit = n => { if (ts.isFunctionDeclaration(n) && n.name) functions.set(n.name.text, n.getText(source)); ts.forEachChild(n, visit); }; visit(source);
+{
+  const f = fixture(); f.select(null);
+  check(clickBossChatContact(f.doc, href, job).clicked && f.selected === 0, 'main-world contact click opens the exact matched native row without a foreground input channel');
+  check(!clickBossChatContact(f.doc, href, job).clicked && f.contactClicks === 1, 'already selected and ready contact is not clicked again');
+  f.select(null);
+  check(!clickBossChatContact(f.doc, href, { ...job, jobId: 'other', url: 'https://www.zhipin.com/job_detail/other.html' }).clicked && f.contactClicks === 1, 'same company/name does not permit clicking a different job');
+  check(!clickBossChatContact(f.doc, href, { ...job, encryptUserId: 'other' }).clicked && f.contactClicks === 1, 'mismatched recruiter cannot be selected');
+  const script = buildBossChatContactClickScript(job, { marker: 'main-world-test' });
+  check(vm.runInNewContext(script, { document: f.doc, location: { href }, URL }).clicked && f.selected === 0, 'serialized production click executes in the main world');
+  f.select(null);
+  const detached = clickBossChatContact(f.doc, href, job, (...args) => { const result = readBossChatContext(...args); f.rows[0].button.isConnected = false; return result; });
+  check(!detached.clicked && f.contactClicks === 2, 'a recycled/detached contact row cannot be clicked');
+}
 async function flow(mode) {
   const f = fixture(); f.select(null); const stages = [], counts = { contacts: 0, inputs: 0, sends: 0, fallbacks: 0 };
   if (mode === 'prior') f.record.messages = [{ type: 1, fromId: 'self', text: greeting, received: true, mid: 42 }];
   if (mode === 'pending') f.record.messages = [{ type: 1, fromId: 'self', text: greeting, received: false, mid: 0 }];
   if (mode === 'conversation') f.record.messages = [{ type: 1, fromId: 'hr-native-A', text: '方便介绍一下项目吗？', received: true, mid: 41 }];
+  for (const row of f.rows) { const select = row.button.click; row.button.click = () => { counts.contacts++;
+    if (mode === 'no-open' || (mode === 'retry' && counts.contacts === 1)) return;
+    select();
+  }; }
   let clock = 0; class Clock extends Date { static now() { return clock; } }
   const button = { scrollIntoView() {} };
   const c = { Date: Clock, URL, document: f.doc, location: { href, pathname: '/web/geek/chat' },
     pageStatusData: () => ({ collectionBlocked: mode === 'blocked' }), normalizeChatText: t => String(t).replace(/\s+/g, ' ').trim(),
     bossChatContext: async (j, options) => readBossChatContext(f.doc, href, { ...j, ...options }),
+    buildBossChatContactClickScript,
+    webFrame: { executeJavaScript: async script => vm.runInNewContext(script, { document: f.doc, location: { href }, URL }) },
     chatInput: () => f.selected === null ? null : f.input,
     notify: (_, data) => stages.push(data), sleep: async ms => { clock += ms; }, jitterDelay: async ms => { clock += ms; },
-    humanClickElement: async (element, options) => { if (element === button) { counts.sends++; if (mode !== 'no-receipt') f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); return true; } counts.contacts++; const index = f.rows.findIndex(r => r.button === element); f.select(index); return true; },
+    humanClickElement: async (element, options) => { if (element === button) { counts.sends++; if (mode !== 'no-receipt') f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); return true; } throw Error('Contact selection must not depend on a foreground native-input acknowledgment'); },
     enterChat: async () => null, trustedHoverElement: async () => {}, focusEditableScoped: element => element,
     trustedInput: async (action, text) => { if (action === 'insertText') { counts.inputs++; f.input.innerText = text; if (mode === 'changed') f.select(1); return { ok: true }; } return { ok: false }; },
     Event: class {}, InputEvent: class {}, setTimeout: () => 1, sendButton: () => button, isDisabledish: () => false,
     confirmOwnMessage: () => { throw Error('Whole-page confirmation is forbidden for full chat'); } };
-  vm.createContext(c); for (const name of ['waitFor', 'selectBossChatContact', 'domApplyOnce']) vm.runInContext(functions.get(name), c);
+  vm.createContext(c); for (const name of ['waitFor', 'bossChatContactClick', 'selectBossChatContact', 'domApplyOnce']) vm.runInContext(functions.get(name), c);
   await c.domApplyOnce({ job, greeting }); return { f, stages, counts };
 }
-for (const mode of ['new', 'prior', 'pending', 'conversation', 'changed', 'no-receipt', 'blocked']) {
+for (const mode of ['new', 'prior', 'pending', 'conversation', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open']) {
   const r = await flow(mode), last = r.stages.at(-1);
   if (mode === 'new') { check(r.counts.contacts === 1 && r.counts.sends === 1 && last.stage === 'verify_result', 'actual preload selects the contact then sends workbench text once'); check(r.f.input.innerText === greeting, 'workbench text is preserved'); }
   if (mode === 'prior') check(r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'verify_result', 'verified identical greeting is not sent twice');
@@ -94,6 +115,8 @@ for (const mode of ['new', 'prior', 'pending', 'conversation', 'changed', 'no-re
   if (mode === 'changed') check(r.counts.sends === 0 && last.stage === 'failed', 'switching contacts after fill cancels the send');
   if (mode === 'no-receipt') check(last.stage === 'failed', 'a click without an acknowledged target message cannot count as delivered');
   if (mode === 'blocked') check(r.counts.contacts === 0 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'risk', 'security verification blocks all interaction');
+  if (mode === 'retry') check(r.counts.contacts === 2 && r.counts.sends === 1 && last.stage === 'verify_result', 'an unhandled contact click is retried only after observing the conversation still unselected');
+  if (mode === 'no-open') check(r.counts.contacts === 3 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'failed' && /点击后会话未打开/.test(last.error), 'three unhandled clicks stop with a specific failure; click acknowledgment alone never starts message editing');
 }
 {
   const f = fixture(), events = [], failure = [];
