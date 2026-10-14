@@ -1,5 +1,12 @@
 ﻿param([Parameter(Mandatory=$true)][string]$Plan)
 $ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
+function File-Sha([string]$file) {
+  $stream=[IO.File]::OpenRead($file)
+  $algorithm=[Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
+  finally { $stream.Dispose();$algorithm.Dispose() }
+}
 $p=Get-Content -LiteralPath $Plan -Raw -Encoding UTF8 | ConvertFrom-Json
 $source=[IO.Path]::GetFullPath($p.source)
 $destination=[IO.Path]::GetFullPath($p.destination)
@@ -58,8 +65,8 @@ if(Test-Path -LiteralPath $data) {
   if($originalFiles.Count -ne @(Get-ChildItem -LiteralPath $dataCopy -Recurse -File).Count) { throw 'User data backup file count mismatch' }
   foreach($f in $originalFiles) {
     $relative=$f.FullName.Substring($data.Length+1);$copy=Join-Path $dataCopy $relative
-    $hash=(Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    if($f.Length -ne (Get-Item -LiteralPath $copy).Length -or $hash -ne (Get-FileHash -LiteralPath $copy).Hash) { throw 'User data backup checksum mismatch' }
+    $hash=File-Sha $f.FullName
+    if($f.Length -ne (Get-Item -LiteralPath $copy).Length -or $hash -ne (File-Sha $copy)) { throw 'User data backup checksum mismatch' }
     $dataManifest.Add([PSCustomObject]@{relative=$relative;size=$f.Length;sha256=$hash})
   }
 }
@@ -85,11 +92,11 @@ try {
   if(@(Get-ChildItem -LiteralPath $destination -Recurse -File).Count -ne $manifest.Count) { throw 'Program file count mismatch' }
   foreach($f in $manifest) {
     $file=[IO.Path]::GetFullPath((Join-Path $destination $f.relative));Assert-Child $destination $file
-    if((Get-Item -LiteralPath $file).Length -ne $f.size -or (Get-FileHash -LiteralPath $file).Hash -ne $f.sha256) { throw 'Installed program checksum mismatch' }
+    if((Get-Item -LiteralPath $file).Length -ne $f.size -or (File-Sha $file) -ne $f.sha256) { throw 'Installed program checksum mismatch' }
   }
   foreach($f in $dataManifest) {
     $file=Join-Path $data $f.relative
-    if((Get-Item -LiteralPath $file).Length -ne $f.size -or (Get-FileHash -LiteralPath $file).Hash -ne $f.sha256) { throw 'User data changed during deployment' }
+    if((Get-Item -LiteralPath $file).Length -ne $f.size -or (File-Sha $file) -ne $f.sha256) { throw 'User data changed during deployment' }
   }
   if(@(Get-ChildItem -LiteralPath $data -Recurse -File -ErrorAction SilentlyContinue).Count -ne $dataManifest.Count) { throw 'User data file count changed during deployment' }
   if((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -ne ($p.version+'.0')) { throw 'Installed version mismatch' }
