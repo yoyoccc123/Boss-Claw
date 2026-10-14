@@ -178,14 +178,14 @@ npm start                  # 仅启动 Electron（需先 build 或 dev 服务在
 
 npm run typecheck          # 仅类型检查（不打包）
 npm run build              # 类型检查 + Vite 构建到 dist/
-npm run verify             # typecheck + build 组合
+npm run verify             # 类型、构建及全部固定离线回归检查
 
-npm run package            # 构建并打包 Windows NSIS 安装包 + 绿色便携版
-npm run package:portable   # 仅打包绿色便携版（无需安装）
-npm run package:dir        # 仅生成解压目录（不打包，便于本地试运行）
-npm run package:mac        # 打包 macOS dmg + zip（只能在 macOS 系统执行）
-npm run package:linux      # 打包 Linux（build.linux.target = AppImage + deb）
-npm run package:all        # 打包 Windows + Linux
+npm run package            # 验证、打包 Windows 目录版并升级固定安装目录
+npm run package:dir        # 同上，统一使用 scripts/release.mjs
+npm run package:portable   # 增加便携 EXE，并执行相同验证和升级
+npm run package:nsis       # 增加 NSIS 安装包，并执行相同验证和升级
+npm run package:mac        # 在 macOS 上构建，尚未纳入固定 Windows 发布验收
+npm run package:linux      # 构建 Linux 产物，尚未纳入固定 Windows 发布验收
 ```
 
 > **macOS 安装包**受 electron-builder 限制，只能在 macOS 上构建（dmg 依赖 macOS 系统工具）；Windows / Linux 可在本机直接打包。
@@ -203,46 +203,35 @@ npm run package:all        # 打包 Windows + Linux
 
 ***
 
-## 打包产出
+## 固定发布流程
 
-各平台打包命令均在 `release/` 目录产出产物：
+Windows 源码和依赖固定在 E:\自动投简历脚本\Boss-Claw\desktop-app，不再使用 Temp 中的副本。唯一发布入口是 scripts/release.mjs；PowerShell 可执行：
 
-### Windows（`npm run package` 或 `package:all`）
+```powershell
+# 只验证，不替换当前程序
+.\release.ps1 -Check
 
-```
-release/
-├── BossClaw-<version>-x64.exe           # Windows NSIS 安装包（推荐发行）
-├── BossClaw-<version>-portable.exe      # Windows 绿色便携版（无需安装、解压即用）
-├── BossClaw-<version>-x64.exe.blockmap  # NSIS 增量更新 blockmap（electron-builder 自动生成）
-└── win-unpacked/                     # Windows 解压目录（可手工分发的文件夹）
-```
-
-> `<version>` 取 `desktop-app/package.json` 的 `version`（单一来源；安装包名由 electron-builder 按同一字段生成）。
-> 示例：`version` = `2.5.6` → `BossClaw-2.5.6-x64.exe`。
-
-### Linux（`npm run package:linux` 或 `package:all`）
-
-按 `build.linux.target` 产出 **AppImage + deb** 两种格式：
-
-```
-release/
-├── BossClaw-2.5.3-x86_64.AppImage   # Linux 通用（跨发行版可执行单文件）
-├── BossClaw-2.5.3-amd64.deb         # Debian / Ubuntu / Linux Mint 等 deb 系
-└── linux-unpacked/                   # Linux 解压目录
+# 提交源码、递增 package.json 版本后发布
+.\release.ps1
+# 可选 -Target portable 或 -Target nsis
 ```
 
-> 已发布的 v2.5.3 另附 `BossClaw-2.5.3-x64.tar.gz` 通用压缩包。需要 rpm（RHEL / Fedora / CentOS）或 pacman（Arch / Manjaro）时，向 `build.linux.target` 补充 `rpm` / `pacman` 后重新打包。
+默认所有构建产物、下载缓存和测试临时目录均在 E:\BossClaw-build：
 
-### macOS（`npm run package:mac`，只能在 macOS 系统执行）
+- releases/<version>/：本次程序包；默认目录版含 win-unpacked/BossClaw.exe。
+- logs/<version>/：检查日志、发布报告、程序与用户数据校验清单，保留用于追溯。
+- cache/、tools/、assets/：复用的构建依赖和外置桥接资源。
+- test-tmp/<version>/：隔离测试数据，检查或发布成功后清理。
 
-```
-release/
-├── BossClaw-2.5.3-x64.dmg / .zip    # Intel Mac（x86_64）
-├── BossClaw-2.5.3-arm64.dmg / .zip  # Apple Silicon（M1/M2/M3/M4）
-└── mac/                              # macOS 解压目录（.app）
-```
+Windows 发布会升级 E:\自动投简历脚本\BossClaw-新版-2.5.15\BossClaw.exe。替换前正常退出程序，备份用户数据、引擎数据和简历文件，逐文件核验程序及用户数据的 SHA-256；安装失败恢复旧程序。安装后保持关闭，由用户启动。
 
-> `main` 分支不再提供「源码打包档案」脚本（历史 `package:source` / `build-mac.sh` 已移除）；无 Mac 环境时可下载已发布的 `BossClaw-2.5.3-mac.tar.gz`（内含该版本脚本），或交给有 Mac 的协作者直接用本源码执行 `npm run package:mac`。
+发布必须依次通过类型检查、生产界面构建、清理边界校验，以及 delivery-stop、collection-resume、collection-goal、delivery-throttle、boss-chat、zhaopin-greeting、resume-facts、resume-variants、resume 九组离线回归。打包后还会启动真实 EXE，核对 ASAR 界面、两份基础简历与旧 file:// 存储兼容、主窗口和网页预加载、CloakBrowser 模块、外置 Python 脚本和 Node 桥 DOCX 解析。测试使用合成数据并阻断平台网络请求。
+
+当前程序通过上述验收、安装校验和 Git 推送后才标记发布成功，并清理旧的自有打包目录，只保留本次产物。旧版本源码保存在 v<version> 标签；未发布候选使用 bossclaw-source/v<version>-<commit> 源码快照标签。失败时保留当前产物、日志和回退程序，下次成功发布再清理；用户数据、简历、引擎环境和私有备份不参与产物清理。发布要求工作树已提交，使用当前仓库的 origin 推送源码与标签。
+
+ASAR 已开启，界面、主进程、技能和 JavaScript 依赖放入 app.asar。网页预加载及原生文件放入 app.asar.unpacked；Python 脚本、打包后的 Node 桥和窗口图标作为真实文件放在 resources 中。Python 虚拟环境在 userData/python-runtime/.venv 中创建，避免向只读 ASAR 写入。参见 [Electron ASAR 限制](https://www.electronjs.org/docs/latest/tutorial/asar-archives)。
+
+macOS / Linux 命令仅生成候选产物，不执行 Windows 安装、发布标签或成功清理；仍需对应系统的实际运行验收。非 Windows 默认构建根目录在仓库旁的 BossClaw-build，可用 BOSSCLAW_BUILD_ROOT 指定。Windows 构建根目录仅允许 E 盘。
 
 ***
 

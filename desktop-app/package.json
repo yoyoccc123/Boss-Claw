@@ -1,6 +1,6 @@
 {
   "name": "bossclaw-desktop",
-  "version": "2.5.38",
+  "version": "2.5.39",
   "description": "BossClaw —— 面向求职者的本地 AI 投递助手",
   "private": true,
   "author": "YanQuan",
@@ -16,14 +16,13 @@
     "typecheck": "tsc -b --pretty",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "package": "npm run build && electron-builder --win",
-    "package:portable": "npm run build && electron-builder --win portable",
-    "package:dir": "npm run build && electron-builder --win --dir",
-    "package:mac": "npm run build && electron-builder --mac",
-    "package:linux": "npm run build && electron-builder --linux",
-    "package:all": "npm run build && electron-builder --win --linux",
+    "package": "node scripts/release.mjs --target dir --install",
+    "package:portable": "node scripts/release.mjs --target portable --install",
+    "package:dir": "node scripts/release.mjs --target dir --install",
+    "package:mac": "node scripts/release.mjs --platform mac --target default",
+    "package:linux": "node scripts/release.mjs --platform linux --target default",
     "start": "electron .",
-    "verify": "npm run typecheck && npm run build",
+    "verify": "node scripts/release.mjs --check",
     "test:theme-vars": "node scripts/theme-vars-regression.mjs",
     "test:context-budget": "node scripts/context-budget-regression.mjs",
     "test:tailor-job": "node scripts/tailor-job-regression.mjs",
@@ -38,7 +37,12 @@
     "test:delivery-stop": "node scripts/delivery-stop-regression.mjs",
     "test:zhaopin-block": "node scripts/zhaopin-block-regression.mjs",
     "test:zhaopin-greeting": "node scripts/zhaopin-greeting-regression.mjs",
-    "test:collection-goal": "node scripts/collection-goal-regression.mjs"
+    "test:collection-goal": "node scripts/collection-goal-regression.mjs",
+    "package:nsis": "node scripts/release.mjs --target nsis --install",
+    "release:check": "node scripts/release.mjs --check",
+    "test:collection-resume": "node scripts/collection-resume-regression.mjs",
+    "test:boss-chat": "node scripts/boss-chat-regression.mjs",
+    "test:release-policy": "node scripts/release-policy-regression.mjs"
   },
   "build": {
     "appId": "com.bossclaw.desktop",
@@ -47,16 +51,14 @@
     "icon": "resources/icon.ico",
     "afterPack": "build/after-pack-win-icon.js",
     "publish": null,
-    "asar": false,
+    "asar": true,
     "directories": {
-      "output": "release",
+      "output": "E:/BossClaw-build/releases/${version}",
       "buildResources": "resources"
     },
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "bridge/**/*",
-      "camoufox/**/*",
       "skills/**/*",
       "resources/**/*",
       "package.json",
@@ -68,6 +70,25 @@
       {
         "from": "resources/docs/使用前必读.md",
         "to": "docs/使用前必读.md"
+      },
+      {
+        "from": "camoufox",
+        "to": "camoufox",
+        "filter": [
+          "**/*",
+          "!**/*.pyc",
+          "!**/__pycache__/**",
+          "!**/.venv/**",
+          "!tests/**"
+        ]
+      },
+      {
+        "from": "resources/icon.ico",
+        "to": "assets/icon.ico"
+      },
+      {
+        "from": "E:/BossClaw-build/assets/bridge",
+        "to": "bridge"
       }
     ],
     "win": {
@@ -110,7 +131,17 @@
       "maintainer": "YanQuan <yanquan@bossclaw.dev>",
       "synopsis": "BossClaw 求职投递助手",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
-    }
+    },
+    "asarUnpack": [
+      "electron/preload/**",
+      "**/*.node",
+      "**/*.exe",
+      "**/*.dll",
+      "**/*.so",
+      "**/*.dylib"
+    ],
+    "beforePack": "build/before-pack.cjs",
+    "npmRebuild": false
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.1",
@@ -129,6 +160,7 @@
     "electron": "^42.11.10",
     "electron-builder": "^26.15.3",
     "typescript": "^5.6.3",
-    "vite": "^5.4.9"
+    "vite": "^5.4.9",
+    "esbuild": "0.21.5"
   }
 }

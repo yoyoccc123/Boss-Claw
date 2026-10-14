@@ -98,7 +98,10 @@ exports.default = async function (context) {
     return;
   }
 
-  const icon = path.join(context.packager.projectDir, 'resources', 'icon.ico');
+  const sourceIcon = path.join(context.packager.projectDir, 'resources', 'icon.ico');
+  // rcedit consumes ANSI command arguments; keep its input paths in the ASCII output directory.
+  const icon = path.join(context.appOutDir, '.bossclaw-build-icon.ico');
+  if (fs.existsSync(sourceIcon)) fs.copyFileSync(sourceIcon, icon);
 
   const versionString = [
     ['FileDescription', 'BossClaw —— 本地 AI 求职投递助手'],
@@ -116,6 +119,7 @@ exports.default = async function (context) {
   if (process.env.RCEDIT_FLAGS) args.push(...process.env.RCEDIT_FLAGS.split(/\s+/));
 
   console.log(`[after-pack-win-icon] 注入 ${productName} 图标与元数据 → ${exePath}`);
-  execFileSync(rcedit, args, { stdio: 'inherit' });
+  try { execFileSync(rcedit, args, { stdio: 'inherit' }); }
+  finally { if (fs.existsSync(icon)) fs.unlinkSync(icon); }
   console.log('[after-pack-win-icon] 完成');
 };
