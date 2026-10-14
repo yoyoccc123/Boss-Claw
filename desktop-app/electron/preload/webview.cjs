@@ -20,7 +20,7 @@
 'use strict';
 
 const { ipcRenderer, webFrame } = require('electron');
-const { buildBossChatProbeScript } = require('./boss-chat-context.cjs');
+const { buildBossChatProbeScript, buildBossChatContactClickScript } = require('./boss-chat-context.cjs');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
@@ -1325,22 +1325,26 @@ async function bossChatContext(job, options = {}) {
   return webFrame.executeJavaScript(buildBossChatProbeScript(job, options));
 }
 
+async function bossChatContactClick(job, options = {}) {
+  return webFrame.executeJavaScript(buildBossChatContactClickScript(job, options));
+}
+
 async function selectBossChatContact(job, greeting = '') {
   const marker = `boss-${Date.now().toString(36)}`;
   const deadline = Date.now() + 18000;
-  let last = { reason: '联系人页面尚未加载' }, clicked = false, scrolled = false;
+  let last = { reason: '联系人页面尚未加载' }, attempts = 0, lastClickAt = 0, scrolled = false;
   notify('apply-stage', { stage: 'verify_chat_target', label: '按岗位编号选中目标联系人' });
   while (Date.now() < deadline) {
     if (pageStatusData().collectionBlocked) throw new Error('BOSS 安全验证，需要人工完成验证');
     last = await bossChatContext(job, { marker, mark: true, greeting });
     if (last.ready) return last;
-    if (last.canClick && !clicked) {
-      const target = document.querySelector(`[data-bossclaw-chat-target="${marker}"]`);
-      if (target) {
-        target.scrollIntoView({ block: 'nearest' });
-        await humanClickElement(target, { dedupeMs: 2000 });
-        clicked = true;
-      }
+    if (last.canClick && attempts < 3 && (attempts === 0 || Date.now() - lastClickAt >= 1800)) {
+      const click = await bossChatContactClick(job, { marker });
+      attempts++;
+      lastClickAt = Date.now();
+      notify('apply-stage', { stage: 'log', message: click?.clicked
+        ? `已点击匹配联系人（${attempts}/3），等待目标会话打开`
+        : `联系人选择未完成：${click?.reason || '页面正在更新'}，将重新核对` });
     } else if (last.canScroll && !scrolled) {
       const scroller = document.querySelector(`[data-bossclaw-chat-scroll="${marker}"]`);
       if (scroller) { scroller.scrollTop = last.scrollTop; scrolled = true; }
@@ -1348,7 +1352,8 @@ async function selectBossChatContact(job, greeting = '') {
     if (/编号缺失|多个联系人/.test(last.reason || '')) break;
     await sleep(350);
   }
-  throw new Error(`BOSS 会话未就绪：${last.reason || '无法核对目标联系人'}，工作台招呼语未发送`);
+  const reason = attempts >= 3 && last.canClick ? '已匹配目标联系人，但点击后会话未打开' : last.reason;
+  throw new Error(`BOSS 会话未就绪：${reason || '无法核对目标联系人'}，工作台招呼语未发送`);
 }
 async function domApply(arg) {
   if (domApplyInFlight) {

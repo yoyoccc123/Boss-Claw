@@ -69,6 +69,26 @@ function buildBossChatProbeScript(job = {}, options = {}) {
   return `(${readBossChatContext.toString()})(document, location.href, ${JSON.stringify(expected)})`;
 }
 
+function clickBossChatContact(doc, href, expected = {}, readContext = readBossChatContext) {
+  const marker = String(expected.marker || 'bossclaw-contact');
+  const context = readContext(doc, href, { ...expected, marker, mark: true });
+  if (context.ready) return { clicked: false, ready: true, reason: '' };
+  if (!context.canClick) return { clicked: false, reason: context.reason };
+  const target = [...doc.querySelectorAll('[data-bossclaw-chat-target]')]
+    .find(e => e.getAttribute('data-bossclaw-chat-target') === marker);
+  if (!target?.isConnected || typeof target.click !== 'function') return { clicked: false, reason: '联系人列表已更新，重新核对' };
+  // Existing-contact selection is a normal Vue click handler. Execute in its main world;
+  // an accepted sendInputEvent request does not prove that an unfocused guest received it.
+  // Message editing/sending stays on the separately guarded trusted-input channel.
+  try { target.click(); return { clicked: true, reason: '' }; }
+  catch { return { clicked: false, reason: '目标联系人点击未完成' }; }
+}
+
+function buildBossChatContactClickScript(job = {}, options = {}) {
+  const expected = { jobId: job.jobId, url: job.url, encryptUserId: job.encryptUserId, marker: options.marker };
+  return `(()=>{const readBossChatContext=${readBossChatContext.toString()};return (${clickBossChatContact.toString()})(document,location.href,${JSON.stringify(expected)});})()`;
+}
+
 function dispatchBossChatInput(wc, target, action, rejected) {
   if (!target) { action(); return; }
   // This check runs after the mouse path, immediately before the physical input is issued.
@@ -78,4 +98,4 @@ function dispatchBossChatInput(wc, target, action, rejected) {
   }).catch(() => rejected('BOSS 会话核对失败，已取消输入或发送'));
 }
 
-module.exports = { readBossChatContext, buildBossChatProbeScript, dispatchBossChatInput };
+module.exports = { readBossChatContext, buildBossChatProbeScript, clickBossChatContact, buildBossChatContactClickScript, dispatchBossChatInput };
