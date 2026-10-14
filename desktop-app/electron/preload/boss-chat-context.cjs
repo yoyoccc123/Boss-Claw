@@ -1,4 +1,5 @@
 'use strict';
+const { buildTextSendTargetScript } = require('./text-send-control.cjs');
 // Captured BOSS v2: getGeekFriendList.json -> boss-item.source;
 // geek/getBossData + historyMsg -> message-list.boss. Read identities only; never invoke SDK methods.
 function readBossChatContext(doc, href, expected = {}) {
@@ -47,8 +48,6 @@ function readBossChatContext(doc, href, expected = {}) {
   const conversation = component?.$data?.boss;
   if (!sameIdentity(conversation, target)) return fail('聊天区尚未切换到目标岗位', { canClick: false });
   if (component.$data.loading !== false) return fail('目标聊天记录仍在加载');
-  const input = doc.querySelector('.chat-conversation #chat-input[contenteditable="true"]');
-  if (!input || !input.isConnected) return fail('目标聊天输入框尚未就绪');
   const userId = string(component.$store?.state?.userInfo?.userId);
   if (!userId) return fail('当前用户编号尚未就绪');
   const messages = [...record.querySelectorAll('.message-item')].map(e => e.__vue__?.$props?.message);
@@ -59,8 +58,11 @@ function readBossChatContext(doc, href, expected = {}) {
   const ownGreeting = textMessages.filter(m => exactGreeting && string(m.fromId) === userId && normalize(m.text) === exactGreeting);
   const hasExactGreeting = ownGreeting.some(m => m.received === true && string(m.mid) && string(m.mid) !== '0');
   const hasUnconfirmedGreeting = ownGreeting.length > 0 && !hasExactGreeting;
-  const hasConversation = textMessages.some(m => string(m.fromId) === userId || string(m.fromId) === string(target.uid));
-  return { ready: true, reason: '', hasExactGreeting, hasUnconfirmedGreeting, hasConversation, jobId: string(conversation.encryptJobId), bossId: string(conversation.encryptBossId) };
+  const hasHrReply = Boolean(string(target.uid)) && textMessages.some(m => string(m.fromId) === string(target.uid) && string(m.fromId) !== userId);
+  const hasConversation = hasHrReply || textMessages.some(m => string(m.fromId) === userId);
+  const input = doc.querySelector('.chat-conversation #chat-input[contenteditable="true"]');
+  if (!input || !input.isConnected) return fail('目标聊天输入框尚未就绪', { hasHrReply });
+  return { ready: true, reason: '', hasExactGreeting, hasUnconfirmedGreeting, hasConversation, hasHrReply, jobId: string(conversation.encryptJobId), bossId: string(conversation.encryptBossId) };
 }
 
 function buildBossChatProbeScript(job = {}, options = {}) {
@@ -89,12 +91,16 @@ function buildBossChatContactClickScript(job = {}, options = {}) {
   return `(()=>{const readBossChatContext=${readBossChatContext.toString()};return (${clickBossChatContact.toString()})(document,location.href,${JSON.stringify(expected)});})()`;
 }
 
-function dispatchBossChatInput(wc, target, action, rejected) {
+function dispatchBossChatInput(wc, target, action, rejected, inputIntent) {
   if (!target) { action(); return; }
   // This check runs after the mouse path, immediately before the physical input is issued.
-  Promise.resolve().then(() => wc.executeJavaScript(buildBossChatProbeScript(target))).then(context => {
-    if (!context?.ready) { rejected('BOSS 当前会话已改变，已取消输入或发送'); return; }
-    action();
+  const script = inputIntent
+    ? `(()=>{const context=${buildBossChatProbeScript(target)};if(!context.ready||context.hasHrReply)return context;return {...context,...${buildTextSendTargetScript(inputIntent)}};})()`
+    : buildBossChatProbeScript(target);
+  Promise.resolve().then(() => wc.executeJavaScript(script)).then(context => {
+    if (context.hasHrReply) { rejected('HR 已回复，已跳过投递和招呼语发送', { skipped: true }); return; }
+    if (!context?.ready) { rejected(context?.reason || 'BOSS 当前会话已改变，已取消输入或发送'); return; }
+    action(context);
   }).catch(() => rejected('BOSS 会话核对失败，已取消输入或发送'));
 }
 

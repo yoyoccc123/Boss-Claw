@@ -2097,7 +2097,8 @@ ipcMain.on('jc:webview-input', (event, payload) => {
   const action = String((payload && payload.action) || '');
   const text = String((payload && payload.text) || '');
   const reply = (result) => { try { wc.send('jc:webview-input-done', { seq, ...result }); } catch {} };
-  const dispatch = fire => dispatchBossChatInput(wc, payload?.bossTarget, fire, error => reply({ ok: false, action, error }));
+  const dispatch = fire => dispatchBossChatInput(wc, payload?.bossTarget, fire, (error, flags) => reply({ ok: false, action, error, ...flags }),
+    payload?.bossTarget ? { ...payload.bossInput, action } : undefined);
   // 沿人类化轨迹逐点移动鼠标，走完再执行收尾动作（点击 / 仅悬停）。
   // 轨迹由 preload 侧 humanize.cjs 生成（纯函数、可离线回归），这里只负责「按顺序发事件」。
   // 为什么合成在一处：整条轨迹只占 **1 条信道消息**，不会因分段移动而吃掉频率预算。
@@ -2132,11 +2133,12 @@ ipcMain.on('jc:webview-input', (event, payload) => {
         const x = Math.round(Number(payload && payload.x));
         const y = Math.round(Number(payload && payload.y));
         if (!Number.isFinite(x) || !Number.isFinite(y)) return reply({ ok: false, action, error: 'bad coords' });
-        const fire = () => dispatch(() => {
-          wc.sendInputEvent({ type: 'mouseMove', x, y });
-          wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-          wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
-          reply({ ok: true, action, x, y, path: Array.isArray(payload && payload.path) ? payload.path.length : 0 });
+        const fire = () => dispatch(point => {
+          const liveX = point?.x ?? x, liveY = point?.y ?? y;
+          wc.sendInputEvent({ type: 'mouseMove', x: liveX, y: liveY });
+          wc.sendInputEvent({ type: 'mouseDown', x: liveX, y: liveY, button: 'left', clickCount: 1 });
+          wc.sendInputEvent({ type: 'mouseUp', x: liveX, y: liveY, button: 'left', clickCount: 1 });
+          reply({ ok: true, action, x: liveX, y: liveY, path: Array.isArray(payload && payload.path) ? payload.path.length : 0 });
         });
         // 有轨迹则先「移过去」再点：消除「光标瞬移 + 立即点击」这一最容易被行为层识别的特征。
         // 无轨迹时保持旧行为（单点移动 + 点击），保证既有调用方不受影响。

@@ -129,6 +129,16 @@ async function browserEnvironment({ready=false}={}) {
   check(queued[0].status==='failed'&&queued[1].status==='approved_queue','bulk retry retains unconfirmed applications for manual review');
 }
 // Evaluate the production card mapping and statistics, including 52 queued jobs from the report.
+{
+  const env=await environment('boss'), patches=[], advances=[];
+  env.c.updatePending=(_id,patch)=>patches.push(patch);env.c.requestRunNext=()=>advances.push('next');
+  const run=env.c.deliverBossDom(env.item,env.item.job.url);env.gap.resolve(true);while(!env.sent.length)await flush();
+  env.c.handleApplyStage('skipped',{reason:'HR 已回复，已跳过投递和招呼语发送'},'wrong-tab');
+  check(patches.length===0,'another tab cannot skip the active application');
+  env.c.handleApplyStage('skipped',{reason:'HR 已回复，已跳过投递和招呼语发送'},'detail');await run;
+  check(patches.length===1&&patches[0].status==='skipped'&&patches[0].error.includes('HR 已回复'),'HR reply is stored as skipped, never opened in follow-up');
+  check(env.delivered.length===0&&advances.length===1&&env.closed.length===1,'HR reply does not count as a delivery and advances the running queue once');
+}
 const st=wb.vars.get('st'),tag=wb.vars.get('STATUS_TAG');assert.ok(st&&tag);
 const statusCode=(await transform(`const STATUS_TAG=${tag};globalThis.tag=${st};`,{loader:'tsx'})).code;
 for(const [running,active,expected] of [[false,false,'待投递'],[true,false,'排队中'],[true,true,'投递中'],[false,true,'结果核对中']]) {
