@@ -2566,7 +2566,7 @@ export default function Workbench() {
     if (domResult.mode === 'skip') {
       const msg = String(domResult.payload?.error || '外部网申岗位，跳过');
       updatePending(candidate.id, { status: 'skipped', error: msg });
-      addLog('warn', `已跳过外部网申岗位：${domTitle}（${msg}）`);
+      addLog('warn', `已跳过：${domTitle}（${msg}）`);
       if (activeTabRef.current) { webviewApi.current?.closeTab(activeTabRef.current); activeTabRef.current = null; }
       setApplyStage(null);
       recomputeStats();
@@ -2756,6 +2756,17 @@ export default function Workbench() {
     if (stage === 'risk') {
       if (domWaitRef.current) { domWaitRef.current('risk', { code: data?.code, message: data?.message || '' }, tabId); return; }
       handleRisk(data?.code, data?.message || '');
+      return;
+    }
+    if (stage === 'skipped') {
+      const error = String(data?.reason || '已跳过重复沟通');
+      if (domWaitRef.current) { domWaitRef.current('skip', { error }, tabId); return; }
+      updatePending(activeId, { status: 'skipped', error });
+      addLog('warn', `已跳过：${active?.job?.title || ''}（${error}）`);
+      setApplyStage(null);
+      recomputeStats();
+      if (activeTabRef.current) { webviewApi.current?.closeTab(activeTabRef.current); activeTabRef.current = null; }
+      if (running) requestRunNext();
       return;
     }
     if (stage === 'continue_chat') {

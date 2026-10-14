@@ -21,6 +21,7 @@
 
 const { ipcRenderer, webFrame } = require('electron');
 const { buildBossChatProbeScript, buildBossChatContactClickScript } = require('./boss-chat-context.cjs');
+const { findTextSendButton } = require('./text-send-control.cjs');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
@@ -1022,28 +1023,7 @@ function isDisabledish(el) {
 }
 
 function sendButton(input, opts = {}) {
-  const allowDisabled = Boolean(opts && opts.allowDisabled);
-  if (!input) return null;
-  // 「立即沟通」弹窗的发送是 <div class="send-message disable">发送</div>（非 button），
-  // 初始带 disable 类、由页面框架在输入内容后移除；allowDisabled=true 时也返回该元素，
-  // 由调用方 waitFor 其启用后再点击（默认 false 保持原有语义：只认已启用按钮）。
-  const usable = (el) => visible(el) && (allowDisabled || !isDisabledish(el));
-  const sels = '.send-message, [class*="send-message"], [class*="sendMessage"], .send-btn, .btn-send, [class*="sendBtn"], [class*="btn-send"], [class*="chatSend"], [class*="chat-send"]';
-  // 优先输入框所属编辑区/弹窗内的按钮（避免被页面底部全局的「发送」误命中）
-  const scope = input.closest('[class*="edit-area"], [class*="editArea"], .startchat-content, [class*="startchat"], [class*="chat-input"], [class*="input-box"], [class*="editor"]');
-  const scoped = scope ? all(sels).filter((el) => scope.contains(el)).find(usable) : null;
-  const labelMatch = scoped || all(sels).find(usable);
-  if (labelMatch) {
-    const label = textOf(labelMatch);
-    if (!/发送简历|发送附件|发送在线简历|发简历|图片/.test(label) && (/^发送$/.test(label) || /send/i.test(String(labelMatch.className || '')))) return labelMatch;
-  }
-  // 兜底：输入框右下方最近的「发送」按钮
-  const inputRect = input.getBoundingClientRect();
-  return all('button,[role="button"],[class*="send"]').find((el) => {
-    if (!usable(el)) return false;
-    const rect = el.getBoundingClientRect();
-    return /^发送$/.test(textOf(el)) && Math.abs(rect.top - inputRect.bottom) < 200 && rect.left > inputRect.left - 60;
-  }) || null;
+  return findTextSendButton(document, input, opts);
 }
 
 // 文本归一化：去掉零宽字符/统一空白，用于气泡级匹配招呼文案
@@ -1147,7 +1127,8 @@ async function trustedClickElement(el, opts = {}) {
   const from = lastCursor || { x: Math.max(0, to.x - 70 - Math.round(Math.random() * 40)), y: Math.max(0, to.y - 50 - Math.round(Math.random() * 30)) };
   const path = humanize.buildMousePath(from, to);
   if (opts.settle !== false) await sleep(humanize.settleDelayMs());
-  const r = await trustedInput('clickAt', '', { x: to.x, y: to.y, path, ...(opts.bossTarget ? { bossTarget: opts.bossTarget } : {}) });
+  const r = await trustedInput('clickAt', '', { x: to.x, y: to.y, path, ...(opts.bossTarget ? { bossTarget: opts.bossTarget, bossInput: opts.bossInput } : {}) });
+  if (r?.skipped) throw new Error('BOSS_HR_REPLIED');
   if (r && r.ok) lastCursor = { x: to.x, y: to.y };
   await jitterDelay(opts.afterMs || 160);
   return Boolean(r && r.ok);
@@ -1337,7 +1318,7 @@ async function selectBossChatContact(job, greeting = '') {
   while (Date.now() < deadline) {
     if (pageStatusData().collectionBlocked) throw new Error('BOSS 安全验证，需要人工完成验证');
     last = await bossChatContext(job, { marker, mark: true, greeting });
-    if (last.ready) return last;
+    if (last.ready || last.hasHrReply) return last;
     if (last.canClick && attempts < 3 && (attempts === 0 || Date.now() - lastClickAt >= 1800)) {
       const click = await bossChatContactClick(job, { marker });
       attempts++;
@@ -1383,6 +1364,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     // 已进入聊天页但输入框未就绪（渲染慢）：给足等待，不立即失败
     if (!input && /(\/web\/geek\/chat|\/chat(?:\/|\?|$))/i.test(location.href)) {
       verifiedContext = await selectBossChatContact(job, safeGreeting);
+      if (verifiedContext.hasHrReply) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
       input = chatInput();
     }
     if (!input) input = await enterChat();
@@ -1401,6 +1383,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     if (fullChat) {
       const context = verifiedContext || await selectBossChatContact(job, safeGreeting);
       input = chatInput();
+      if (context.hasHrReply) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
       if (context.hasExactGreeting) { notify('apply-stage', { stage: 'verify_result', label: '目标会话已有工作台招呼语', ok: true }); return; }
       if (context.hasUnconfirmedGreeting) { notify('apply-stage', { stage: 'failed', error: '目标会话已有相同招呼语，但发送回执未确认，请人工核对' }); return; }
       if (context.hasConversation) { notify('apply-stage', { stage: 'continue_chat', label: '目标会话已有实际沟通，移入自动沟通队列' }); return; }
@@ -1419,6 +1402,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     for (let i = 0; i < 3 && !ins.ok; i++) {
       if (i > 0) { focusEditableScoped(editor); await jitterDelay(400); }
       ins = await trustedInput('insertText', safeGreeting, fullChat ? { bossTarget: job } : undefined);
+      if (ins?.skipped) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
       if (ins.ok) {
         const got = normalizeChatText(editor?.innerText || editor?.value || '');
         if (got && got.includes(needle20)) break; // 已落盘 → 成功
@@ -1450,21 +1434,31 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     if (btn) {
       try { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch {}
       const enabled = await waitFor(() => !isDisabledish(btn), 4000, '发送按钮启用');
-      if (!enabled || (fullChat && !(await bossChatContext(job, { greeting: safeGreeting })).ready)) {
+      const current = fullChat ? await bossChatContext(job, { greeting: safeGreeting }) : null;
+      if (current?.hasHrReply) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
+      if (!enabled || (fullChat && !current?.ready)) {
         notify('apply-stage', { stage: 'failed', error: 'BOSS 发送按钮未就绪或当前会话已改变，招呼语保留为草稿，请人工核对' }); return;
       }
       // 「发送」是 BOSS 受控组件按钮，与「立即沟通」同属只认 isTrusted 的那一类 → 真实点击优先
-      const clicked = await humanClickElement(btn, { dedupeMs: 1200, ...(fullChat ? { bossTarget: job } : {}) });
+      const marker = 'text-send-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      btn.setAttribute('data-bossclaw-text-send', marker);
+      let clicked;
+      try {
+        clicked = await humanClickElement(btn, { dedupeMs: 1200, ...(fullChat ? { bossTarget: job, bossInput: { marker, greeting: safeGreeting } } : {}) });
+      } finally { btn.removeAttribute('data-bossclaw-text-send'); }
       if (fullChat && !clicked) { notify('apply-stage', { stage: 'failed', error: 'BOSS 当前会话未确认，已取消发送并保留草稿' }); return; }
     } else {
       // 未找到按钮：弹窗 textarea 内回车是换行、不会发送，直接交人工；
       // 其余输入（contenteditable 聊天页等）仍退回回车发送兜底。
       const isDialogTextarea = input.matches('textarea');
       if (!isDialogTextarea) {
-        if (fullChat && !(await bossChatContext(job, { greeting: safeGreeting })).ready) {
+        const current = fullChat ? await bossChatContext(job, { greeting: safeGreeting }) : null;
+        if (current?.hasHrReply) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
+        if (fullChat && !current?.ready) {
           notify('apply-stage', { stage: 'failed', error: 'BOSS 当前会话已改变，招呼语保留为草稿，请人工核对' }); return;
         }
-        const enter = await trustedInput('pressEnter', '', fullChat ? { bossTarget: job } : undefined);
+        const enter = await trustedInput('pressEnter', '', fullChat ? { bossTarget: job, bossInput: { greeting: safeGreeting } } : undefined);
+        if (enter?.skipped) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
         if (!enter.ok) {
           notify('apply-stage', { stage: 'failed', error: '未找到发送按钮且回车发送失败，已暂停' });
           return;
@@ -1487,6 +1481,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     notify('apply-stage', { stage: 'verify_result', label: '确认投递结果', ok: true });
   } catch (error) {
     const errorText = String(error?.message || error);
+    if (errorText === 'BOSS_HR_REPLIED') { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
     if (/安全验证|验证码|频繁|限速|登录|封禁|异常/.test(errorText)) {
       notify('apply-stage', { stage: 'risk', code: null, message: errorText });
     } else {
