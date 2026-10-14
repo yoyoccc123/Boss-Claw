@@ -11,7 +11,9 @@ function configureReleaseSmoke(app, session, nativeImage) {
   app.setPath('userData', profile); app.setPath('sessionData', profile); app.setPath('home', home);
   const resultPath = path.join(root, 'smoke-result.json');
   const finish = (result, code = 0) => { fs.writeFileSync(resultPath, JSON.stringify(result, null, 2)); app.exit(code); };
-  const deadline = setTimeout(() => finish({ success: false, error: 'Packaged UI startup timed out', platformRequestsAllowed: false }, 1), 45000);
+  const events = []; let lastState, fixtureGuestAdded = false;
+  const note = (name, value) => { if (events.length < 30) events.push({ name, value }); };
+  const deadline = setTimeout(() => finish({ success: false, error: 'Packaged UI startup timed out', events, lastState, platformRequestsAllowed: false }, 1), 45000);
   let guestPreloadLoaded = false;
   app.on('web-contents-created', (_, wc) => {
     if (wc.getType() === 'webview') wc.on('console-message', (_event, ...args) => {
@@ -26,11 +28,23 @@ function configureReleaseSmoke(app, session, nativeImage) {
       ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (_, cb) => cb({ cancel: true }));
   });
   return { attach(win) {
+    win.webContents.on('dom-ready', () => note('dom-ready', win.webContents.getURL()));
+    win.webContents.on('did-fail-load', (_e, code, description, url) => note('did-fail-load', { code, description, url }));
+    win.webContents.on('preload-error', (_e, file, error) => note('preload-error', { file, message: error.message }));
+    win.webContents.on('console-message', (event) => { if (event.level === 'error' || event.level === 3) note('console-error', event.message); });
     win.webContents.once('did-finish-load', async () => {
+      note('did-finish-load', win.webContents.getURL());
       try {
         let state;
         for (let i = 0; i < 50; i++) {
           state = await win.webContents.executeJavaScript("(async()=>{const d=JSON.parse(localStorage.getItem('bossclaw-data')||'null')?.state;const a=JSON.parse(localStorage.getItem('bossclaw-app')||'null')?.state;return {rendered:document.getElementById('root')?.children.length>0,appPreload:typeof window.electron?.getAppInfo==='function',resumeVariants:d?.resumeVariants?.length,pending:d?.pending?.length,autoAssist:a?.autoAssist}})()");
+          lastState = state;
+          if (state.rendered && state.appPreload && !fixtureGuestAdded) {
+            // Exercise the real guest preload on a local document: platform requests stay blocked.
+            const url = require('node:url').pathToFileURL(path.join(root, 'old-unpacked-origin.html')).href;
+            await win.webContents.executeJavaScript("(()=>{const w=document.createElement('webview');w.setAttribute('partition','persist:bossclaw');w.setAttribute('webpreferences','contextIsolation=yes,sandbox=no,backgroundThrottling=no');w.style.cssText='width:100px;height:100px;position:fixed;left:0;top:0';w.src=" + JSON.stringify(url) + ";document.body.appendChild(w);})()");
+            fixtureGuestAdded = true;
+          }
           if (state.rendered && state.appPreload && guestPreloadLoaded) break;
           await new Promise(r => setTimeout(r, 250));
         }
@@ -46,7 +60,7 @@ function configureReleaseSmoke(app, session, nativeImage) {
         clearTimeout(deadline);
         finish({ success: true, version: app.getVersion(), electronVersion: process.versions.electron, asar: true, guestPreloadLoaded, ...state,
           externalResourcesVerified: true, cloakModuleLoaded: true, platformRequestsAllowed: false, userProfileUsed: false });
-      } catch (e) { clearTimeout(deadline); finish({ success: false, error: e.message, platformRequestsAllowed: false }, 1); }
+      } catch (e) { clearTimeout(deadline); finish({ success: false, error: e.message, events, lastState, platformRequestsAllowed: false }, 1); }
     });
   } };
 }
