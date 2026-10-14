@@ -8,6 +8,8 @@ const { app, BrowserWindow, ipcMain, shell, Menu, session, clipboard, dialog, na
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn, execFile } = require('node:child_process');
+const { runtimePaths } = require('./runtime-paths.cjs');
+const releaseSmoke = require('./release-smoke.cjs').configureReleaseSmoke(app, session, nativeImage);
 // 本地控制桥（供外部 agent / MCP 操作运行中的应用；默认关闭，见 control-bridge.cjs 的开启条件）
 const { startControlBridge, resolveEnablement } = require('./control-bridge.cjs');
 const { createZhaopinNativeChatBindings } = require('./zhaopin-native-chat.cjs');
@@ -328,7 +330,7 @@ const APP_ID = 'com.bossclaw.desktop';
 app.setName('BossClaw');
 // 主窗口图标（nativeImage 加载 .ico，可同时作为大/小图标源：
 // Windows 任务栏缩略图/右键预览小窗取的是窗口 ICON_SMALL，仅设 exe 资源不足，需在此显式设置）。
-const APP_ICON_ICO = path.join(__dirname, '..', 'resources', 'icon.ico');
+const APP_ICON_ICO = runtimePaths(app).icon;
 const APP_ICON = nativeImage.createFromPath(APP_ICON_ICO);
 // Windows 任务栏按钮图标机制（重要）：
 // - 调用 setAppUserModelId 后，任务栏按钮图标改从「与该 AUMID 匹配的快捷方式(.lnk)」获取；
@@ -434,7 +436,7 @@ async function resetDataForVersion() {
 
 function startBridge() {
   try {
-    const server = path.join(__dirname, '..', 'bridge', 'server.cjs');
+    const server = runtimePaths(app).bridge;
     // ELECTRON_RUN_AS_NODE=1：让 electron 二进制以纯 Node 模式运行桥接服务（mammoth/fs 等可用）
     const child = spawn(process.execPath, [server], {
       stdio: 'ignore',
@@ -460,9 +462,7 @@ function startBridge() {
 
 // 项目本地 venv 的 python 可执行文件（install-deps.cmd 把 camoufox/playwright 装到这里）
 function venvPython() {
-  return process.platform === 'win32'
-    ? path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe')
-    : path.join(__dirname, '..', '.venv', 'bin', 'python');
+  return runtimePaths(app).python;
 }
 
 function detectPython() {
@@ -555,7 +555,7 @@ async function installCamoufoxDeps(python) {
   if (python !== venv) {
     try {
       if (!fs.existsSync(venv)) {
-        await runPythonAsync(python, ['-m', 'venv', path.join(__dirname, '..', '.venv')], { timeout: 120000 });
+        await runPythonAsync(python, ['-m', 'venv', runtimePaths(app).venv], { timeout: 120000 });
       }
       if (fs.existsSync(venv)) target = venv;
     } catch (e) {
@@ -629,7 +629,7 @@ async function startCamoufoxBridge(pythonOverride) {
   const available = await checkCamoufoxEngine(python);
   if (!available) return { running: false, error: '隐身引擎未就绪：暂未下载 Camoufox 内核，请安装 Camoufox 隐身引擎内核：pip install "camoufox[geoip]" && camoufox fetch' };
   try {
-    const server = path.join(__dirname, '..', 'camoufox', 'camoufox_server.py');
+    const server = runtimePaths(app).camoufox;
     // 防御性清理：若环境注入了 safe-delete shim（如部分沙箱/运行时），Python 的 shutil.rmtree
     // 会被拦截导致 camoufox fetch 等清理逻辑失败；spawn 时剥离该注入，不影响正常用户环境。
     const env = { ...process.env };
@@ -822,12 +822,14 @@ async function createMainWindow() {
       // contextIsolation 仍为 true、nodeIntegration 仍为 false，渲染进程安全边界不变。
       sandbox: false,
       webviewTag: true,
-      preload: path.join(__dirname, 'preload', 'app.cjs'),
+      preload: runtimePaths(app).appPreload,
       spellcheck: false,
       // 关闭后台节流：最小化时渲染进程定时器仍按时触发（本地 5 分钟备份心跳 / 定时任务后台触发依赖此设置）
       backgroundThrottling: false,
     },
   });
+
+  releaseSmoke.attach(mainWindow);
 
   // 加载失败兜底（见审查 #87）：`loadURL` / `loadFile` 在失败时返回 reject 的 Promise；
   // 不 catch 会落到全局 unhandledRejection（只记日志），窗口停在白屏且没有任何解释。
@@ -1304,6 +1306,7 @@ async function createMainWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
+    if (process.env.BOSSCLAW_RELEASE_SMOKE_DIR) return;
     // 显式重设窗口图标：确保 Windows 任务栏缩略图/右键预览小窗（取 ICON_SMALL）也用 BossClaw 而非 Electron 默认。
     if (process.platform === 'win32' && !APP_ICON.isEmpty()) mainWindow.setIcon(APP_ICON);
     mainWindow.show();
@@ -2203,7 +2206,7 @@ app.whenReady().then(async () => {
     // <webview> 的 preload 属性要求 file: 协议且须在元素初始化时就位；sandbox:true 时还可能被忽略。
     // session.setPreloads 是官方机制，对 persist:bossclaw 会话内每个页面（含 webview guest）注入 preload。
     // webview.cjs 内部有防重复注入保护（window.__bossclawWebviewPreload），双路径同时生效也不会重复注册。
-    const preloadPath = path.join(__dirname, 'preload', 'webview.cjs');
+    const preloadPath = runtimePaths(app).webviewPreload;
     // Electron 42 起 setPreloads / getPreloads 已弃用（官方标注 "will be removed"），
     // 替代品为 registerPreloadScript（参数 { type, id?, filePath }，filePath 须绝对路径，返回 script id）。
     // 这里做双版本兼容：新 API 存在则优先用，否则回落旧 API —— 便于在升级分支与 main 之间来回切换。

@@ -11,7 +11,7 @@ const { URL } = require('url');
 const { execFile, execFileSync } = require('child_process');
 
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
-const dataDir = path.join(os.homedir(), '.bossclaw');
+const dataDir = process.env.BOSSCLAW_DATA_DIR || path.join(os.homedir(), '.bossclaw');
 const databasePath = path.join(dataDir, 'data.json');
 fs.mkdirSync(dataDir, { recursive: true });
 
@@ -293,6 +293,7 @@ const server = http.createServer((request, response) => {
   });
 });
 
-server.listen(config.port, '127.0.0.1', () => {
-  console.log(`[OpenClaw bridge] listening on 127.0.0.1:${config.port}`);
+const listenPort = process.env.BOSSCLAW_BRIDGE_PORT === undefined ? config.port : Number(process.env.BOSSCLAW_BRIDGE_PORT);
+server.listen(listenPort, '127.0.0.1', () => {
+  console.log(`[OpenClaw bridge] listening on 127.0.0.1:${server.address().port}`);
 });
