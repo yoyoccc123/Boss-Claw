@@ -205,6 +205,8 @@ npm run package:linux      # 构建 Linux 产物，尚未纳入固定 Windows �
 
 ## 固定发布流程
 
+BOSS 发送回归覆盖电话/App 悬浮入口挡住按钮中心的情况：只点击同一文字发送按钮内经过命中检查的可见区域；没有安全落点时保留草稿，并显示底层检查的具体原因。
+
 Windows 源码和依赖固定在 E:\自动投简历脚本\Boss-Claw\desktop-app，不再使用 Temp 中的副本。唯一发布入口是 scripts/release.mjs；PowerShell 可执行：
 
 ```powershell

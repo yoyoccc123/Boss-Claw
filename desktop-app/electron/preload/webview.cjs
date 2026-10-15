@@ -1123,12 +1123,14 @@ async function trustedClickElement(el, opts = {}) {
   try { el.scrollIntoView?.({ block: 'center', behavior: 'instant' }); } catch {}
   await jitterDelay(200);
   const to = elementCenter(el);
+  if (!to && opts.bossTarget) throw new Error('BOSS 文字发送按钮位置不可用或已移出视口，招呼语已保留为草稿');
   if (!to) return false;
   const from = lastCursor || { x: Math.max(0, to.x - 70 - Math.round(Math.random() * 40)), y: Math.max(0, to.y - 50 - Math.round(Math.random() * 30)) };
   const path = humanize.buildMousePath(from, to);
   if (opts.settle !== false) await sleep(humanize.settleDelayMs());
   const r = await trustedInput('clickAt', '', { x: to.x, y: to.y, path, ...(opts.bossTarget ? { bossTarget: opts.bossTarget, bossInput: opts.bossInput } : {}) });
   if (r?.skipped) throw new Error('BOSS_HR_REPLIED');
+  if (opts.bossTarget && !r?.ok) throw new Error(`BOSS 发送检查未通过：${r?.error || '可信点击未完成'}（招呼语已保留为草稿）`);
   if (r && r.ok) lastCursor = { x: to.x, y: to.y };
   await jitterDelay(opts.afterMs || 160);
   return Boolean(r && r.ok);
@@ -1411,7 +1413,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       }
     }
     if (!ins.ok) {
-      notify('apply-stage', { stage: 'failed', error: '真实输入写入失败，已暂停' });
+      notify('apply-stage', { stage: 'failed', error: `真实输入写入失败：${ins?.error || '编辑器未保留输入内容'}，已暂停` });
       return;
     }
     await jitterDelay(120);
