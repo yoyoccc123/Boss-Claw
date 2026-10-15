@@ -37,12 +37,20 @@ function readTextSendTarget(doc, expected = {}) {
   const buttons = [...doc.querySelectorAll('[data-bossclaw-text-send]')].filter(e => e.getAttribute('data-bossclaw-text-send') === expected.marker);
   const button = buttons.length === 1 ? buttons[0] : null;
   if (!button || findTextSendButton(doc, input) !== button) return fail('文字发送按钮已改变或不可用，已取消点击');
-  const rect = button.getBoundingClientRect(), x = Math.round(rect.left + rect.width / 2), y = Math.round(rect.top + rect.height / 2);
+  const rect = button.getBoundingClientRect();
   const view = doc.defaultView;
-  if (x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight) return fail('文字发送按钮不在视口内');
-  const hit = doc.elementFromPoint(x, y);
-  if (!hit || (hit !== button && !button.contains(hit)) || hit.closest('label, input[type="file"], .btn-sendimg')) return fail('文字发送按钮被遮挡，已取消点击');
-  return { ready: true, x, y };
+  // BOSS's fixed phone/App sidebar can cover the center while the text button's
+  // right side remains clickable. Only accept points hit-testing to this exact button.
+  let inViewport = false;
+  for (const dx of [0.5, 0.15, 0.85]) for (const dy of [0.5, 0.15, 0.85]) {
+    const x = Math.round(rect.left + rect.width * dx), y = Math.round(rect.top + rect.height * dy);
+    if (x <= rect.left || x >= rect.left + rect.width || y <= rect.top || y >= rect.top + rect.height
+      || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight) continue;
+    inViewport = true;
+    const hit = doc.elementFromPoint(x, y);
+    if (hit && (hit === button || button.contains(hit)) && !hit.closest('label, input[type="file"], .btn-sendimg')) return { ready: true, x, y };
+  }
+  return fail(inViewport ? '文字发送按钮被遮挡，未找到可安全点击的位置，已保留草稿' : '文字发送按钮不在视口内，已保留草稿');
 }
 function buildTextSendTargetScript(expected) {
   return `(()=>{const isTextSendControl=${isTextSendControl.toString()};const findTextSendButton=${findTextSendButton.toString()};return (${readTextSendTarget.toString()})(document,${JSON.stringify(expected)});})()`;

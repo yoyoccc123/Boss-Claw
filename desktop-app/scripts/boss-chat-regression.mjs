@@ -152,10 +152,11 @@ for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prio
 const mainSource = ts.createSourceFile('main.cjs', readFileSync(join(root, 'electron/main.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 let nativeListener;
 const findListener = n => { if (ts.isCallExpression(n) && n.expression.getText(mainSource) === 'ipcMain.on' && n.arguments[0]?.text === 'jc:webview-input') nativeListener = n.arguments[1].getText(mainSource); ts.forEachChild(n, findListener); }; findListener(mainSource);
-for (const mode of ['click-ok', 'changed-during-move', 'insert-wrong', 'image-overlay', 'reply-during-move', 'wrong-focus', 'changed-draft']) {
+for (const mode of ['click-ok', 'changed-during-move', 'insert-wrong', 'image-overlay', 'partial-overlay', 'reply-during-move', 'wrong-focus', 'changed-draft']) {
   const f = fixture(), events = [], replies = [];
   if (mode === 'insert-wrong') f.select(1);
   if (mode === 'image-overlay') f.hit = f.image;
+  if (mode === 'partial-overlay') f.doc.elementFromPoint = x => x > 220 ? f.send : f.image;
   if (mode === 'wrong-focus') f.doc.activeElement = f.image;
   if (mode === 'changed-draft') f.input.innerText = '另一个岗位的草稿';
   f.send.setAttribute('data-bossclaw-text-send','fixture-send');
@@ -169,6 +170,7 @@ for (const mode of ['click-ok', 'changed-during-move', 'insert-wrong', 'image-ov
     x: 20, y: 30, path: [{ x: 10, y: 15, delayMs: 1 }, { x: 20, y: 30, delayMs: 1 }] });
   await new Promise(resolve => setImmediate(resolve));
   if (mode === 'click-ok') check(events.some(e => e.type === 'mouseDown' && e.x === 200 && e.y === 30) && replies.at(-1).ok, 'real main listener replaces stale image coordinates with the live text-send center');
+  if (mode === 'partial-overlay') check(events.some(e => e.type === 'mouseDown' && e.x === 221) && replies.at(-1).ok, 'partially obscured text-send control uses an exposed point belonging to that exact button');
   if (mode === 'changed-during-move') check(!events.some(e => e.type === 'mouseDown') && replies.at(-1).ok === false, 'real main listener rechecks after mouse movement and cancels wrong-target click');
   if (mode === 'insert-wrong') check(!events.some(e => e.type === 'insert') && replies.at(-1).ok === false, 'real main listener blocks typing into a changed contact');
   if (['image-overlay','reply-during-move','wrong-focus','changed-draft'].includes(mode)) check(!events.some(e => ['insert','mouseDown'].includes(e.type)) && replies.at(-1).ok === false, 'real main listener rejects unsafe input/send: '+mode);
@@ -181,6 +183,18 @@ for (const mode of ['click-ok', 'changed-during-move', 'insert-wrong', 'image-ov
  f.send.setAttribute('data-bossclaw-text-send','fixture-send');
  check(readTextSendTarget(f.doc,{action:'clickAt',marker:'fixture-send',greeting}).ready,'marked exact text button and complete draft permit send');
  f.hit=f.image;check(!readTextSendTarget(f.doc,{action:'clickAt',marker:'fixture-send',greeting}).ready,'actual hit must belong to the text button');
+}
+{
+  const c={lastCursor:null,jitterDelay:async()=>{},sleep:async()=>{},elementCenter:()=>({x:20,y:30}),humanize:{buildMousePath:()=>[],settleDelayMs:()=>0},
+    trustedInput:async()=>({ok:false,error:'文字发送按钮被遮挡，未找到可安全点击的位置，已保留草稿'})};
+  vm.createContext(c);vm.runInContext(functions.get('trustedClickElement'),c);
+  await assert.rejects(()=>c.trustedClickElement({scrollIntoView(){}},{bossTarget:job}),/未找到可安全点击的位置/);checks++;
+  c.trustedInput=async()=>({ok:false,error:'timeout'});
+  await assert.rejects(()=>c.trustedClickElement({scrollIntoView(){}},{bossTarget:job}),/timeout/);checks++;
+  c.trustedInput=async()=>({ok:false,skipped:true});
+  await assert.rejects(()=>c.trustedClickElement({scrollIntoView(){}},{bossTarget:job}),/BOSS_HR_REPLIED/);checks++;
+  c.elementCenter=()=>null;
+  await assert.rejects(()=>c.trustedClickElement({scrollIntoView(){}},{bossTarget:job}),/移出视口/);checks++;
 }
 console.log(`PASS BOSS native contact selection: ${checks} captured-contract/preload/input checks; no platform calls.`);
 await import('./boss-send-ui-regression.mjs');
