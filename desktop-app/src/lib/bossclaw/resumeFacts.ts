@@ -182,8 +182,13 @@ export function resumeBodyText(doc: TailorResumeDoc): string {
 /** Particular prerequisites cannot be proved by neighbouring keywords or course lists. */
 export function pointProofIsSpecific(point: string, quotes: string[]): boolean {
   const proof = quotes.join('\n');
-  if (/希望|计划|准备学习|没有做过|未做过|不具备|尚未|未实现|未上线|未负责|不负责|未参与|不涉及/.test(proof)) return false;
+  if (/希望|计划|准备学习|没有做过|未做过|不具备|不熟悉|不熟练|未掌握|尚未|未实现|未上线|未负责|不负责|未参与|不涉及/.test(proof)) return false;
   if (unsupportedClaim(point, proof)) return false;
+  if (/AI\s*(?:编程|Coding)|Vibe\s*Coding/i.test(point)) {
+    const tools = /AI\s*(?:编程|Coding)|Vibe\s*Coding|Claude\s*Code|Codex|Cursor|Trae|Copilot|Windsurf/i;
+    if (!tools.test(proof)) return false;
+    if (level(point) && !qualifiedParts(proof).some(part => tools.test(part[2]) && level(part[1]) >= level(point))) return false;
+  }
   if (/\bSQL\b/i.test(point) && !/\bSQL\b/i.test(proof)) return false;
   if (/问题.{0,4}(?:分析|解决)|分析.{0,4}解决/.test(point) && !/排查|定位|调试|修复|解决|缺陷|异常.{0,4}处理|问题.{0,4}分析/.test(proof)) return false;
   if (/embedding/i.test(point) && !/embedding|嵌入|向量化/i.test(proof)) return false;

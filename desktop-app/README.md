@@ -205,6 +205,8 @@ npm run package:linux      # 构建 Linux 产物，尚未纳入固定 Windows �
 
 ## 固定发布流程
 
+简历事实回归覆盖多轮补充遗漏已有内容、岗位要点名称漂移、模型漏判及复核中断。仅恢复仍有原始资料和正文引文支持的已体现内容，删除与纠错优先；补充框的岗位定位标签不作事实，学历和 AI 工具熟练程度分别核对，不强制提升匹配分。
+
 BOSS 发送回归覆盖电话/App 悬浮入口挡住按钮中心的情况：只点击同一文字发送按钮内经过命中检查的可见区域；没有安全落点时保留草稿，并显示底层检查的具体原因。
 
 Windows 源码和依赖固定在 E:\自动投简历脚本\Boss-Claw\desktop-app，不再使用 Temp 中的副本。唯一发布入口是 scripts/release.mjs；PowerShell 可执行：
@@ -227,7 +229,7 @@ Windows 源码和依赖固定在 E:\自动投简历脚本\Boss-Claw\desktop-app�
 
 Windows 发布会升级 E:\自动投简历脚本\BossClaw-新版-2.5.15\BossClaw.exe。替换前正常退出程序，备份用户数据、引擎数据和简历文件，逐文件核验程序及用户数据的 SHA-256；安装失败恢复旧程序。安装后保持关闭，由用户启动。
 
-发布必须依次通过类型检查、生产界面构建、清理边界校验，以及 delivery-stop、collection-resume、collection-goal、delivery-throttle、boss-chat、browser-navigation、zhaopin-greeting、resume-facts、resume-variants、resume 十组离线回归。打包后还会启动真实 EXE，核对 ASAR 界面、两份基础简历与旧 file:// 存储兼容、主窗口和网页预加载、CloakBrowser 模块、外置 Python 脚本和 Node 桥 DOCX 解析。测试使用合成数据并阻断平台网络请求。browser-navigation 在真实 Electron 网页和 React BrowserView 中验证 BOSS 会话地址清理、四平台页面状态保留、预加载就绪和显式导航，防止把已观察到的网址再写回 src 导致重复刷新。boss-chat 同时运行实际 Electron 发送控件回归，核对文字按钮与图片上传按钮、过期坐标、遮挡、焦点变化和发送途中 HR 回复；HR 已回复的岗位直接跳过，不计为新投递，也不转入自动沟通队列。
+发布必须依次通过类型检查、生产界面构建、清理边界校验，以及 delivery-stop、collection-resume、collection-goal、delivery-throttle、boss-chat、browser-navigation、zhaopin-greeting、resume-facts、tailor-iteration、resume-variants、resume 十一组离线回归。打包后还会启动真实 EXE，核对 ASAR 界面、两份基础简历与旧 file:// 存储兼容、主窗口和网页预加载、CloakBrowser 模块、外置 Python 脚本和 Node 桥 DOCX 解析。测试使用合成数据并阻断平台网络请求。browser-navigation 在真实 Electron 网页和 React BrowserView 中验证 BOSS 会话地址清理、四平台页面状态保留、预加载就绪和显式导航，防止把已观察到的网址再写回 src 导致重复刷新。boss-chat 同时运行实际 Electron 发送控件回归，核对文字按钮与图片上传按钮、过期坐标、遮挡、焦点变化和发送途中 HR 回复；HR 已回复的岗位直接跳过，不计为新投递，也不转入自动沟通队列。
 
 当前程序通过上述验收、安装校验和 Git 推送后才标记发布成功，并清理旧的自有打包目录，只保留本次产物。旧版本源码保存在 v<version> 标签；未发布候选使用 bossclaw-source/v<version>-<commit> 源码快照标签。失败时保留当前产物、日志和回退程序，下次成功发布再清理；用户数据、简历、引擎环境和私有备份不参与产物清理。发布要求工作树已提交，使用当前仓库的 origin 推送源码与标签。
 

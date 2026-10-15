@@ -13,11 +13,12 @@ const saved = new Map();
 globalThis.localStorage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
 try {
   const outfile = join(temporary, 'logic.cjs');
-  await build({ stdin: { contents: "export * from './src/lib/bossclaw/jobAssistant'; export * from './src/lib/bossclaw/resumeFacts'; export * from './src/lib/bossclaw/resumeFactAudit'; export * from './src/store/useDataStore';", resolveDir: root, loader: 'ts' },
+  await build({ stdin: { contents: "export * from './src/lib/bossclaw/jobAssistant'; export * from './src/lib/bossclaw/resumeFacts'; export * from './src/lib/bossclaw/resumeFactAudit'; export * from './src/lib/bossclaw/tailorEvidence'; export * from './src/store/useDataStore';", resolveDir: root, loader: 'ts' },
     tsconfig: join(root, 'tsconfig.json'), bundle: true, platform: 'node', format: 'cjs', outfile, logLevel: 'silent',
     plugins: [{ name: 'offline-model', setup(api) { api.onLoad({ filter: /[\\/]llm\.ts$/ }, ({ path }) => ({ contents: readFileSync(path, 'utf8').replace('export async function cachedCallModel(', 'async function originalCachedCallModel(') + '\nexport const cachedCallModel = (...args: any[]) => (globalThis as any).__modelHook(...args);', loader: 'ts' })); } }],
   });
-  const { normalizeTailorDoc, enforceResumeFacts, pointProofIsSpecific, unsupportedClaim, tailorForJob, recheckTailorResult, auditResumeFacts, useDataStore } = createRequire(import.meta.url)(outfile);
+  const { normalizeTailorDoc, enforceResumeFacts, pointProofIsSpecific, unsupportedClaim, tailorForJob, recheckTailorResult, auditResumeFacts, useDataStore,
+    directTailorPointProof, retainedPointProof, preserveTailorCoverage, isAdditiveTailorIteration, hasTailorPointCorrection, tailorSupplementFacts } = createRequire(import.meta.url)(outfile);
   const summary = '2027届人工智能本科生，参与课程项目设计与测试。';
   const project = '参与无人台球室原型设计，项目覆盖Flask后端服务；参与订单模块测试和流程验证。';
   const skill = '大模型 API、LangChain、RAG 场景检索、Git、GitHub / Gitee、VS Code、PyCharm、Claude、Codex、Trae 等 AI 编程工具。';
@@ -112,7 +113,7 @@ try {
   assert.equal(checked.aiMatch, null, '要点判定纠正后不展示基于错误判定的分数');
   assert.equal(checked.doc, result.doc, '复核只能改判定，不允许模型修改正文');
   assert.equal(calls, 1);
-  globalThis.__modelHook = async () => ({ jdPoints: points.map((_, i) => ({ id: `p${i + 1}`, verdict: 'missing', evidence: '本人资料不足', factQuotes: [], bodyQuotes: [] })), matchScore: { before: 40, after: 42 } });
+  globalThis.__modelHook = async () => ({ jdPoints: points.map((_, i) => ({ id: `p${i + 1}`, verdict: i===0?'covered':'missing', evidence: i===0?'了解表设计已体现':'本人资料不足', factQuotes: i===0?['了解数据库表设计']:[], bodyQuotes: i===0?['了解数据库表设计']:[] })), matchScore: { before: 40, after: 42 } });
   const retried = await recheckTailorResult({ result: { ...checked, warning: '已按原始证据纠正部分要点，未采纳基于原判定的 AI 匹配分。' }, job: { title: '测试岗位' }, resumeText: facts, profile: null, model: { apiKey: 'offline', model: 'offline', provider: 'custom', contextWindow: 128000 } });
   assert.equal(retried.warning, undefined, '重新复核成功后应清理上一轮未采纳评分的提示');
   assert.equal(retried.aiMatch.after, 42);
@@ -140,6 +141,105 @@ try {
     globalThis.__modelHook = async () => invalid;
     await assert.rejects(() => auditResumeFacts(auditDoc, facts, auditModel), /事实核对/);
   }
+  // Reproduce additive rounds dropping earlier skills, and a reviewer overlooking unchanged evidence.
+  const gitQuote = '使用 Git 管理代码修改，参与功能测试和问题修复。';
+  const toolQuote = 'AI Coding：熟练使用 Claude、Codex、Trae 等 AI 编程工具，阅读、验证和迭代生成结果。';
+  const familiarTools = '熟悉 Claude、Codex、Trae 等 AI 编程工具，能够阅读生成结果。';
+  const sqlQuote = '了解 SQL 语法。', dockerQuote = '了解 Docker 容器基础。';
+  const educationFacts = '教育背景\n示例大学｜人工智能｜本科\n2023.09–2027.06\n个人简介\n2027届人工智能专业本科生。\n个人荣誉\n2026年获得竞赛奖项。';
+  const educationDoc = normalizeTailorDoc({ education: [{ heading: '示例大学｜人工智能｜本科', meta: '2023.09–2027.06' }] });
+  assert.ok(directTailorPointProof('2026/2027届本科', educationDoc, educationFacts), '届别备选年份满足其中一个即可，不能要求同时毕业两次');
+  assert.ok(directTailorPointProof('本科及以上在读', educationDoc, educationFacts), '正文已有本科学历和在读日期不能判为只在原文里具备');
+  assert.equal(directTailorPointProof('2026/2027届本科', normalizeTailorDoc({ education: [{ heading: '示例大学｜人工智能｜本科', meta: '2019.09–2023.06' }] }), educationFacts.replace('2023.09–2027.06', '2019.09–2023.06').replace('2027届', '2023届')), null, '获奖年份不能充当毕业年份');
+  assert.equal(directTailorPointProof('硕士及以上', educationDoc, educationFacts), null);
+  assert.equal(directTailorPointProof('本科及以上在读', normalizeTailorDoc({ selfEval: { text: '2023届人工智能本科生。', source: '2023届人工智能本科生。' } }), '2023届人工智能本科生。'), null, '过去届别的本科生身份不证明现在在读');
+  assert.equal(directTailorPointProof('计算机专业本科', educationDoc, educationFacts), null, '学历证据不替代专业等复合条件核对');
+  assert.equal(directTailorPointProof('全日制本科', educationDoc, educationFacts), null, '本科不能自动推出全日制');
+  assert.equal(directTailorPointProof('熟练使用AI编程工具', normalizeTailorDoc({ skills: [{ text: familiarTools, source: familiarTools }] }), familiarTools), null, '熟悉不能被保留机制升级成熟练');
+  assert.equal(pointProofIsSpecific('熟练使用AI编程工具', ['熟练使用 Git；熟悉 Claude、Codex、Trae 等 AI 编程工具。']), false, '其他技能的熟练程度不能借给AI编程工具');
+  assert.equal(pointProofIsSpecific('熟练使用AI编程工具', [toolQuote]), true);
+  const cleaned = tailorSupplementFacts(`【岗位要点：熟练使用AI编程工具】\n${familiarTools}`);
+  assert.equal(cleaned, familiarTools, '要点定位标签从事实证据中移除，确认的用户文字仍保留');
+  const previousDoc = normalizeTailorDoc({ skills: [{ text: gitQuote, source: gitQuote }, { text: toolQuote, source: toolQuote }], selfEval: { text: summary, source: summary } });
+  const oldSupplements = [{ text: `【岗位要点：熟练使用AI编程工具】\n${toolQuote}`, createdAt: 1 }];
+  const makePoint = (point, verdict, quote) => ({ point, layer: 'must', verdict, statusVerified: true, evidence: '已核对原文和正文', factQuotes: quote ? [quote] : [], bodyQuotes: quote ? [quote] : [] });
+  const previousResult = { ...local, doc: previousDoc, supplements: oldSupplements, aiMatch: { before: 50, after: 68 },
+    jdPoints: [makePoint('Git工程实践', 'covered', gitQuote), makePoint('熟练使用AI编程工具', 'covered', toolQuote), makePoint('了解SQL语法', 'missing'), makePoint('了解Docker容器基础', 'missing')] };
+  const baseFacts = `个人简介\n${summary}\n专业技能\n${gitQuote}`;
+  const allFacts = `${baseFacts}\n${toolQuote}\n${sqlQuote}`;
+  assert.ok(retainedPointProof(previousResult.jdPoints[0], previousResult, allFacts, previousDoc));
+  assert.equal(retainedPointProof(previousResult.jdPoints[0], previousResult, allFacts, normalizeTailorDoc({ skills: [] })), null, '旧绿色不能代替最终正文中的实际证据');
+  assert.equal(retainedPointProof(previousResult.jdPoints[0], previousResult, toolQuote, previousDoc), null, '来源被移除后不能沿用旧状态');
+  assert.equal(hasTailorPointCorrection('Git工程实践', [{ text: '删除 Git 技能', createdAt: 2 }]), true);
+  assert.equal(hasTailorPointCorrection('熟练使用AI编程工具', [{ text: '删除 Git 技能', createdAt: 2 }]), false, '未标注的单项删除不影响无关要点');
+  assert.equal(isAdditiveTailorIteration(previousResult, [...oldSupplements, { text: '删除全部内容', createdAt: 2 }]), false, '明确整体重写不回填旧内容');
+  assert.equal(hasTailorPointCorrection('了解Docker容器基础', [{ text: '【岗位要点：了解Docker容器基础】\n没有做过企业生产部署。', createdAt: 2 }]), false, '否定企业生产部署不否定个人容器基础');
+  assert.equal(hasTailorPointCorrection('线上部署经验', [{ text: '更正：没有参与企业部署。', createdAt: 2 }]), true);
+  assert.equal(hasTailorPointCorrection('Git工程实践', [{ text: '更正：没有参与企业部署。', createdAt: 2 }]), false, '未标注的部署纠错不抹掉Git证据');
+  const supplements = [...oldSupplements, { text: `【岗位要点：了解SQL语法】\n${sqlQuote}`, createdAt: 2 }];
+  assert.equal(isAdditiveTailorIteration(previousResult, supplements), true);
+  assert.equal(isAdditiveTailorIteration(previousResult, [...oldSupplements, { text: '【岗位要点：了解Docker容器基础】\n没有做过企业生产部署。', createdAt: 2 }]), true, '目标要点的否定不能让其他已确认要点失去保护');
+  const omitted = { ...previousResult, supplements, doc: normalizeTailorDoc({ skills: [{ text: sqlQuote, source: sqlQuote }], selfEval: { text: summary, source: summary } }),
+    jdPoints: previousResult.jdPoints.map(p => ({ ...p, verdict: 'missing', factQuotes: [], bodyQuotes: [] })) };
+  const restored = preserveTailorCoverage(previousResult, omitted, allFacts);
+  assert.deepEqual(restored.restored, ['Git工程实践', '熟练使用AI编程工具']);
+  assert.ok(restored.doc.skills.some(line => line.text === sqlQuote) && restored.doc.skills.some(line => line.text === gitQuote) && restored.doc.skills.some(line => line.text === toolQuote));
+  assert.equal(previousResult.doc.skills.length, 2, '不修改已保存的上一版或历史导出快照');
+  const deletion = preserveTailorCoverage(previousResult, { ...omitted, supplements: [...oldSupplements, { text: '【岗位要点：Git工程实践】\n删除 Git 技能', createdAt: 2 }] }, allFacts);
+  assert.ok(!deletion.doc.skills.some(line => line.text === gitQuote), '明确删除的目标内容不被自动补回');
+  const labelOnly = { ...previousResult, jdPoints: [makePoint('熟练使用AI编程工具', 'missing')], doc: normalizeTailorDoc({ skills: [{ text: '熟练使用AI编程工具', source: '【岗位要点：熟练使用AI编程工具】' }] }),
+    supplements: [{ text: `【岗位要点：熟练使用AI编程工具】\n${familiarTools}`, createdAt: 1 }] };
+  globalThis.__modelHook = async () => ({ jdPoints: [{ id: 'p1', verdict: 'covered', evidence: '误把定位标签当经历', factQuotes: ['【岗位要点：熟练使用AI编程工具】'], bodyQuotes: ['熟练使用AI编程工具'] }], matchScore: { before: 40, after: 70 } });
+  const labelChecked = await recheckTailorResult({ result: labelOnly, job: { title: '测试岗位' }, resumeText: familiarTools, profile: null, model: auditModel });
+  assert.equal(labelChecked.jdPoints[0].verdict, 'missing', 'JD标签不作为技能事实，不把熟悉升级成熟练');
+
+  let targetLine = sqlQuote, rechecks = 0, failSecond = false, failFirst = false;
+  const cover = '您好，我想应聘贵公司的Python实习岗位。' + '我希望结合自己的真实项目与实际操作，进一步了解岗位的工作内容、团队协作方式和具体要求；愿意在沟通中介绍已经完成的实践，并明确自己接触过的内容和需要继续学习的部分。'.repeat(2) + '感谢您阅读，期待有机会进一步交流。';
+  globalThis.__modelHook = async messages => {
+    const system = messages[0].content;
+    if (system.startsWith('你是求职者的求职助手')) return { tailoredSummary: summary, coverLetter: cover, resume: { skills: [{ text: targetLine, source: targetLine }], selfEval: { text: summary, source: summary } },
+      jdPoints: [{ point: targetLine.replace(/\s|。/g, ''), layer: 'must', verdict: 'covered', evidence: '本轮新增' }], matchScore: { before: 50, after: 70 } };
+    if (system.startsWith('你是资深招聘方')) return {};
+    if (system.startsWith('你是简历事实核对员')) {
+      const items = JSON.parse(messages[1].content.split('待核对的完整条目：')[1]);
+      return { lines: items.map(item => ({ id: item.id, text: item.text, sourceQuotes: [item.source] })) };
+    }
+    if (system.startsWith('你是简历最终正文复核员')) {
+      rechecks++;
+      if ((failFirst && rechecks === 1) || (failSecond && rechecks === 2)) throw Error('offline review unavailable');
+      return { jdPoints: previousResult.jdPoints.map((_, i) => ({ id: `p${i + 1}`, verdict: 'missing', evidence: '本轮模型漏看既有证据', factQuotes: [], bodyQuotes: [] })), matchScore: { before: 50, after: 55 } };
+    }
+    return { greeting: cover, coverLetter: cover };
+  };
+  const iterationProfile = { summary, facts: { skills: [gitQuote], projects: [], education: [] } };
+  const iterated = await tailorForJob({ title: 'Python实习', description: 'Git工程实践；熟练使用AI编程工具；了解SQL语法；了解Docker容器基础' }, baseFacts, iterationProfile, auditModel, undefined, undefined, { supplements, previousResult });
+  assert.equal(iterated.method, 'ai');
+  assert.deepEqual(iterated.jdPoints.map(p => p.point), previousResult.jdPoints.map(p => p.point), '补充期间要点名称、顺序、层级不随模型输出漂移');
+  assert.deepEqual(iterated.jdPoints.map(p => p.verdict), ['covered', 'covered', 'covered', 'missing'], '恢复有来源的旧内容后，新要点与旧要点同时保留');
+  assert.ok(iterated.jdPoints.every(p => p.statusVerified));
+  assert.equal(iterated.previousScore, 68);
+  assert.equal(iterated.aiMatch, null, '修正模型漏判后不沿用与最终要点不一致的分数');
+  assert.equal(rechecks, 2, '发生实际内容丢失时最多恢复并复核一次');
+  assert.ok(iterated.highlightedSkills.includes(gitQuote) && iterated.highlightedSkills.includes(sqlQuote), '面板技能与恢复后的正文同步');
+  targetLine = dockerQuote; rechecks = 0;
+  const nextSupplements = [...supplements, { text: `【岗位要点：了解Docker容器基础】\n${dockerQuote}`, createdAt: 3 }];
+  const next = await tailorForJob({ title: 'Python实习', description: 'Git工程实践；熟练使用AI编程工具；了解SQL语法；了解Docker容器基础' }, baseFacts, iterationProfile, auditModel, undefined, undefined, { supplements: nextSupplements, previousResult: iterated });
+  assert.deepEqual(next.jdPoints.map(p => p.verdict), ['covered', 'covered', 'covered', 'covered'], '多轮补充保留前几轮的真实技能与引文');
+  assert.equal(next.supplements.length, 3);
+  targetLine = sqlQuote; rechecks = 0; failSecond = true;
+  const interrupted = await tailorForJob({ title: 'Python实习', description: '同一岗位要求' }, baseFacts, iterationProfile, auditModel, undefined, undefined, { supplements, previousResult });
+  assert.equal(interrupted.method, 'ai');
+  assert.ok(interrupted.jdPoints[0].statusVerified && interrupted.jdPoints[1].statusVerified, '复核失败时仍有效的既有引文不全部变成待复核');
+  assert.equal(interrupted.jdPoints[2].statusVerified, false, '本轮新判定失败时保留待复核，不能把所有要点硬改成绿色');
+  assert.ok(interrupted.doc.skills.some(line => line.text === sqlQuote));
+  assert.equal(previousResult.doc.skills.length, 2);
+  rechecks = 0; failSecond = false; failFirst = true;
+  const firstInterrupted = await tailorForJob({ title: 'Python实习', description: '同一岗位要求' }, baseFacts, iterationProfile, auditModel, undefined, undefined, { supplements, previousResult });
+  assert.ok(firstInterrupted.jdPoints[0].statusVerified && firstInterrupted.jdPoints[1].statusVerified, '初次复核失败同样保留有原文依据的旧要点');
+  assert.ok([gitQuote, toolQuote, sqlQuote].every(q => firstInterrupted.doc.skills.some(l => l.text === q)), '复核不可用时仍恢复被改写遗漏的正文，保留本轮新增内容');
+  assert.equal(firstInterrupted.jdPoints[2].statusVerified, false);
+  assert.equal(rechecks, 1, '服务不可用时不循环请求');
+
   const store = useDataStore.getState();
   store.setResumeText(facts, '本人素材.txt');
   store.setResumeWritingPreferences(preferences);
@@ -152,7 +252,7 @@ try {
   await useDataStore.persist.rehydrate();
   assert.deepEqual(useDataStore.getState().resumeWritingPreferences, preferences, '重启读取仍保留偏好');
   assert.equal(useDataStore.getState().experienceMaterials.length, 1, '补充文件引用重启后仍可用');
-  console.log('PASS resume facts: 原文定位、摘要/职责/水平保真、项目性质、表达偏好、完整句子、双重引文与前置条件、复核只读、偏好及素材重启留存。');
+  console.log('PASS resume facts: 原文定位、摘要/职责/水平保真、项目性质、表达偏好、双重引文、学历与AI工具要求、多轮补充保留、纠错优先、复核中断恢复、复核只读及重启留存。');
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
