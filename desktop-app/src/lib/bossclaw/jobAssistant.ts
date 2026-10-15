@@ -32,6 +32,7 @@ import { PROJECT_WRITING_RULE, resumePreferenceRule, type ResumeWritingPreferenc
 import { GREETING_PREVIEW_RULE } from './greetingPreview';
 import { enforceResumeFacts, hasFactQuote, pointProofIsSpecific, resumeBodyText, unsupportedClaim } from './resumeFacts';
 import { auditResumeFacts } from './resumeFactAudit';
+import { directTailorPointProof, hasTailorPointCorrection, isAdditiveTailorIteration, preserveTailorCoverage, retainedPointProof, tailorSupplementFacts } from './tailorEvidence';
 import { buildSchoolDisclosureRule, hasSchoolMention, resolveSchoolTier } from './schoolTier';
 import { normalizeStringList } from './helpers';
 import { decodeSalaryDigits } from './jobDisplay';
@@ -587,15 +588,18 @@ export function finalizeJdPoints(
 /** 只复核已经交付的正文，绝不把复核响应中的新正文或经历写回简历。 */
 export async function recheckTailorResult(input: {
   result: TailorResult; job: JobMeta; resumeText: string; profile: Profile | null;
-  model: AppConfig['model']; extraMaterials?: string;
+  model: AppConfig['model']; extraMaterials?: string; previousResult?: TailorResult;
 }): Promise<TailorResult> {
   const { result, job, model } = input;
   const resumeText = result.resumeSource?.text ?? input.resumeText;
   const profile = result.resumeSource ? result.resumeSource.profile : input.profile;
+  const previous = input.previousResult || result;
+  const reuseEvidence = isAdditiveTailorIteration(input.previousResult || { ...result, supplements: [] }, result.supplements || []);
+  const originalFacts = [resumeText, input.extraMaterials || '', ...(result.supplements || []).map((s, i) => `【第${i + 1}轮用户补充】\n${tailorSupplementFacts(s.text)}`)].join('\n');
   if (!model?.apiKey) throw new Error('请先在设置中配置 AI');
   if (!result.jdPoints.length) throw new Error('当前结果没有可复核的岗位要点');
   const system = `你是简历最终正文复核员。只核对已有正文，禁止改写简历、求职信或增加要点。
-事实来源仅限简历原文、本人导入材料及已确认的用户补充；画像仅供理解。岗位要求、教程、上一版AI正文不是新增经历依据。保留补充中的否定、纠错与编辑要求，愿望不能当作已具备事实，了解不能升级成熟练。
+事实来源仅限简历原文、本人导入材料及已确认的用户补充；画像仅供理解。岗位要求、教程、上一版AI正文不是新增经历依据；补充中的【岗位要点：…】只是定位标签，不是本人已具备能力的事实。保留补充中的否定、纠错与编辑要求，愿望不能当作已具备事实，了解不能升级成熟练。
 逐条返回原有 id，不得遗漏、重复或改名。covered=真实事实已在最终正文体现且满足要求；addable=事实来源支持但最终正文未体现；missing=事实来源不足或不满足要求。不能只因出现关键词就判为covered，复合条件须全部满足。团队环境只判断适配，不写成求职者经历。
 evidence必须说明最终正文中的对应内容或真实缺口，不能沿用旧判定。评分同口径比较原简历与最终正文，0到100分，不因补充或重试强制加分。
 每个covered须返回factQuotes和bodyQuotes：factQuotes逐字摘录本人原始资料中支持全部要求的原文，bodyQuotes逐字摘录最终正文中的对应句子。addable须返回有效factQuotes；missing可返回空数组。两组引文不能互相冒充，画像、JD、AI草稿不可放进factQuotes。引文可以多条，每条应完整表达所证明的事实，不能只给关键词。
@@ -608,9 +612,14 @@ ${PROJECT_WRITING_RULE}
     projects: result.doc.projects, skills: result.doc.skills, honors: result.doc.honors, selfEval: result.doc.selfEval,
   }, (key, value) => key === 'source' ? undefined : value);
   const points = JSON.stringify(result.jdPoints.map((p, i) => ({ id: `p${i + 1}`, point: p.point, layer: p.layer })));
+  const locatedProofs = JSON.stringify(result.jdPoints.flatMap((p, i) => {
+    const proof = directTailorPointProof(p.point, result.doc, originalFacts, result.supplements)
+      || (reuseEvidence && !hasTailorPointCorrection(p.point, result.supplements, input.previousResult?.supplements?.length || 0) ? retainedPointProof(p, previous, originalFacts, result.doc) : null);
+    return proof ? [{ id: `p${i + 1}`, ...proof }] : [];
+  }));
   // 保留最终正文和完整清单；仅为事实材料分配剩余窗口，不裁坏 JSON。
   const available = resolveContextBudget(model, { outputTokens: 6144 }).inputBudgetTokens
-    - estimateTokens(system + body + points) - 1000;
+    - estimateTokens(system + body + points + locatedProofs) - 1000;
   if (available < 1500) throw new Error('当前模型窗口不足以完整复核，请增大上下文窗口');
   const facts = await prepareContextText(String(resumeText || ''), model, {
     tokenBudget: Math.floor(available * 0.45), cacheScope: 'assistant', purpose: '定制简历-最终正文复核事实',
@@ -625,7 +634,7 @@ ${PROJECT_WRITING_RULE}
   // 复核响应还需业务校验；不复用未通过校验的缓存，确保点击重试能再次请求。
   const response: any = await cachedCallModel([
     { role: 'system', content: system },
-    { role: 'user', content: `简历原文：${facts.text}\n本人材料与已确认补充：${extra}\n画像（仅参考）：${fitContextToTokens(profile ? JSON.stringify(stableProfileView(profile)) : '', Math.floor(available * 0.1))}\n岗位：${JSON.stringify({ title: job.title, company: job.company, description: fitContextToTokens(job.description || '', Math.floor(available * 0.2)) })}\n最终正文（只读）：${body}\n原有要点：${points}` },
+    { role: 'user', content: `简历原文：${facts.text}\n本人材料与已确认补充：${extra}\n画像（仅参考）：${fitContextToTokens(profile ? JSON.stringify(stableProfileView(profile)) : '', Math.floor(available * 0.1))}\n岗位：${JSON.stringify({ title: job.title, company: job.company, description: fitContextToTokens(job.description || '', Math.floor(available * 0.2)) })}\n最终正文（只读）：${body}\n原有要点：${points}\n可定位引文提示（只辅助定位，仍须核对全部要求与当前正文，不以旧状态或分数作证据）：${locatedProofs}` },
   ], model, { maxTokens: 6144, temperature: 0.1 }, { scope: 'assistant', ttlMs: 0 });
   const assessed = response?.jdPoints;
   const score = response?.matchScore;
@@ -637,7 +646,6 @@ ${PROJECT_WRITING_RULE}
     throw new Error('AI 未返回完整的要点判定与评分，已有简历已保留，请重试复核');
   }
   const updates = new Map<string, { verdict: JdPointVerdict; evidence: string; factQuotes: string[]; bodyQuotes: string[] }>();
-  const originalFacts = [resumeText, input.extraMaterials || '', ...(result.supplements || []).map(s => s.text)].join('\n');
   const finalBody = resumeBodyText(result.doc);
   let verdictCorrected = false;
   for (const p of assessed) {
@@ -645,11 +653,11 @@ ${PROJECT_WRITING_RULE}
       || updates.has(p.id) || !JD_VERDICTS.includes(p.verdict) || typeof p.evidence !== 'string' || !p.evidence.trim()) {
       throw new Error('AI 复核要点不完整或格式无效，已有简历已保留，请重试复核');
     }
-    const factQuotes = normalizeStringList(p.factQuotes, 8);
-    const bodyQuotes = normalizeStringList(p.bodyQuotes, 8);
+    let factQuotes = normalizeStringList(p.factQuotes, 8);
+    let bodyQuotes = normalizeStringList(p.bodyQuotes, 8);
     const point = result.jdPoints[Number(p.id.slice(1)) - 1];
-    const validFacts = factQuotes.length > 0 && factQuotes.every(q => hasFactQuote(q, originalFacts));
-    const validBody = bodyQuotes.length > 0 && bodyQuotes.every(q => hasFactQuote(q, finalBody));
+    let validFacts = factQuotes.length > 0 && factQuotes.every(q => hasFactQuote(q, originalFacts));
+    let validBody = bodyQuotes.length > 0 && bodyQuotes.every(q => hasFactQuote(q, finalBody));
     let verdict: JdPointVerdict = p.verdict;
     let evidence = p.evidence.trim();
     if ((verdict === 'covered' || verdict === 'addable') && (!validFacts || !pointProofIsSpecific(point.point, factQuotes))) {
@@ -658,6 +666,13 @@ ${PROJECT_WRITING_RULE}
     } else if (verdict === 'covered' && (!validBody || !pointProofIsSpecific(point.point, bodyQuotes))) {
       verdict = 'addable';
       evidence = '原始资料有依据，但最终正文未完整体现该要求。';
+    }
+    const confirmed = directTailorPointProof(point.point, result.doc, originalFacts, result.supplements)
+      || (reuseEvidence && !hasTailorPointCorrection(point.point, result.supplements, input.previousResult?.supplements?.length || 0) ? retainedPointProof(point, previous, originalFacts, result.doc) : null);
+    if (confirmed) {
+      verdict = 'covered'; factQuotes = confirmed.factQuotes; bodyQuotes = confirmed.bodyQuotes;
+      validFacts = validBody = true;
+      evidence = `最终正文与原始资料均有依据：${bodyQuotes[0]}`.slice(0, 100);
     }
     if (verdict !== p.verdict) verdictCorrected = true;
     updates.set(p.id, { verdict, evidence, factQuotes: validFacts ? factQuotes : [], bodyQuotes: validBody ? bodyQuotes : [] });
@@ -847,6 +862,9 @@ export async function tailorForJob(
   const preferenceInstructions = resumePreferenceRule(writingPreferences);
   const supplements = (iteration?.supplements || []).filter((s) => s.text?.trim());
   const supplementText = supplements.map((s, i) => `【第${i + 1}轮用户补充】\n${s.text}`).join('\n\n');
+  const originalFacts = [resumeText, extra, ...supplements.map((s, i) => `【第${i + 1}轮用户补充】\n${tailorSupplementFacts(s.text)}`)].filter(Boolean).join('\n\n');
+  const previous = iteration?.previousResult;
+  const preserveCoverage = isAdditiveTailorIteration(previous, supplements);
 
   const buildMatch = (): TailorMatchAnalysis => ({
     keywords: keywordAnalysis,
@@ -857,7 +875,7 @@ export async function tailorForJob(
   });
 
   const localFallback = (warning: string): TailorResult => {
-    const doc = enforceResumeFacts(buildLocalTailorDoc(profile), [resumeText, extra, supplementText].filter(Boolean).join('\n\n'), writingPreferences).doc;
+    const doc = enforceResumeFacts(buildLocalTailorDoc(profile), originalFacts, writingPreferences).doc;
     return {
       resumeSource,
       highlightedSkills: doc.skills.map(line => line.text),
@@ -921,7 +939,6 @@ export async function tailorForJob(
     cacheScope: 'assistant', purpose: '定制简历-多轮补充', mode: 'transform',
     instruction: '整理用户多轮补充，保留各轮的事实、纠错、否定和编辑要求及其先后关系，明确区分事实与愿望；禁止把希望具备的技能、提高分数的指令改写为已具备的经历或成果。',
   })).text : '';
-  const previous = iteration?.previousResult;
   const previousCtx = previous && supplementText ? fitContextToTokens(JSON.stringify({
     resume: previous.doc, skillGaps: previous.skillGaps, suggestions: previous.suggestions,
     jdPoints: previous.jdPoints, matchScore: previous.aiMatch,
@@ -970,7 +987,9 @@ export async function tailorForJob(
 
     // ===== 第一轮：草稿（Draft） =====
     const draftDoc = normalizeTailorDoc(result?.resume);
-    const draftPoints = normalizeJdPoints(result?.jdPoints);
+    // A supplement edits this same JD; keep point identities/order so unrelated items cannot disappear or change names.
+    const draftPoints = previous?.jdPoints?.length && supplementText
+      ? previous.jdPoints.map(point => ({ ...point, statusVerified: false })) : normalizeJdPoints(result?.jdPoints);
     const draftAiMatch = normalizeAiMatch(result?.matchScore);
     const draft = {
       tailoredSummary: summary.slice(0, 300),
@@ -1078,7 +1097,6 @@ export async function tailorForJob(
       /* review 失败不阻塞：沿用草稿 */
     }
 
-    const originalFacts = [resumeText, extra, supplementText].filter(Boolean).join('\n\n');
     finalDoc = await auditResumeFacts(finalDoc, originalFacts, model, writingPreferences);
     const guarded = enforceResumeFacts(finalDoc, originalFacts, writingPreferences);
     finalDoc = guarded.doc;
@@ -1104,7 +1122,7 @@ export async function tailorForJob(
     // 描述语保真兜底检出（只检出、不自动回填；回填措辞交给 AI 复检或人工）
     const qualifierLoss = findQualifierLoss(rewrites);
 
-    const finalResult: TailorResult = {
+    let finalResult: TailorResult = {
       ...draft,
       resumeSource,
       writingPreferences,
@@ -1129,11 +1147,36 @@ export async function tailorForJob(
       warning: scoreWarning || ((result as any)?._repaired ? 'AI 首次返回的 JSON 不完整，已通过自动补齐修复（结果仍来自 AI）。' : undefined),
     };
     if (finalResult.jdPoints.length) {
+      const restorePreviousCoverage = (candidate: TailorResult): TailorResult => {
+        if (!preserveCoverage || !previous) return candidate;
+        const recovered = preserveTailorCoverage(previous, candidate, originalFacts);
+        if (!recovered.restored.length) return candidate;
+        const doc = enforceResumeFacts(recovered.doc, originalFacts, writingPreferences).doc;
+        const compared = deriveRewrites(doc, RESUME_DOC_MODULE_LABEL, [extra, supplementText].filter(Boolean).join('\n\n'));
+        return { ...candidate, doc, tailoredSummary: doc.selfEval.text, highlightedSkills: doc.skills.map(l => l.text),
+          tailoredExperiences: doc.projects.map(b => `${b.heading.split('|')[0].trim()}：${b.bullets[0]?.text || b.meta}`),
+          rewrites: [...compared.rewrites, ...compared.unmatched], qualifierLoss: findQualifierLoss(compared.rewrites), aiMatch: null,
+          jdPoints: candidate.jdPoints.map(p => ({ ...p, statusVerified: false })),
+          review: { note: `已保留此前有原文依据的要点：${recovered.restored.join('、')}`, revisedFields: [...new Set([...(candidate.review?.revisedFields || []), '已有要点保留'])] } };
+      };
       try {
-        return await recheckTailorResult({ result: finalResult, job, resumeText, profile, model, extraMaterials: extra });
+        const recheck = (result: TailorResult) => recheckTailorResult({ result, job, resumeText, profile, model, extraMaterials: extra,
+          previousResult: preserveCoverage ? previous : undefined });
+        let checked = await recheck(finalResult);
+        const recovered = restorePreviousCoverage(checked);
+        if (recovered !== checked) {
+          finalResult = recovered;
+          checked = await recheck(finalResult);
+        }
+        return checked;
       } catch {
         // 补查失败保留最终正文和待复核状态，不能降级或展示旧稿分数。
-        return { ...finalResult, warning: '最终正文复核尚未完成，简历内容已保留；请点击「复核要点」重试。' };
+        finalResult = restorePreviousCoverage(finalResult);
+        return { ...finalResult, jdPoints: finalResult.jdPoints.map(p => {
+          const proof = preserveCoverage && !hasTailorPointCorrection(p.point, supplements, previous?.supplements?.length || 0)
+            ? retainedPointProof(p, previous, originalFacts, finalResult.doc) : null;
+          return proof ? { ...p, ...proof, verdict: 'covered', statusVerified: true } : { ...p, statusVerified: false };
+        }), warning: '最终正文复核尚未完成，简历内容与仍有效的既有要点证据已保留；请点击「复核要点」重试。' };
       }
     }
     return finalResult;

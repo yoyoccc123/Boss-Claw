@@ -155,10 +155,10 @@ skillsDraft.resume.skills = skillPoints.map(p => ({ text: p.point, source: p.poi
 const facts = skillPoints.map(p => p.point).join('\n');
 replies = [skillsDraft, { jdPoints: skillPoints, matchScore: { before: 60, after: 74 } }, { jdPoints: skillPoints.map((p, i) => ({ id: `p${i + 1}`, verdict: 'covered', evidence: `最终正文：${p.point}`, factQuotes: [p.point], bodyQuotes: [p.point] })), matchScore: { before: 60, after: 74 } }];
 const skillsResult = await tailorForJob(job, resume, profile, model, undefined, undefined, {
-  supplements: appendTailorSupplement([], facts, 3), previousResult: first,
+  supplements: appendTailorSupplement([], facts, 3), previousResult: { ...first, jdPoints: skillPoints },
 });
 assert.ok(skillsResult.jdPoints.every(p => p.verdict === 'covered' && p.statusVerified), '最终技能已体现时不能沿用旧可补充');
-assert.ok(skillsResult.jdPoints.every(p => p.evidence.startsWith('最终正文：')), '依据更新为本次正文');
+assert.ok(skillsResult.jdPoints.every(p => p.evidence.includes('最终正文') && p.evidence.includes(p.point) && !p.evidence.includes('未写明表设计')), '依据更新为本次正文');
 assert.ok(!JSON.stringify(skillsResult.doc).includes('精通'), '了解不能升级为精通');
 const plainDoc = normalizeTailorDoc({ skills: [{ text: '熟悉 MySQL，使用 SQLite 存储数据', source: facts }] });
 const stillAddable = finalizeJdPoints(skillPoints, skillPoints, plainDoc, true);
@@ -305,7 +305,7 @@ const runUi = async function () {
   check(skillButton.textContent.includes('已体现') && !skillButton.textContent.includes('可补充'), '补充后要点卡片更新为已体现');
   skillButton.click();
   await wait(() => document.querySelector('.tailor-point-detail-modal .tailor-point-detail'), '要点详情');
-  check(document.querySelector('.tailor-point-detail-modal').textContent.includes('最终正文：了解数据库表设计'), '详情依据更新为最终正文');
+  check(document.querySelector('.tailor-point-detail-modal').textContent.includes('最终正文') && document.querySelector('.tailor-point-detail-modal').textContent.includes('了解数据库表设计'), '详情依据更新为最终正文');
   document.querySelector('.tailor-point-detail-modal .ant-modal-close').click();
   fill(document.querySelector('#tailor-supplement-text'), '补充乙：负责检索效果评估。');
   await wait(() => !button('补充并重新生成').disabled, '第二轮输入'); button('补充并重新生成').click();
