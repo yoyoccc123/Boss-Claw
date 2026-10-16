@@ -39,6 +39,10 @@ const provinceCities = T.expandWubaSearchLocations(provinceConfig.targetLocation
 check(provinceCities.length === 21 && new Set(provinceCities).size === 21 && provinceCities.includes('广州') && provinceCities.includes('深圳') && provinceCities.includes('中山'), 'Guangdong expands all 21 supported cities and deduplicates an explicit Shenzhen');
 check(T.expandWubaSearchLocations(['广东']).join('|') === provinceCities.join('|'), 'province suffixes preserve the same stable city order');
 check(T.expandWubaSearchLocations(['北京市', '北京']).join('|') === '北京', 'municipalities do not duplicate themselves');
+check(T.expandWubaSearchLocations(['吉林市']).join('|') === '吉林' && T.expandWubaSearchLocations(['吉林省']).length > 1, 'an explicit same-name city remains distinct from its province');
+check(!T.matchesTargetLocation('长春·南关区', ['吉林市']) && T.matchesTargetLocation('长春·南关区', ['吉林省']), 'a city target never silently broadens to its entire province');
+check(!T.matchesTargetLocation('吉林省·长春·南关区', ['吉林市']) && !T.matchesTargetLocation('吉林·长春·南关区', ['吉林市']), 'province labels cannot stand in for a same-name target city');
+check(T.matchesTargetLocation('吉林·丰满区', ['吉林市']) && T.matchesTargetLocation('吉林市·丰满区', ['吉林市']), 'actual same-name city locations still match with or without the city suffix');
 assert.throws(() => T.expandWubaSearchLocations(['不存在的城市']), /暂未登记/); checks++;
 assert.throws(() => T.expandWubaSearchLocations(['全国']), /具体城市或省份/); checks++;
 const directionPlan = { items: [{ id: 'python', name: 'Python开发', enabled: true, keywords: ['Python'], priority: 1, score: 80 }] };

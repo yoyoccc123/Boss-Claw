@@ -59,7 +59,10 @@ export const PROVINCE_CITIES: Record<string, string[]> = {
 
 /** Normalize province aliases without rewriting the user's saved target locations. */
 export function normalizeProvinceName(value: string): string {
-  const name = String(value || '').trim().replace(/(?:壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区|省|市)$/, '');
+  const raw = String(value || '').trim();
+  // 吉林市 is a city, while 北京市 is also a province-level municipality.
+  if (raw.endsWith('市') && !['北京市', '上海市', '天津市', '重庆市'].includes(raw)) return '';
+  const name = raw.replace(/(?:壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区|省|市)$/, '');
   return Object.prototype.hasOwnProperty.call(PROVINCE_CITIES, name) ? name : '';
 }
 
@@ -67,7 +70,9 @@ export function normalizeProvinceName(value: string): string {
 export function matchesTargetLocation(location: string | undefined | null, targets: readonly string[]): boolean {
   const loc = String(location || '').trim();
   if (!loc) return false;
-  const explicitProvince = normalizeProvinceName(loc.split(/[·•/\s-]/)[0]);
+  const segments = loc.split(/[·•/\s-]/).filter(Boolean);
+  const firstSegment = segments[0] || '';
+  const explicitProvince = normalizeProvinceName(firstSegment);
   return targets.some(target => {
     const province = normalizeProvinceName(target);
     if (province) {
@@ -76,7 +81,10 @@ export function matchesTargetLocation(location: string | undefined | null, targe
       return loc.includes(province) || PROVINCE_CITIES[province].some(city => loc.includes(city));
     }
     const city = String(target || '').trim().replace(/市$/, '');
-    return Boolean(city && loc.includes(city));
+    const provincePrefixOnly = explicitProvince && (firstSegment !== city
+      || segments.slice(1).some(segment => PROVINCE_CITIES[explicitProvince].some(other => other !== city && segment.startsWith(other))));
+    const cityLocation = provincePrefixOnly ? loc.slice(firstSegment.length) : loc;
+    return Boolean(city && cityLocation.includes(city));
   });
 }
 
