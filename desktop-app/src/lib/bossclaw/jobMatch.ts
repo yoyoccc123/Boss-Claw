@@ -12,7 +12,7 @@ import { HARD_BLOCK_SCORE_CAP } from './fitLevel';
 import { keywordHit, extractJdKeywords } from './resumeMatch';
 import { isNonSkillJdToken, equivalentSkillKeys, coveringSkillKeys, skillKeysInText, extractEnglishTokens, zhAliasCoversTerm } from './skillTaxonomy';
 import { isCompanyExcluded } from './companyFilter';
-import { isLocationExcluded } from './locationFilter';
+import { isLocationExcluded, matchesTargetLocation } from './locationFilter';
 import { detectInterviewMode } from './interviewMode';
 import { checkJobExpiry, isExpiryFilterEnabled, PLATFORM_EXPIRY_DEFAULT } from './jobExpiry';
 import { decodeSalaryDigits } from './jobDisplay';
@@ -551,7 +551,7 @@ function collectHardBlocksFromCtx(ctx: LocalMatchContext): string[] {
     () => {
       if (!ctx.targetLocations.length || !isLocationDecidable(job.location)) return null;
       const locText = String(job.location || '');
-      const hit = ctx.targetLocations.some((city) => city && locText.includes(city));
+      const hit = matchesTargetLocation(locText, ctx.targetLocations);
       return hit
         ? null
         : `岗位地点「${locText.trim()}」不在目标城市（${ctx.targetLocations.slice(0, 4).join('、')}）`;
@@ -743,7 +743,7 @@ function computeDirectionScore(ctx: LocalMatchContext, evidence: string[]): numb
 function computeLocationScore(ctx: LocalMatchContext, evidence: string[]): number | null {
   if (isLocationDecidable(ctx.job.location) && ctx.targetLocations.length) {
     const locText = String(ctx.job.location || '');
-    const hit = ctx.targetLocations.some((city) => city && locText.includes(city));
+    const hit = matchesTargetLocation(locText, ctx.targetLocations);
     if (hit) evidence.push(`地点命中：${locText.trim()} 在目标城市内`);
     return hit ? 100 : 0;
   }

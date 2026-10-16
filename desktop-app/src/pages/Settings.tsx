@@ -1083,7 +1083,7 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
               <div className="sg-item">
                 <span className="field-label">
                   目标城市
-                  <Tooltip title="与「简历中心 → 职业画像」的城市同源：两处共享同一份内容、相互补充，任一处增删都会同步。可输入多个城市，用回车或逗号（, ，）／顿号（、）分隔；留空表示不限城市（按全国搜索）。">
+                  <Tooltip title="与「简历中心 → 职业画像」的城市同源：两处共享同一份内容、相互补充，任一处增删都会同步。可输入多个城市，用回车或逗号（, ，）／顿号（、）分隔。58支持输入省份，如广东会按下辖城市逐个采集；58需指定省份或城市，其余平台留空按全国搜索。">
                     <InfoCircleOutlined className="field-label__hint" />
                   </Tooltip>
                 </span>

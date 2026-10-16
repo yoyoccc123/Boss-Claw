@@ -57,6 +57,29 @@ export const PROVINCE_CITIES: Record<string, string[]> = {
   澳门: ['澳门'],
 };
 
+/** Normalize province aliases without rewriting the user's saved target locations. */
+export function normalizeProvinceName(value: string): string {
+  const name = String(value || '').trim().replace(/(?:壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区|省|市)$/, '');
+  return Object.prototype.hasOwnProperty.call(PROVINCE_CITIES, name) ? name : '';
+}
+
+/** A province target includes its cities even when the job only displays a city name. */
+export function matchesTargetLocation(location: string | undefined | null, targets: readonly string[]): boolean {
+  const loc = String(location || '').trim();
+  if (!loc) return false;
+  const explicitProvince = normalizeProvinceName(loc.split(/[·•/\s-]/)[0]);
+  return targets.some(target => {
+    const province = normalizeProvinceName(target);
+    if (province) {
+      // 青海·海南州 must not match 海南省 simply because both contain 海南.
+      if (explicitProvince && explicitProvince !== province) return false;
+      return loc.includes(province) || PROVINCE_CITIES[province].some(city => loc.includes(city));
+    }
+    const city = String(target || '').trim().replace(/市$/, '');
+    return Boolean(city && loc.includes(city));
+  });
+}
+
 /**
  * 判断某岗位 location 是否命中「城市反选」排除规则。
  * - 命中任一被排除的省份（location 含该省简名，或含其下辖市）即排除；

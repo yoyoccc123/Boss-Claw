@@ -17,6 +17,8 @@ import { HR_ACTIVITY_FILTER_LABEL } from './hrActivity';
 import { selectedDirectionItems } from './directions';
 import { buildJobSearchUrl, RANDOM_COLLECT_LABEL } from './searchUrl';
 import wubaSite from '../../../camoufox/platforms/wuba-site.json';
+import { normalizeProvinceName, PROVINCE_CITIES } from './locationFilter';
+import { normalizeTargetLocations } from './targetLocations';
 
 // ==================== 猎聘 liepin ====================
 export const LIEPIN_BASE_URL = 'https://www.liepin.com/zhaopin/';
@@ -325,6 +327,23 @@ export function buildJob51SearchUrl(query: Job51SearchQuery = {}): string {
 }
 
 // 58 uses city subdomains rather than BOSS/智联 numeric codes. Never silently search a different city.
+export function expandWubaSearchLocations(locations: readonly string[]): string[] {
+  const targets = normalizeTargetLocations(locations);
+  if (!targets.length) throw new Error('58招聘需要选择具体城市或省份，请在设置的目标城市中添加后再采集');
+  const cities: Record<string, string> = wubaSite.cities;
+  const result = new Set<string>();
+  for (const target of targets) {
+    const province = normalizeProvinceName(target);
+    const members = province ? PROVINCE_CITIES[province].filter(city => cities[city]) : [target.replace(/市$/, '')];
+    if (!members.length) throw new Error(`58同城暂未接入“${target}”的城市，请选择具体城市后采集`);
+    for (const city of members) {
+      if (!cities[city]) throw new Error(`58同城暂未登记城市“${city}”，请选择已支持城市后采集`);
+      result.add(city);
+    }
+  }
+  return [...result];
+}
+
 export function buildWubaSearchUrl(query: { keyword?: string; city?: string; page?: number; criteria?: PlatformSearchCriteria } = {}): string {
   const types = query.criteria?.employmentTypes || [];
   if (types.length && types.every(t => t === '兼职')) throw new Error('58兼职是独立招聘页面，当前接入全职招聘列表；请调整求职类型后采集');
@@ -454,7 +473,9 @@ export function buildPlatformSearchQueue(
   directionPlan: DirectionPlan | null,
   config: AppConfig,
 ): PlatformSearchQueueItem[] {
-  const locations = config.targetLocations?.filter(Boolean).length ? config.targetLocations : ['全国'];
+  const requestedLocations = config.targetLocations?.filter(Boolean).length ? config.targetLocations : ['全国'];
+  // Both webview and Camoufox consume this queue, so province searches share city-level checkpoints.
+  const locations = platform === 'wuba' ? expandWubaSearchLocations(requestedLocations) : requestedLocations;
   const employmentTypes = config.employmentTypes?.filter(Boolean).length ? config.employmentTypes : ['不限'];
   const criteria = platformSearchCriteria(config);
 
