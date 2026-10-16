@@ -163,7 +163,7 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as isolated:
         assert registry.registry.has('wuba')
         assert capabilities.delivery_kind('wuba')=='resume'
         assert not capabilities.platform_supports('wuba','attach')
-        assert build_search_url('Python','中山','',2)=='https://zs.58.com/quanzhizhaopin/pn2/?key=Python'
+        assert build_search_url('Python','中山','',2)=='https://zs.58.com/quanzhizhaopin/pn2/?key=Python&final=1'
         for entry in ${JSON.stringify(provinceQueue.map(q => ({ city: q.location, url: q.url })))}:
             assert build_search_url('Python',entry['city'])==entry['url']
         c=WubaCollector()
@@ -198,3 +198,4 @@ print('PASS 58 Python: registry, shared DOM, city URLs, no attachment capability
 const python = spawnSync(process.env.BOSSCLAW_PYTHON || 'python', ['-c', pythonTest], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
 assert.equal(python.status, 0, python.stderr || python.error?.message); process.stdout.write(python.stdout);
 console.log(`PASS 58: ${checks} platform/URL/target/Stop checks and ${outcome.checks.length} actual DOM/resume selection/result checks; zero platform submissions.`);
+await import('./wuba-search-regression.mjs');

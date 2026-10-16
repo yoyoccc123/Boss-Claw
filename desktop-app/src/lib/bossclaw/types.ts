@@ -36,7 +36,17 @@ export interface ImageResume {
   createdAt: number;
 }
 
+export interface WubaSearchFilters {
+  salary?: string;
+  degree?: string;
+  experience?: string;
+  industry?: string;
+  publishedWithinDays?: number;
+}
+
 export interface AppConfig {
+  /** Native 58 single-select filters. Blank salary/degree/experience follow representable shared settings. */
+  wubaSearchFilters?: WubaSearchFilters;
   executionMode: ExecutionMode;
   /** （已废弃，仅作旧数据兼容读取）已迁移到 platforms[k].dailyTarget（按平台独立每日目标） */
   dailyTarget: number;

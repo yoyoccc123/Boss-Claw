@@ -5,9 +5,10 @@ import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, quote
 from .base import CollectorBase
 from .common import human_sleep
+from .wuba_filters import filter_params
 
 _HERE = Path(__file__).resolve().parent
 _SITE = json.loads((_HERE / 'wuba-site.json').read_text(encoding='utf-8'))
@@ -28,8 +29,17 @@ def build_search_url(query='', city='', salary='', page=1, criteria=None):
     if not slug:
         raise ValueError(f'58同城暂未登记城市“{city}”，请选择已支持城市')
     number = max(1, int(page or 1))
+    filters = filter_params({**(criteria or {}), 'salary': salary or (criteria or {}).get('salary')})
+    path = '_'.join(f'pve_{key}_{value}' for key, value in filters.items() if key != 'postdate')
     url = f'https://{slug}.58.com/quanzhizhaopin/' + (f'pn{number}/' if number > 1 else '')
-    return url + ('?' + urlencode({'key': str(query).strip()}) if str(query or '').strip() else '')
+    if path:
+        url += path + '/'
+    params = {'key': str(query).strip()} if str(query or '').strip() else {}
+    if params:
+        params['final'] = '1'  # Native filter links preserve filters/page across keyword classification.
+    if filters.get('postdate'):
+        params['postdate'] = filters['postdate']
+    return url + ('?' + urlencode(params, quote_via=quote) if params else '')
 
 
 def _evaluate(page, body, arg=None):
@@ -58,7 +68,14 @@ class WubaCollector(CollectorBase):
         return [{**job, 'platform': 'wuba', 'keyword': keyword} for job in raw if job.get('jobId') and job.get('title')]
 
     def empty_list_hit(self, page):
-        return bool(page.evaluate("()=>/没有找到相关职位|暂无招聘信息|暂无符合条件/.test(document.body?.innerText||'')"))
+        state = _evaluate(page, 'return W.listState(document);')
+        return bool(state.get('endReached') and not state.get('resultCount'))
+
+    def search_page_exhausted(self, page):
+        return bool(_evaluate(page, 'return W.listState(document).endReached;'))
+
+    def search_page_ready(self, page):
+        return bool(_evaluate(page, 'const s=W.listState(document);return s.endReached||s.resultCount>0;'))
 
     def is_logged_out(self, page):
         block = _evaluate(page, 'return W.readPageBlock(document,location.href);')
