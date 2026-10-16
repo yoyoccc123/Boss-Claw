@@ -15,6 +15,7 @@ export async function smokePackaged({ packaged, fixture, electron, env, run }) {
   const pythonResume = '离线示例姓名\n教育背景\n示例大学｜软件工程｜本科\n个人简介\n编写 Python 网络巡检工具，验证服务状态并输出巡检摘要。\n专业技能\nPython、httpx、pytest、PostgreSQL。\n工作经历\n示例公司｜Python 工具实习生\n维护网络巡检测试夹具，整理服务连通性报告。\n项目经历\n服务巡检实验\n个人技术实践｜Python / pytest\n编写模拟服务与连通性校验用例。';
   const aiResume = pythonResume.replace('编写 Python 网络巡检工具，验证服务状态并输出巡检摘要。', '借助 AI 编程工具完成产品原型搭建与迭代，接触 FastAPI、LangChain、RAG 和大模型 API。');
   const keys = {
+    'bossclaw-data-version': 'v3-rebuild-20260815',
     'bossclaw-app': JSON.stringify({ state: { autoAssist: false, activeRoute: 'workbench', engineStatus: 'stopped', theme: 'light' } }),
     'bossclaw-schedule': JSON.stringify({ state: { entries: [] } }),
     'bossclaw-data': JSON.stringify({ version: 2, state: {

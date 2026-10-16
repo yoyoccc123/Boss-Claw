@@ -216,7 +216,12 @@ JS_FIND_CHAT_BTN = r"""(pat) => {
 }"""
 
 # 与 Electron 共用 DOM 范围、编辑器、发送按钮和消息确认，避免两通道各猜一套选择器。
-_IM_SOURCE = (Path(__file__).resolve().parents[2] / 'electron' / 'preload' / 'liepin-im.cjs').read_text(encoding='utf-8')
+_RESOURCE_ROOT = Path(__file__).resolve().parents[2]
+_IM_PATH = _RESOURCE_ROOT / 'electron' / 'preload' / 'liepin-im.cjs'
+if not _IM_PATH.is_file():
+    # Python runs outside ASAR; Electron's preloads remain real files in app.asar.unpacked.
+    _IM_PATH = _RESOURCE_ROOT / 'app.asar.unpacked' / 'electron' / 'preload' / 'liepin-im.cjs'
+_IM_SOURCE = _IM_PATH.read_text(encoding='utf-8')
 JS_DELIVERY_SNAPSHOT = '(args) => { const module = {exports:{}}; ' + _IM_SOURCE + '; return module.exports.snapshotLiepinDelivery(document, args); }'
 
 # 投递成功后的收尾：关闭聊天窗口（① get_jobs 的 IM 面板关闭图标 → ② 通用关闭按钮兜底）
