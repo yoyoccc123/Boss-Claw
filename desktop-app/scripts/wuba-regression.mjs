@@ -18,6 +18,7 @@ const compiled = await build({ stdin: { contents: `export * from './src/lib/boss
 const env = { module: { exports: {} }, URL, URLSearchParams, console, Date, process: { env: {} }, localStorage: { getItem: () => null, setItem: () => {} } };
 vm.createContext(env); vm.runInContext(compiled.outputFiles[0].text, env); const T = env.module.exports;
 check(T.PLATFORM_IDS.includes('wuba') && T.PLATFORM_META.wuba.deliveryKind === 'resume', '58 is a resume platform');
+check(T.PLATFORM_META.wuba.homeUrl === 'https://www.58.com/changecity.html?catepath=quanzhizhaopin', '58 entry uses the verified native city picker, never the invalid www recruitment list');
 check(!T.DEFAULT_CONFIG.platforms.wuba.enabled && T.DEFAULT_CONFIG.platforms.wuba.pendingTarget === 50, 'upgrade does not silently enable a new account');
 check(T.resolvePlatform('https://gz.58.com/tech/12345678901234x.shtml') === 'wuba', '58 subdomain recognition');
 check(T.resolvePlatform('https://evil58.com/') !== 'wuba' && T.resolvePlatform('https://58.com.evil.test/') !== 'wuba', 'domain boundary is exact');
@@ -27,6 +28,9 @@ for (const [city, slug] of Object.entries({ 广州: 'gz', 深圳: 'sz', 中山: 
   check(u.hostname === `${slug}.58.com` && u.pathname === '/quanzhizhaopin/pn2/' && u.searchParams.get('key') === 'AI / Python', 'city/keyword/page: ' + city);
 }
 assert.throws(() => T.buildWubaSearchUrl({ city: '不存在的城市' }), /暂未登记/); checks++;
+for (const city of [undefined, '', '全国', '不限', '全部', '不限制']) {
+  assert.throws(() => T.buildWubaSearchUrl({ city }), /选择具体城市/, 'nationwide must not produce a broken 58 URL'); checks++;
+}
 assert.throws(() => T.buildWubaSearchUrl({ city: '广州', criteria: { employmentTypes: ['兼职'] } }), /独立招聘页面/); checks++;
 const config = structuredClone(T.DEFAULT_CONFIG), now = Date.now();
 config.platforms.wuba.pendingTarget = 2;
@@ -86,6 +90,7 @@ const runDom = async function (source, productionStep, jobHtml, modalHtml, jobUr
   check(!WUBA.readPageBlock(document, jobUrl), 'JD mentioning verification is not a challenge');
   check(WUBA.readPageBlock(document, 'https://callback.58.com/antibot/verifycode').kind === 'risk', 'actual 58 verification redirect');
   check(WUBA.readPageBlock(document, 'https://passport.58.com/login/').kind === 'login', 'native login redirect');
+  check(WUBA.readPageBlock(document, 'https://404.58.com/404.html?from=www.58.com/quanzhizhaopin/').kind === 'failed', 'native 404 redirect is a failed page, not a recruitment list or login prompt');
   const mismatch = await wubaApplyStep({ job: { url: jobUrl.replace('12345678901234', '99999999999999') } });
   check(!mismatch.ok && clicks.length === 0, 'different posting number cannot submit');
   reset(); document.querySelector('.applyJobBtn').textContent = '已申请';
@@ -132,6 +137,13 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as isolated:
         assert not capabilities.platform_supports('wuba','attach')
         assert build_search_url('Python','中山','',2)=='https://zs.58.com/quanzhizhaopin/pn2/?key=Python'
         c=WubaCollector()
+        assert c.home_url==${JSON.stringify('https://www.58.com/changecity.html?catepath=quanzhizhaopin')}
+        for city in ('','全国','不限','全部','不限制'):
+            try:
+                build_search_url('Python',city)
+                raise AssertionError('nationwide must not produce a broken 58 URL')
+            except ValueError as e:
+                assert '选择具体城市' in str(e)
         assert c.deliver({'url':'https://evil58.com/tech/12345678901234x.shtml'},'fixture')['sent']==False
         assert c.handle_action_state('already')['sent']==False
         assert c.handle_action_state('risk')['code']==35

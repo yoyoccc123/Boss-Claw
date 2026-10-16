@@ -152,7 +152,7 @@ export const PLATFORM_META: Record<JobPlatform, PlatformMeta> = {
   },
   wuba: {
     id: 'wuba', label: '58同城', shortLabel: '58', domain: '58.com',
-    homeUrl: 'https://www.58.com/quanzhizhaopin/',
+    homeUrl: 'https://www.58.com/changecity.html?catepath=quanzhizhaopin',
     loginUrl: 'https://passport.58.com/login/',
     deliveryKind: 'resume', capabilities: ['collect', 'score', 'greet', 'deliver'],
     externalApplyHints: ['前往企业官网', '去网申', '前往申请'],

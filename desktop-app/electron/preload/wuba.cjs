@@ -39,6 +39,7 @@ function readPageBlock(doc, href) {
   let u; try { u = new URL(href); } catch { return null; }
   const result = (kind, message) => ({ kind, message });
   const risk = () => result('risk', '58同城要求安全验证，已暂停并保留页面，请手动完成后继续');
+  if (u.hostname === '404.58.com' || /^\/404(?:\.html|\/|$)/.test(u.pathname)) return result('failed', '58页面不存在，请重新打开58选择城市，再进入该城市的招聘列表');
   if (u.hostname === 'callback.58.com' && /antibot|verifycode/.test(u.pathname)) return risk();
   if (/captcha|antibot|verifycode/i.test(u.pathname)) return risk();
   if (u.hostname === 'passport.58.com' || /\/login\b/.test(u.pathname)) return result('login', '请先在58同城标签页登录求职账号');

@@ -22,7 +22,9 @@ def build_search_url(query='', city='', salary='', page=1, criteria=None):
     if types and all(t == '兼职' for t in types):
         raise ValueError('58兼职是独立页面，当前接入全职招聘列表，请调整求职类型')
     city = str(city or '').strip().removesuffix('市')
-    slug = 'www' if city in ('', '全国', '不限', '全部') else _SITE['cities'].get(city)
+    if city in ('', '全国', '不限', '全部', '不限制'):
+        raise ValueError('58招聘需要选择具体城市，请在设置的目标城市中添加城市后再采集')
+    slug = _SITE['cities'].get(city)
     if not slug:
         raise ValueError(f'58同城暂未登记城市“{city}”，请选择已支持城市')
     number = max(1, int(page or 1))
@@ -37,7 +39,7 @@ def _evaluate(page, body, arg=None):
 class WubaCollector(CollectorBase):
     platform = 'wuba'
     label = '58同城'
-    home_url = 'https://www.58.com/quanzhizhaopin/'
+    home_url = 'https://www.58.com/changecity.html?catepath=quanzhizhaopin'
     login_url = 'https://passport.58.com/login/'
     login_host = '58.com'
     capture_wait_attempts = 0  # SSR list; no speculative search API polling.
