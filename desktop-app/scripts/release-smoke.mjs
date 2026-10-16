@@ -15,6 +15,7 @@ export async function smokePackaged({ packaged, fixture, electron, env, run }) {
   const pythonResume = '离线示例姓名\n教育背景\n示例大学｜人工智能｜本科\n个人简介\n独立编写 Python 自动化脚本，处理 CSV 和 Excel 数据，完成清洗、去重及格式转换。\n专业技能\nPython、requests、OpenCV、MySQL。\n工作经历\n示例公司｜Python 开发实习生\n维护内部数据处理脚本，补充异常处理和运行日志。\n项目经历\n视觉自动化实验\n个人技术实践｜Python / OpenCV\n完成数据标注、模型训练和检测效果验证。';
   const aiResume = pythonResume.replace('独立编写 Python 自动化脚本，处理 CSV 和 Excel 数据，完成清洗、去重及格式转换。', '借助 AI 编程工具完成产品原型搭建与迭代，接触 FastAPI、LangChain、RAG 和大模型 API。');
   const keys = {
+    'bossclaw-data-version': 'v3-rebuild-20260815',
     'bossclaw-app': JSON.stringify({ state: { autoAssist: false, activeRoute: 'workbench', engineStatus: 'stopped', theme: 'light' } }),
     'bossclaw-schedule': JSON.stringify({ state: { entries: [] } }),
     'bossclaw-data': JSON.stringify({ version: 2, state: {
