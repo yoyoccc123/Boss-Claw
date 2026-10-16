@@ -982,7 +982,7 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                         disabled={wvLoggedIn}
                         onClick={() => onPlatformLogin(p)}
                       >
-                        {wvLoggedIn ? '已登录' : '扫码登录'}
+                        {wvLoggedIn ? '已登录' : p === 'wuba' ? '登录' : '扫码登录'}
                       </Button>
                       <Button
                         size="small"

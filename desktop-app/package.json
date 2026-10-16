@@ -1,6 +1,6 @@
 {
   "name": "bossclaw-desktop",
-  "version": "2.5.43",
+  "version": "2.5.44",
   "description": "BossClaw —— 面向求职者的本地 AI 投递助手",
   "private": true,
   "author": "YanQuan",
@@ -43,7 +43,8 @@
     "test:collection-resume": "node scripts/collection-resume-regression.mjs",
     "test:boss-chat": "node scripts/boss-chat-regression.mjs",
     "test:release-policy": "node scripts/release-policy-regression.mjs",
-    "test:browser-navigation": "node scripts/browser-navigation-regression.mjs"
+    "test:browser-navigation": "node scripts/browser-navigation-regression.mjs",
+    "test:wuba": "node scripts/wuba-regression.mjs"
   },
   "build": {
     "appId": "com.bossclaw.desktop",
@@ -68,6 +69,10 @@
       "!**/.venv/**"
     ],
     "extraResources": [
+      {
+        "from": "electron/preload/wuba.cjs",
+        "to": "camoufox/platforms/wuba-dom.cjs"
+      },
       {
         "from": "resources/docs/使用前必读.md",
         "to": "docs/使用前必读.md"

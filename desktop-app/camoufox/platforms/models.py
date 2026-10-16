@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 
 # 平台枚举（与 camoufox/platforms/common.py、TS platforms.ts 的 JobPlatform 同源）
-PLATFORM_IDS = ('boss', 'liepin', 'zhaopin', 'job51')
+PLATFORM_IDS = ('boss', 'liepin', 'zhaopin', 'job51', 'wuba')
 
 # ============================================================
 # 文本清洗（平台中立）

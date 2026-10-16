@@ -314,6 +314,8 @@ _BUILDERS = {
 # ok = 码值有权威来源或实测；partial = 部分取值有实测；inferred = 顺位推得待校准；
 # unsupported = 码值未知，按「不臆造码、宁可多召回不误杀」原则不附加。
 FILTER_CAPABILITIES: dict[str, dict[str, str]] = {
+    # 58: city + keyword are verified. Other filters are evaluated by the shared local/AI pipeline.
+    'wuba': {k: 'unsupported' for k in ('experience', 'degree', 'scale', 'job_type', 'company_type', 'financing', 'hr_activity')},
     'liepin': {'experience': 'partial', 'degree': 'ok', 'scale': 'partial', 'job_type': 'unsupported',
                'company_type': 'partial', 'financing': 'partial', 'hr_activity': 'partial'},
     'zhaopin': {'experience': 'ok', 'degree': 'ok', 'scale': 'ok', 'job_type': 'ok',

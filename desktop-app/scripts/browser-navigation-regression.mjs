@@ -24,8 +24,12 @@ const fixtureDocument = url => {
   const u = new URL(url), detail = u.pathname.startsWith('/job_detail/');
   if (detail) return '<html><body><a id="continue" href="https://www.zhipin.com/web/geek/chat?id=fixture-hr&jobId=fixture-job&securityId=fixture-ticket">继续沟通</a></body></html>';
   const query = Boolean(u.search), chat = u.pathname === '/web/geek/chat';
-  return '<html><body><div id="native-context">' + (query ? 'selected fixture contact' : 'empty fixture pane') + '</div><script>' +
+  const wuba = u.hostname === 'gz.58.com';
+  const wubaBody = wuba ? '<span class="pos_title">Python实习生</span><div class="des">离线58原生两步投递回归，使用合成在线简历及岗位，不会发送实际申请。</div><div class="pos_operate"><a class="applyJobBtn" href="javascript:void(0)">申请职位</a></div>' : '';
+  const modal = '<div id="chooseResume"><div class="guide-box"><span class="infoName">Python实习生</span><li class="resume-item"><input type="radio" checked name="resumeGroup" value="synthetic-resume"><label>合成在线简历</label></li><div id="resumeList_delivery" class="btn active delivery-btn">立即申请</div></div></div>';
+  return '<html><body>' + wubaBody + '<div id="native-context">' + (query ? 'selected fixture contact' : 'empty fixture pane') + '</div><script>' +
     'window.fixtureContext=' + JSON.stringify({ selected: query, chat, path: u.pathname }) + ';' +
+    (wuba ? 'window.checkClicks=0;window.submitClicks=0;document.addEventListener("click",e=>{if(e.target.closest(".applyJobBtn")){window.checkClicks++;document.body.insertAdjacentHTML("beforeend",' + JSON.stringify(modal) + ');}if(e.target.closest("#resumeList_delivery")){window.submitClicks++;document.querySelector(".applyJobBtn").textContent="已申请";document.querySelector("#chooseResume").remove();}});' : '') +
     (query ? "setTimeout(()=>history.replaceState({},'',location.pathname),80);" : '') + '</script></body></html>';
 };
 const uiCheck = async function () {
@@ -57,7 +61,8 @@ const uiCheck = async function () {
   api.closeTab(boss.id);
   for (const url of ['https://www.liepin.com/job/fixture.shtml?session=fixture',
     'https://www.zhaopin.com/jobdetail/CCL0000000000J00000000000.htm?session=fixture',
-    'https://jobs.51job.com/guangzhou/fixture.html?session=fixture']) {
+    'https://jobs.51job.com/guangzhou/fixture.html?session=fixture',
+    'https://gz.58.com/tech/12345678901234x.shtml?session=fixture']) {
     const item = await open(url), canonical = url.split('?')[0];
     await wait(() => item.el.getURL() === canonical, 'platform canonical URL');
     await new Promise(r => setTimeout(r, 300));
@@ -65,6 +70,12 @@ const uiCheck = async function () {
     check(api.isPreloadReady(item.id), 'platform SPA navigation retains preload: ' + new URL(url).hostname);
     api.closeTab(item.id);
   }
+  const wubaUrl = 'https://gz.58.com/tech/12345678901234x.shtml';
+  const delivered = await api.platformApply(wubaUrl, 'wuba', { url: wubaUrl, title: 'Python实习生' }, '离线合成文案', { canStart: () => true, onStart: () => {} });
+  check(delivered.ok && delivered.stage === 'success', '58 actual host/preload IPC completes native resume selection and final confirmation');
+  const nativeCounts = await findActive().executeJavaScript('({checks:window.checkClicks,submits:window.submitClicks})');
+  check(nativeCounts.checks === 1 && nativeCounts.submits === 1, '58 native check and online-resume submission each occur once');
+  api.closeTab(delivered.tabId);
   // Explicit navigation before React mounts a new guest must still use the latest requested URL.
   const first = 'https://www.zhipin.com/before-mount', latest = 'https://www.zhipin.com/requested-before-mount';
   const id = api.openInNewTab(first, 'offline before mount', 'detail'); api.loadURLInTab(id, latest);

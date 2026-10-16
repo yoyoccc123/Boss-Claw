@@ -1,7 +1,7 @@
 // 内置浏览器「可访问 URL 白名单」—— 仅招聘平台。
 // 唯一权威实现。BrowserView（webview）/ CloakView（隐身）共用此模块做导航拦截。
 // 口径：hostname 域名后缀匹配（host === domain || host.endsWith('.' + domain)）。
-import { PLATFORM_META, type JobPlatform } from './platforms';
+import { PLATFORM_META, PLATFORM_IDS } from './platforms';
 
 export type WhitelistGroup = 'platform' | 'comprehensive' | 'fresh' | 'bluecollar';
 
@@ -14,9 +14,9 @@ export interface BrowserSite {
   groupLabel: string;
 }
 
-/** 4 个现有招聘平台（与 PLATFORM_META 同源），组内归属「平台」 */
+/** 已接入招聘平台（与 PLATFORM_META 同源），组内归属「平台」 */
 const PLATFORM_SITES: BrowserSite[] = (
-  ['boss', 'liepin', 'zhaopin', 'job51'] as JobPlatform[]
+  PLATFORM_IDS
 ).map((id) => ({
   domain: PLATFORM_META[id].domain,
   label: PLATFORM_META[id].label,
@@ -42,7 +42,6 @@ export const BROWSER_WHITELIST: BrowserSite[] = [
   { domain: 'shixiseng.com', label: '实习僧', homeUrl: 'https://www.shixiseng.com', group: 'fresh', groupLabel: '应届生·实习' },
   { domain: 'dajie.com', label: '大街网', homeUrl: 'https://www.dajie.com', group: 'fresh', groupLabel: '应届生·实习' },
   // —— 蓝领 / 兼职 / 生活 ——
-  { domain: '58.com', label: '58同城', homeUrl: 'https://www.58.com', group: 'bluecollar', groupLabel: '蓝领·兼职·生活' },
   { domain: 'ganji.com', label: '赶集网', homeUrl: 'https://www.ganji.com', group: 'bluecollar', groupLabel: '蓝领·兼职·生活' },
   { domain: 'quanzhi.com', label: '全职招聘网', homeUrl: 'https://www.quanzhi.com', group: 'bluecollar', groupLabel: '蓝领·兼职·生活' },
   { domain: 'jianzhimao.com', label: '兼职猫', homeUrl: 'https://www.jianzhimao.com', group: 'bluecollar', groupLabel: '蓝领·兼职·生活' },

@@ -1,9 +1,10 @@
 import type { AppConfig, JobMeta, JobPlatform, PendingItem } from './types';
+import { PLATFORM_IDS } from './platforms';
 
 export const DEFAULT_PENDING_TARGET = 50;
 export const MAX_PENDING_TARGET = 1000;
 export type DailyCollectionCounts = Partial<Record<JobPlatform, { date: string; count: number; identities?: string[] }>>;
-const platforms: JobPlatform[] = ['boss', 'liepin', 'zhaopin', 'job51'];
+const platforms: JobPlatform[] = PLATFORM_IDS;
 
 // The recruiting day follows the user's China timezone, including when Windows uses another zone.
 export const collectionDay = (now: number) => new Date(now + 8 * 3600_000).toISOString().slice(0, 10);

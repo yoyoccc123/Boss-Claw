@@ -110,7 +110,7 @@ try {
       report.smoke = await smokePackaged({ packaged, fixture: path.join(fixtures, 'packaged-smoke'), electron, env, run });
       if (report.smoke.version !== pkg.version) throw Error('Packaged EXE version mismatch');
       const archive = path.join(packaged, 'resources/app.asar'), asar = require('@electron/asar');
-      const requiredSources = ['electron/main.cjs', 'electron/preload/webview.cjs', 'electron/preload/boss-chat-context.cjs', 'electron/preload/text-send-control.cjs', 'electron/runtime-paths.cjs',
+      const requiredSources = ['electron/main.cjs', 'electron/preload/webview.cjs', 'electron/preload/platform-adapters.cjs', 'electron/preload/wuba.cjs', 'electron/preload/boss-chat-context.cjs', 'electron/preload/text-send-control.cjs', 'electron/runtime-paths.cjs',
         ...P.files(path.join(project, 'dist')).map(file => path.relative(project, file))];
       for (const relative of requiredSources) {
         const actual = asar.extractFile(archive, path.normalize(relative));

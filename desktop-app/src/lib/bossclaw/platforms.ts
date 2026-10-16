@@ -150,6 +150,17 @@ export const PLATFORM_META: Record<JobPlatform, PlatformMeta> = {
     dailyHint: '前程无忧投递动作=「批量投递」+ 成功数量确认',
     chipKey: 'purple',
   },
+  wuba: {
+    id: 'wuba', label: '58同城', shortLabel: '58', domain: '58.com',
+    homeUrl: 'https://www.58.com/quanzhizhaopin/',
+    loginUrl: 'https://passport.58.com/login/',
+    deliveryKind: 'resume', capabilities: ['collect', 'score', 'greet', 'deliver'],
+    externalApplyHints: ['前往企业官网', '去网申', '前往申请'],
+    stageLabels: { open_chat: '打开岗位', verify_chat_target: '核对岗位', fill_message: '准备投递简历',
+      send_message: '投递简历', verify_message: '确认投递结果', success: '投递成功' },
+    dailyHint: '采集58全职招聘列表，实习请结合实习关键词；使用58账号当前选中的在线简历申请职位',
+    chipKey: 'orange',
+  },
 };
 
 export const PLATFORM_IDS = Object.keys(PLATFORM_META) as JobPlatform[];
@@ -173,6 +184,7 @@ export const PLATFORM_DEFAULT_DAILY_TARGET: Record<JobPlatform, number> = {
   liepin: 120,
   zhaopin: 100,
   job51: 120,
+  wuba: 50,
 };
 
 /** 平台每日投递上限展示用（最小收窄后值）：无平台侧限制的平台 = MAX_SAFE_DAILY(150) */
@@ -194,7 +206,8 @@ export function resolvePlatform(url?: string | null): JobPlatform {
     host = (u.split('/')[2] || '').toLowerCase();
   }
   for (const id of PLATFORM_IDS) {
-    if (host.endsWith(PLATFORM_META[id].domain)) return id;
+    const domain = PLATFORM_META[id].domain;
+    if (host === domain || host.endsWith('.' + domain)) return id;
   }
   return 'boss';
 }
@@ -211,6 +224,7 @@ export const DEFAULT_PLATFORM_PRIORITY: Record<JobPlatform, number> = {
   liepin: 2,
   zhaopin: 3,
   job51: 4,
+  wuba: 5,
 };
 
 /** 平台是否启用（设置配置；未知平台默认 BOSS 视为启用） */

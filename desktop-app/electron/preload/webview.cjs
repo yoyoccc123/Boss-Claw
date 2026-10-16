@@ -25,6 +25,7 @@ const { findTextSendButton } = require('./text-send-control.cjs');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
+const WUBA = require('./wuba.cjs');
 const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
 const { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl } = require('./zhaopin-im.cjs');
 const OFFICE = require('./office-address.cjs');
@@ -176,6 +177,7 @@ function platformCollectCards() {
       if (seen.has(el)) continue;
       seen.add(el);
       const card = el.closest(ADAPTERS.PLATFORM_CARD_CONTAINER_SELECTOR[PLATFORM] || 'li') || el;
+      if (PLATFORM === 'wuba' && !WUBA.cardJob(card, location.href)) continue;
       if (visible(card) && textOf(card).length > 5 && textOf(card).length <= 900) out.push(card);
     }
   }
@@ -192,6 +194,12 @@ function platformListPage() {
 // 非 BOSS 平台详情页岗位提取（URL jobId + 通用文本字段）
 function platformExtractJob() {
   const url = location.href;
+  if (PLATFORM === 'wuba') {
+    const job = WUBA.extract(document, url);
+    if (job) notify('job-extracted', { ...job, address: OFFICE.officeAddressFromDocument(document), companySize: COMPANY.companySizeFromDocument(document), ...platformListPage() });
+    else notify('preload-error', { channel: 'extract-job', message: '请打开58招聘岗位详情并完成登录或验证后再加入任务' });
+    return;
+  }
   // jobId 统一走适配表唯一权威（覆盖猎聘 /job/ 与 SEO /a/ 两种形态，见 jobIdFromUrl 注释）
   const jobId = ADAPTERS.jobIdFromUrl(url);
   const title = pickText(['h1', '[class*="job-title"]', '[class*="job-name"]', '[class*="position"] h3', 'title']) || document.title;
@@ -2603,7 +2611,7 @@ function pageStatusData() {
     readyState: String(document.readyState || ''),
     bodyLen: bodyText.length,
     collectionBlocked, collectionLoading,
-    applyBlock: PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null,
+    applyBlock: PLATFORM === 'wuba' ? WUBA.readPageBlock(document, location.href) : PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null,
     zhaopinChatReady: PLATFORM === 'zhaopin' && readZhaopinChatReady(document, location.href),
     cards,
     counts,
@@ -2721,6 +2729,7 @@ function stableFallbackJobId(fields, identity) {
 
 // 列表级字段提取（不点开详情）：选择器优先 + 文本正则兜底，口径与「加入任务」(platformExtractJob) 一致
 function extractJobFromCardOnly(card) {
+  if (PLATFORM === 'wuba') return WUBA.cardJob(card, location.href);
   const identity = cardIdentity(card);
   const fields = cardFields(card);
   const url = String(identity.href || '');
@@ -2772,7 +2781,7 @@ const JD_FILL_GAP_MS = 180; // 请求间隔基准（另加 0~220ms 抖动）
 const JD_FILL_DESCRIPTION_MAX = 9000;
 const jdFillState = { attempted: 0, filled: 0, failed: 0, skipped: 0, streak: 0, stopped: '', lastError: '' };
 /** 当前平台的补 JD 通道（'zhaopin-json' | 'liepin-html'）；能力表未声明的平台为 '' */
-const JD_FILL_CHANNEL = PLATFORM === 'zhaopin' ? 'zhaopin-json' : (PLATFORM === 'liepin' ? 'liepin-html' : '');
+const JD_FILL_CHANNEL = PLATFORM === 'wuba' ? 'wuba-html' : PLATFORM === 'zhaopin' ? 'zhaopin-json' : (PLATFORM === 'liepin' ? 'liepin-html' : '');
 
 function resetJdFillState() {
   jdFillState.attempted = 0;
@@ -2785,7 +2794,7 @@ function resetJdFillState() {
 }
 
 /** 平台显示名（诊断文案用；勿在正文里散写平台名） */
-const PLATFORM_LABEL = { boss: 'BOSS直聘', liepin: '猎聘', zhaopin: '智联', job51: '前程无忧' }[PLATFORM] || PLATFORM;
+const PLATFORM_LABEL = { boss: 'BOSS直聘', liepin: '猎聘', zhaopin: '智联', job51: '前程无忧', wuba: '58同城' }[PLATFORM] || PLATFORM;
 
 /**
  * 单次请求（**绝不抛出**）：超时 / 网络异常 / 非 2xx 一律返回 {ok:false,error}。
@@ -2807,7 +2816,7 @@ async function fetchDetailSource(url, as) {
       signal: ctrl ? ctrl.signal : undefined,
     });
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    return { ok: true, data: as === 'text' ? await res.text() : await res.json() };
+    return { ok: true, url: res.url, data: as === 'text' ? await res.text() : await res.json() };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   } finally {
@@ -2850,12 +2859,15 @@ async function enrichJobDetail(job) {
   } else if (JD_FILL_CHANNEL === 'liepin-html') {
     url = ADAPTERS.liepinJobDetailUrl(job.jobId || job.url);
     if (!url) { jdFillState.skipped += 1; return false; }
+  } else if (JD_FILL_CHANNEL === 'wuba-html') {
+    if (!WUBA.jobIdentity(job.url)) { jdFillState.skipped += 1; return false; }
+    url = job.url;
   } else {
     return false;
   }
 
   jdFillState.attempted += 1;
-  const as = JD_FILL_CHANNEL === 'liepin-html' ? 'text' : 'json';
+  const as = JD_FILL_CHANNEL.endsWith('-html') ? 'text' : 'json';
   const r = await fetchDetailSource(url, as);
   if (!r.ok) {
     jdFillState.failed += 1;
@@ -2870,7 +2882,16 @@ async function enrichJobDetail(job) {
   // 注意：请求成功**不代表这批 JD 可用** —— 连续失败计数只在「载荷可解析」后才重置（见下方）。
   await sleep(JD_FILL_GAP_MS + Math.random() * 220);
 
-  const parsed = JD_FILL_CHANNEL === 'liepin-html'
+  const wubaDoc = JD_FILL_CHANNEL === 'wuba-html' ? new DOMParser().parseFromString(r.data, 'text/html') : null;
+  const wubaBlock = wubaDoc ? WUBA.readPageBlock(wubaDoc, r.url || url) : null;
+  if (wubaBlock) {
+    jdFillState.stopped = wubaBlock.message;
+    collectCtl.stopped = true;
+    if (wubaBlock.kind === 'risk') notify('apply-stage', { stage: 'risk', code: 35, message: wubaBlock.message });
+    else notify('collect-progress', { phase: 'login-required', status: wubaBlock.message });
+    return false;
+  }
+  const parsed = wubaDoc ? WUBA.extract(wubaDoc, r.url || url) : JD_FILL_CHANNEL === 'liepin-html'
     ? ADAPTERS.parseLiepinJobDetailHtml(r.data)
     : ADAPTERS.parseZhaopinJobDetail(r.data);
   if (!parsed) {
@@ -2945,6 +2966,15 @@ async function visualCollectListOnly(opts = {}) {
   const processed = new Set(Array.isArray(opts.resumeKeys) ? opts.resumeKeys : []);
   let processedCount = 0;
   let emptyRounds = 0;
+  const wubaBlocked = () => {
+    if (PLATFORM !== 'wuba') return false;
+    const block = WUBA.readPageBlock(document, location.href);
+    if (!block) return false;
+    if (block.kind === 'risk') notify('apply-stage', { stage: 'risk', code: 35, message: block.message });
+    else notify('collect-progress', { phase: 'login-required', status: block.message });
+    notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'blocked', loginRequired: block.kind === 'login' });
+    return true;
+  };
   resetJdFillState(); // 每轮采集重置 JD 补齐计数 / 熔断状态
   notify('collect-progress', { phase: 'start', index: 0, total: 0, maxJobs, platform: PLATFORM, status: `准备中（${PLATFORM} · 列表级采集）` });
 
@@ -2960,6 +2990,7 @@ async function visualCollectListOnly(opts = {}) {
   const listReadyDeadline = listWaitStartedAt + listTimeoutMs;
   let initialWaitCount = 0;
   while (Date.now() < listReadyDeadline && !stopped()) {
+    if (wubaBlocked()) return;
     let cards = [];
     try { cards = collectCards(true); } catch (e) {
       notify('collect-progress', { phase: 'collect-error', index: 0, total: 0, processed: 0, maxJobs, status: `列表查询异常：${String(e?.message || e).slice(0, 80)}` });
@@ -2988,6 +3019,7 @@ async function visualCollectListOnly(opts = {}) {
     return;
   }
   while (!stopped()) {
+    if (wubaBlocked()) return;
     await waitWhilePaused();
     if (stopped()) break;
     if (processedCount >= maxJobs) break;
@@ -3040,6 +3072,7 @@ async function visualCollectListOnly(opts = {}) {
     // 补齐详情 JD / 技能 / 福利 / HR（智联经 JSON 详情接口、猎聘经同源详情页 HTML；
     // 其它平台能力表未声明 → 直接返回 false）
     await enrichJobDetail(job);
+    if (PLATFORM === 'wuba' && stopped()) break;
     processedCount += 1;
     notify('collect-progress', { phase: 'done', cardKey: key, index: processedCount, total: cards.length, processed: processedCount, maxJobs, title: job.title, company: job.company, status: '完成', job });
     await sleep(settleMsNow());
@@ -3173,6 +3206,53 @@ function firstVisible(selectors) {
 
 // 智联原生「继续沟通」入口会整页导航，宿主必须等新页面 preload 后再填发文案。
 
+let wubaPrepared = null;
+async function wubaApplyStep(args = {}) {
+  const failure = (error, extra = {}) => ({ ok: false, stage: 'failed', error, needsReview: true, ...extra });
+  const blocked = b => ({ ok: false, stage: b.kind === 'resume' ? 'failed' : b.kind, message: b.message,
+    needsReview: true, code: b.kind === 'risk' ? 35 : undefined, external: b.kind === 'external' });
+  const job = args.job || {}, state = WUBA.inspect(document, location.href, job.url);
+  if (!['ready', 'already'].includes(state.kind)) return blocked(state);
+  if (state.kind === 'already') return { ok: false, stage: 'skip', message: '58该岗位此前已申请，跳过重复投递' };
+  const title = textOf(document.querySelector('.pos_title'));
+  if (!title) return failure('58岗位标题未就绪，未投递');
+  let signals;
+  if (args.phase === 'confirm') {
+    const prepared = wubaPrepared; wubaPrepared = null;
+    const selected = WUBA.selectedResume(document, title);
+    if (!prepared || prepared.token !== args.token || prepared.jobId !== state.jobId || prepared.resumeId !== selected?.resumeId
+      || Date.now() - prepared.at > 30000) return failure('58岗位或选中简历发生变化，已取消提交，请核对页面');
+    signals = prepared.signals;
+    notify('apply-stage', { stage: 'send_message', label: '提交58在线简历', platform: 'wuba' });
+    await clickElement(selected.button);
+  } else {
+    wubaPrepared = null;
+    if (WUBA.visible(document.querySelector('#chooseResume'))) return failure('58已有申请弹窗，请核对或关闭后再重试');
+    signals = WUBA.successSignals(document);
+    const button = document.querySelector('[data-bossclaw-wuba-apply="' + state.jobId + '"]');
+    if (!button || !WUBA.visible(button)) return failure('58申请按钮不可用，未投递');
+    notify('apply-stage', { stage: 'fill_message', label: '等待58简历选择', platform: 'wuba' });
+    await clickElement(button);
+  }
+  const outcome = await waitFor(() => {
+    // Native success can include optional resume-completion/marketing panels. Success is read first.
+    if (WUBA.jobIdentity(location.href) === state.jobId && (WUBA.readAction(document).kind === 'already'
+      || WUBA.successSignals(document).some(s => !signals.includes(s)))) return { ok: true, stage: 'success', method: 'wuba-resume' };
+    const block = WUBA.readPageBlock(document, location.href); if (block) return blocked(block);
+    if (WUBA.jobIdentity(location.href) !== state.jobId) return failure('58页面已离开目标岗位，请人工核对');
+    if (args.phase !== 'confirm') {
+      const selected = WUBA.selectedResume(document, title);
+      if (selected) {
+        const token = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+        wubaPrepared = { token, jobId: state.jobId, resumeId: selected.resumeId, signals, at: Date.now() };
+        return { ok: false, stage: 'resume_ready', token };
+      }
+    }
+    return null;
+  }, args.phase === 'confirm' ? 12000 : 10000, '58在线简历投递');
+  return outcome || failure('58申请结果未确认，已保留页面，请核对在线简历或平台申请记录');
+}
+
 async function platformApply(args = {}) {
   if (platformApply.busy) {
     if (String(platformApply.activeSeq) === String(args.seq)) return; // 同一 IPC 重复到达，保留首个流程的终态。
@@ -3190,6 +3270,11 @@ async function platformApplyOnce(args = {}) {
   const fail = (stage, extra = {}) => notify('platform-apply-result', Object.assign({ seq, ok: false, stage }, extra));
   const ok = (extra = {}) => notify('platform-apply-result', Object.assign({ seq, ok: true, stage: 'success', method: 'dom' }, extra));
   try {
+    if (platform === 'wuba') {
+      const result = await wubaApplyStep(args);
+      notify('platform-apply-result', { seq, ...result });
+      return;
+    }
     // 非终态进度（沿用 platforms.ts stageLabels），终态只经 platform-apply-result 回传
     if (platform === 'liepin') {
       notify('apply-stage', { stage: 'open_chat', label: '打开沟通窗口', platform });

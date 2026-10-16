@@ -107,6 +107,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     liepin: { enabled: false, priority: 2, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.liepin, pendingTarget: 50 },
     zhaopin: { enabled: false, priority: 3, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.zhaopin, pendingTarget: 50 },
     job51: { enabled: false, priority: 4, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.job51, pendingTarget: 50 },
+    wuba: { enabled: false, priority: 5, dailyTarget: PLATFORM_DEFAULT_DAILY_TARGET.wuba, pendingTarget: 50 },
   },
   // Camoufox 隐身引擎子配置（os / pages / prefer 与 engineMode='camoufox' 共用）；
   // 启用标志在设置页由 engineMode 切换时联动翻转（workbench 仍以本 enabled 作为

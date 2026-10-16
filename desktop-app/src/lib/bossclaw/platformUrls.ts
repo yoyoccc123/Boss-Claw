@@ -16,6 +16,7 @@ import type { AppConfig, DirectionPlan, HrActivityFilter, JobPlatform } from './
 import { HR_ACTIVITY_FILTER_LABEL } from './hrActivity';
 import { selectedDirectionItems } from './directions';
 import { buildJobSearchUrl, RANDOM_COLLECT_LABEL } from './searchUrl';
+import wubaSite from '../../../camoufox/platforms/wuba-site.json';
 
 // ==================== 猎聘 liepin ====================
 export const LIEPIN_BASE_URL = 'https://www.liepin.com/zhaopin/';
@@ -323,6 +324,20 @@ export function buildJob51SearchUrl(query: Job51SearchQuery = {}): string {
   return qs ? `${JOB51_BASE_URL}${qs}` : JOB51_BASE_URL;
 }
 
+// 58 uses city subdomains rather than BOSS/智联 numeric codes. Never silently search a different city.
+export function buildWubaSearchUrl(query: { keyword?: string; city?: string; page?: number; criteria?: PlatformSearchCriteria } = {}): string {
+  const types = query.criteria?.employmentTypes || [];
+  if (types.length && types.every(t => t === '兼职')) throw new Error('58兼职是独立招聘页面，当前接入全职招聘列表；请调整求职类型后采集');
+  const city = String(query.city || '').trim().replace(/市$/, '');
+  const cities: Record<string, string> = wubaSite.cities;
+  const slug = !city || /^(全国|不限|全部)$/.test(city) ? 'www' : cities[city];
+  if (!slug) throw new Error(`58同城暂未登记城市“${city}”，请选择已支持城市后采集`);
+  const page = Math.max(1, Math.floor(Number(query.page) || 1));
+  const url = new URL(`https://${slug}.58.com/quanzhizhaopin/${page > 1 ? `pn${page}/` : ''}`);
+  if (query.keyword?.trim()) url.searchParams.set('key', query.keyword.trim());
+  return url.href;
+}
+
 // ==================== 统一入口 ====================
 export interface PlatformSearchQuery {
   keyword?: string;
@@ -342,6 +357,8 @@ export function buildPlatformSearchUrl(platform: JobPlatform, query: PlatformSea
       return buildZhaopinSearchUrl(query);
     case 'job51':
       return buildJob51SearchUrl(query);
+    case 'wuba':
+      return buildWubaSearchUrl(query);
     case 'boss':
     default:
       return buildJobSearchUrl({
