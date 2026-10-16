@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url), root = dirname(dirname(fileURLTo
 const fixture = mkdtempSync(join(tmpdir(), 'bossclaw-wuba-'));
 let checks = 0;
 const check = (v, label) => { assert.ok(v, label); checks++; };
-const compiled = await build({ stdin: { contents: `export * from './src/lib/bossclaw/platforms';export * from './src/lib/bossclaw/platformUrls';export * from './src/lib/bossclaw/defaults';export * from './src/lib/bossclaw/collectionGoal';export * from './src/lib/bossclaw/browserWhitelist';`, resolveDir: root, loader: 'ts' },
+const compiled = await build({ stdin: { contents: `export * from './src/lib/bossclaw/platforms';export * from './src/lib/bossclaw/platformUrls';export * from './src/lib/bossclaw/defaults';export * from './src/lib/bossclaw/collectionGoal';export * from './src/lib/bossclaw/browserWhitelist';export * from './src/lib/bossclaw/jobMatch';export * from './src/lib/bossclaw/locationFilter';export * from './src/lib/bossclaw/collectionResume';`, resolveDir: root, loader: 'ts' },
   bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
 const env = { module: { exports: {} }, URL, URLSearchParams, console, Date, process: { env: {} }, localStorage: { getItem: () => null, setItem: () => {} } };
 vm.createContext(env); vm.runInContext(compiled.outputFiles[0].text, env); const T = env.module.exports;
@@ -33,6 +33,30 @@ for (const city of [undefined, '', '全国', '不限', '全部', '不限制']) {
 }
 assert.throws(() => T.buildWubaSearchUrl({ city: '广州', criteria: { employmentTypes: ['兼职'] } }), /独立招聘页面/); checks++;
 const config = structuredClone(T.DEFAULT_CONFIG), now = Date.now();
+const provinceConfig = { ...structuredClone(config), targetLocations: ['广东省', '深圳市'], employmentTypes: ['实习'] };
+const savedTargets = JSON.stringify(provinceConfig.targetLocations);
+const provinceCities = T.expandWubaSearchLocations(provinceConfig.targetLocations);
+check(provinceCities.length === 21 && new Set(provinceCities).size === 21 && provinceCities.includes('广州') && provinceCities.includes('深圳') && provinceCities.includes('中山'), 'Guangdong expands all 21 supported cities and deduplicates an explicit Shenzhen');
+check(T.expandWubaSearchLocations(['广东']).join('|') === provinceCities.join('|'), 'province suffixes preserve the same stable city order');
+check(T.expandWubaSearchLocations(['北京市', '北京']).join('|') === '北京', 'municipalities do not duplicate themselves');
+assert.throws(() => T.expandWubaSearchLocations(['不存在的城市']), /暂未登记/); checks++;
+assert.throws(() => T.expandWubaSearchLocations(['全国']), /具体城市或省份/); checks++;
+const directionPlan = { items: [{ id: 'python', name: 'Python开发', enabled: true, keywords: ['Python'], priority: 1, score: 80 }] };
+const provinceQueue = T.buildPlatformSearchQueue('wuba', directionPlan, provinceConfig);
+check(provinceQueue.length === 21 && provinceQueue.every(q => q.location !== '广东省' && new URL(q.url).hostname !== 'www.58.com'), 'both collection engines receive concrete city queue items');
+check(T.buildPlatformSearchQueue('wuba', null, { ...provinceConfig, collectWithoutKeyword: true }).length === 21, 'keyword-free collection also expands provinces');
+check(T.buildPlatformSearchQueue('zhaopin', directionPlan, { ...provinceConfig, targetLocations: ['广东'] })[0].location === '广东', 'other platforms retain native province searches');
+check(JSON.stringify(provinceConfig.targetLocations) === savedTargets, 'queue expansion never overwrites saved targets or profile constraints');
+let checkpoint = T.beginCollection(provinceQueue, T.collectionSignature(provinceQueue, provinceConfig)).checkpoint;
+checkpoint = T.advanceCollection(checkpoint, provinceQueue);
+check(T.beginCollection(provinceQueue, T.collectionSignature(provinceQueue, provinceConfig), checkpoint).checkpoint.location === provinceQueue[1].location, 'Stop and Continue preserve the expanded city checkpoint');
+for (const city of ['广州-天河区', '深圳·南山区', '中山市']) {
+  const match = T.computeLocalMatch({ platform: 'wuba', title: 'Python实习生', location: city }, { hardConstraints: { locations: ['广东省'] } });
+  check(match.dimensions.location === 100 && !match.hardBlocks.some(s => s.includes('不在目标城市')), 'province target accepts city-only job location: ' + city);
+}
+check(T.computeLocalMatch({ platform: 'wuba', title: 'Python实习生', location: '北京·海淀区' }, { hardConstraints: { locations: ['广东'] } }).hardBlocks.some(s => s.includes('不在目标城市')), 'out-of-province jobs remain blocked');
+check(!T.matchesTargetLocation('青海·海南州', ['海南省']) && T.matchesTargetLocation('海南·海口', ['海南省']), 'explicit province prevents same-name prefecture confusion');
+check(T.isLocationExcluded('广州-天河区', { excludedProvinces: ['广东'] }) && T.isLocationExcluded('深圳-南山区', { excludedCities: ['深圳'] }), 'existing province and city exclusions still apply');
 config.platforms.wuba.pendingTarget = 2;
 const counts = T.seedCollectionCounts([], { wuba: { date: T.collectionDay(now), count: 2 } }, now);
 check(T.collectionGoal(config, [], counts, 'wuba', now).reached && !T.collectionGoal(config, [], counts, 'boss', now).reached, '58 daily discovery target is isolated');
@@ -136,6 +160,8 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as isolated:
         assert capabilities.delivery_kind('wuba')=='resume'
         assert not capabilities.platform_supports('wuba','attach')
         assert build_search_url('Python','中山','',2)=='https://zs.58.com/quanzhizhaopin/pn2/?key=Python'
+        for entry in ${JSON.stringify(provinceQueue.map(q => ({ city: q.location, url: q.url })))}:
+            assert build_search_url('Python',entry['city'])==entry['url']
         c=WubaCollector()
         assert c.home_url==${JSON.stringify('https://www.58.com/changecity.html?catepath=quanzhizhaopin')}
         for city in ('','全国','不限','全部','不限制'):
