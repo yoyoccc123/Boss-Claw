@@ -108,6 +108,7 @@ function selectedResume(doc, title) {
   return { resumeId: String(selected.value), button };
 }
 function cardJob(card, href) {
+  if (!searchCards(card.ownerDocument).cards.includes(card)) return null;
   const a = card.querySelector('.job_name a[href]');
   if (!a) return null;
   let url; try { url = new URL(a.getAttribute('href'), href).href; } catch { return null; }
@@ -121,10 +122,23 @@ function cardJob(card, href) {
     location: [city, name.length > 1 ? name[0] : ''].filter(Boolean).join('-'),
     description: text(card), labels: [], skills: [], welfare: [] };
 }
+function searchCards(doc) {
+  const items = [...doc.querySelectorAll('.job_item')];
+  // Native 58 inserts this job-less LI between matching results and fallback recommendations.
+  const boundary = items.findIndex(item => !item.querySelector('.job_name a[href]')
+    && /暂无(?:相关)?(?:职位|岗位)|没有找到(?:相关)?职位|暂无符合条件/.test(compact(text(item))));
+  const cards = (boundary < 0 ? items : items.slice(0, boundary)).filter(item => item.querySelector('.job_name a[href]'));
+  return { cards, endReached: boundary >= 0,
+    recommendationCount: boundary < 0 ? 0 : items.slice(boundary + 1).filter(item => item.querySelector('.job_name a[href]')).length };
+}
+function listState(doc) {
+  const state = searchCards(doc);
+  return { endReached: state.endReached, resultCount: state.cards.length, recommendationCount: state.recommendationCount };
+}
 function collect(doc, href) {
   const seen = new Set();
-  return [...doc.querySelectorAll('.job_item')].map(card => cardJob(card, href)).filter(job => {
+  return searchCards(doc).cards.map(card => cardJob(card, href)).filter(job => {
     if (!job || seen.has(job.jobId)) return false; seen.add(job.jobId); return true;
   });
 }
-module.exports = { APPLY, ALREADY, JOB_BODY, visible, jobIdentity, readPageBlock, readAction, successSignals, inspect, extract, selectedResume, cardJob, collect };
+module.exports = { APPLY, ALREADY, JOB_BODY, visible, jobIdentity, readPageBlock, readAction, successSignals, inspect, extract, selectedResume, listState, cardJob, collect };

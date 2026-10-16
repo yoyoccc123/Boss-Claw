@@ -15,8 +15,8 @@ const plugins = prior ? [{ name: 'previous-released-browser', setup(b) {
     ['show', 'v2.5.39:desktop-app/src/components/BrowserView.tsx'], { cwd: root, encoding: 'utf8' }), loader: 'tsx', resolveDir: dirname(args.path) }));
 } }] : [];
 await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import BrowserView from './src/components/BrowserView';
-const api={current:null};const test:any=window;test.browserRef=api;test.navigation=[];
-createRoot(document.getElementById('root')!).render(<BrowserView apiRef={api} onNavigate={info=>test.navigation.push(info)}/>);`,
+const api={current:null};const test:any=window;test.browserRef=api;test.navigation=[];test.collected=[];test.collectDone=[];
+createRoot(document.getElementById('root')!).render(<BrowserView apiRef={api} onNavigate={info=>test.navigation.push(info)} onCollectProgress={data=>test.collected.push(data)} onCollectDone={data=>test.collectDone.push(data)}/>);`,
   loader: 'tsx', resolveDir: root }, tsconfig: join(root, 'tsconfig.json'), bundle: true, platform: 'browser',
   format: 'iife', outfile: join(fixture, 'ui.js'), logLevel: 'silent', plugins });
 writeFileSync(join(fixture, 'ui.html'), '<meta charset="utf-8"><style>html,body,#root{height:100%;margin:0}webview{display:flex;min-height:400px}</style><div id="root"></div><script src="ui.js"></script>');
@@ -25,6 +25,11 @@ const fixtureDocument = url => {
   if (detail) return '<html><body><a id="continue" href="https://www.zhipin.com/web/geek/chat?id=fixture-hr&jobId=fixture-job&securityId=fixture-ticket">继续沟通</a></body></html>';
   const query = Boolean(u.search), chat = u.pathname === '/web/geek/chat';
   const wuba = u.hostname === 'gz.58.com';
+  if (wuba && u.pathname.startsWith('/quanzhizhaopin/')) {
+    const card = (id, title) => `<li class="job_item"><div class="job_name"><a href="https://gz.58.com/tech/${id}x.shtml">天河 | ${title}</a></div><div class="job_salary">150元/天</div><div class="comp_name">合成公司</div></li>`;
+    return '<html><body><ul>' + (u.searchParams.get('key') === 'mixed' ? card('22222222222222', 'Python实习生') : '') +
+      '<li class="job_item">暂无相关职位，为您提供以下职位</li>' + card('11111111111111', '服务员') + '</ul></body></html>';
+  }
   const wubaBody = wuba ? '<span class="pos_title">Python实习生</span><div class="des">离线58原生两步投递回归，使用合成在线简历及岗位，不会发送实际申请。</div><div class="pos_operate"><a class="applyJobBtn" href="javascript:void(0)">申请职位</a></div>' : '';
   const modal = '<div id="chooseResume"><div class="guide-box"><span class="infoName">Python实习生</span><li class="resume-item"><input type="radio" checked name="resumeGroup" value="synthetic-resume"><label>合成在线简历</label></li><div id="resumeList_delivery" class="btn active delivery-btn">立即申请</div></div></div>';
   return '<html><body>' + wubaBody + '<div id="native-context">' + (query ? 'selected fixture contact' : 'empty fixture pane') + '</div><script>' +
@@ -85,6 +90,19 @@ const uiCheck = async function () {
   const nativeCounts = await findActive().executeJavaScript('({checks:window.checkClicks,submits:window.submitClicks})');
   check(nativeCounts.checks === 1 && nativeCounts.submits === 1, '58 native check and online-resume submission each occur once');
   api.closeTab(delivered.tabId);
+  for (const key of ['empty', 'mixed']) {
+    const list = await open('https://gz.58.com/quanzhizhaopin/?key=' + key + '&final=1');
+    const seq = 'native-58-' + key;
+    api.sendInTab(list.id, 'visual-collect', { seq, settleMs: 400, maxJobs: 10, autoScroll: true });
+    await wait(() => window.collectDone.some(d => d.seq === seq), '58 explicit native end completes without scrolling recommendations');
+    const done = window.collectDone.find(d => d.seq === seq);
+    const jobs = window.collected.filter(d => d.seq === seq && d.phase === 'done').map(d => d.job);
+    check(done.reason === 'completed' && jobs.length === (key === 'mixed' ? 1 : 0), '58 actual collector completes ' + key + ' native result set');
+    check(jobs.every(j => j.jobId === '22222222222222'), '58 actual collection never emits recommended service jobs');
+    const loads = await window.electron.invoke('jc:fixture-loads');
+    check(!loads.some(u => u.includes('/11111111111111x.shtml')), '58 recommendation detail is never fetched');
+    api.closeTab(list.id);
+  }
   // Explicit navigation before React mounts a new guest must still use the latest requested URL.
   const first = 'https://www.zhipin.com/before-mount', latest = 'https://www.zhipin.com/requested-before-mount';
   const id = api.openInNewTab(first, 'offline before mount', 'detail'); api.loadURLInTab(id, latest);

@@ -19,6 +19,8 @@ import { buildJobSearchUrl, RANDOM_COLLECT_LABEL } from './searchUrl';
 import wubaSite from '../../../camoufox/platforms/wuba-site.json';
 import { normalizeProvinceName, PROVINCE_CITIES } from './locationFilter';
 import { normalizeTargetLocations } from './targetLocations';
+import { wubaFilterParams } from './wubaSearch';
+import type { WubaSearchFilters } from './types';
 
 // ==================== 猎聘 liepin ====================
 export const LIEPIN_BASE_URL = 'https://www.liepin.com/zhaopin/';
@@ -344,7 +346,7 @@ export function expandWubaSearchLocations(locations: readonly string[]): string[
   return [...result];
 }
 
-export function buildWubaSearchUrl(query: { keyword?: string; city?: string; page?: number; criteria?: PlatformSearchCriteria } = {}): string {
+export function buildWubaSearchUrl(query: { keyword?: string; city?: string; page?: number; salary?: string; criteria?: PlatformSearchCriteria } = {}): string {
   const types = query.criteria?.employmentTypes || [];
   if (types.length && types.every(t => t === '兼职')) throw new Error('58兼职是独立招聘页面，当前接入全职招聘列表；请调整求职类型后采集');
   const city = String(query.city || '').trim().replace(/市$/, '');
@@ -353,9 +355,18 @@ export function buildWubaSearchUrl(query: { keyword?: string; city?: string; pag
   const slug = cities[city];
   if (!slug) throw new Error(`58同城暂未登记城市“${city}”，请选择已支持城市后采集`);
   const page = Math.max(1, Math.floor(Number(query.page) || 1));
-  const url = new URL(`https://${slug}.58.com/quanzhizhaopin/${page > 1 ? `pn${page}/` : ''}`);
-  if (query.keyword?.trim()) url.searchParams.set('key', query.keyword.trim());
-  return url.href;
+  const filters = wubaFilterParams({ ...query.criteria, salary: query.salary ?? query.criteria?.salary });
+  const path = Object.entries(filters).filter(([key]) => key !== 'postdate').map(([key, value]) => `pve_${key}_${value}`).join('_');
+  const params: Record<string, string> = {};
+  if (query.keyword?.trim()) {
+    params.key = query.keyword.trim();
+    // Native filter links carry final=1. Without it, keyword classification redirects discard filters/page.
+    params.final = '1';
+  }
+  if (filters.postdate) params.postdate = filters.postdate;
+  // 58 decodes percent escapes but keeps literal '+', unlike form-style URLSearchParams encoding.
+  const search = Object.entries(params).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
+  return `https://${slug}.58.com/quanzhizhaopin/${page > 1 ? `pn${page}/` : ''}${path ? path + '/' : ''}${search ? '?' + search : ''}`;
 }
 
 // ==================== 统一入口 ====================
@@ -416,6 +427,7 @@ export interface PlatformSearchQueueItem {
  * 这样它可直接作为 JSON payload（`Record<string, unknown>`）传给 Camoufox 通道，无需强转。
  */
 export type PlatformSearchCriteria = {
+  wubaSearchFilters?: WubaSearchFilters;
   salary?: string;
   experiences?: string[];
   degrees?: string[];
@@ -433,6 +445,7 @@ export type PlatformSearchCriteria = {
 /** 从全局配置提取平台筛选条件（非 BOSS 平台隐身采集 / 猎聘与智联 URL 共用） */
 export function platformSearchCriteria(config: AppConfig): PlatformSearchCriteria {
   return {
+    wubaSearchFilters: config.wubaSearchFilters,
     salary: config.salary,
     experiences: config.experiences ?? [],
     degrees: config.degrees ?? [],

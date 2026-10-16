@@ -65,6 +65,7 @@ BossClaw 隐身引擎 —— 「基础求职条件」跨平台筛选参数映射
 from __future__ import annotations
 
 from typing import Any, Iterable
+from .wuba_filters import DATA as WUBA_FILTER_DATA, filter_params as wuba_filter_params
 
 # ============================================================
 # 通用归一化
@@ -314,8 +315,8 @@ _BUILDERS = {
 # ok = 码值有权威来源或实测；partial = 部分取值有实测；inferred = 顺位推得待校准；
 # unsupported = 码值未知，按「不臆造码、宁可多召回不误杀」原则不附加。
 FILTER_CAPABILITIES: dict[str, dict[str, str]] = {
-    # 58: city + keyword are verified. Other filters are evaluated by the shared local/AI pipeline.
-    'wuba': {k: 'unsupported' for k in ('experience', 'degree', 'scale', 'job_type', 'company_type', 'financing', 'hr_activity')},
+    'wuba': {'experience': 'partial', 'degree': 'partial', 'salary': 'partial', 'industry': 'ok', 'published': 'ok',
+             **{k: 'unsupported' for k in ('scale', 'job_type', 'company_type', 'financing', 'hr_activity')}},
     'liepin': {'experience': 'partial', 'degree': 'ok', 'scale': 'partial', 'job_type': 'unsupported',
                'company_type': 'partial', 'financing': 'partial', 'hr_activity': 'partial'},
     'zhaopin': {'experience': 'ok', 'degree': 'ok', 'scale': 'ok', 'job_type': 'ok',
@@ -326,6 +327,7 @@ FILTER_CAPABILITIES: dict[str, dict[str, str]] = {
 
 # 条件维度 → 平台查询参数名（日志 / 诊断用）
 PARAM_NAMES: dict[str, dict[str, str]] = {
+    'wuba': {'salary': '5354', 'degree': '5356', 'experience': '5357', 'industry': '5363', 'published': 'postdate'},
     'liepin': {'experience': 'workYearCode', 'degree': 'eduLevel', 'scale': 'compScale',
                'company_type': 'compKind', 'hr_activity': 'pubTime', 'financing': 'compStage'},
     'zhaopin': {'experience': 'we', 'degree': 'el', 'scale': 'cs', 'job_type': 'et',
@@ -360,6 +362,8 @@ _REVERSE_CODES: dict[tuple[str, str], dict] = {
 def build_filter_params(platform: str, criteria: dict | None) -> dict:
     """把「基础求职条件」翻译成指定平台的查询参数（无对应码值的维度自动省略）。"""
     p = str(platform or '').strip().lower()
+    if p == 'wuba':
+        return wuba_filter_params(criteria)
     builder = _BUILDERS.get(p)
     if builder is None:
         return {}
@@ -374,7 +378,8 @@ def summarize_applied(platform: str, params: dict) -> str:
     """
     p = str(platform or '').strip().lower()
     names = {'experience': '经验', 'degree': '学历', 'scale': '公司规模', 'job_type': '求职类型',
-             'company_type': '公司性质', 'financing': '融资阶段', 'hr_activity': 'HR活跃度'}
+             'company_type': '公司性质', 'financing': '融资阶段', 'hr_activity': 'HR活跃度',
+             'salary': '薪资', 'industry': '公司行业', 'published': '发布时间'}
     sep = MULTI_SEP.get(p, ',')
     parts = []
     for dim, pname in (PARAM_NAMES.get(p) or {}).items():
@@ -382,6 +387,8 @@ def summarize_applied(platform: str, params: dict) -> str:
         if not v:
             continue
         rev = _REVERSE_CODES.get((p, dim)) or {}
+        if p == 'wuba' and dim in WUBA_FILTER_DATA['fields']:
+            rev = {o['value']: o['label'] for o in WUBA_FILTER_DATA['fields'][dim]['options']}
         if v in rev:  # 区间式/单值（如猎聘 1$3）整体命中
             labels = [rev[v]]
         elif (p, dim) in _RANGE_SINGLE_DIMS:

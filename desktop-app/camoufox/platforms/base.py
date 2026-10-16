@@ -145,6 +145,14 @@ class CollectorBase:
         """
         return False
 
+    def search_page_exhausted(self, page) -> bool:
+        """Explicit native end of matching results, even when fallback recommendations follow."""
+        return False
+
+    def search_page_ready(self, page) -> bool:
+        """Platform may reject an unrecognized page instead of recording it as an empty result."""
+        return True
+
     def is_logged_out(self, page) -> bool:
         """平台特有的未登录判定（默认只看 URL）。
 
@@ -208,6 +216,7 @@ class CollectorBase:
         last_code = 0
         last_msg = ''
         collected_pages = 0
+        search_exhausted = False
         captured: list = []
 
         with open_browser(os_name=os_name) as page:
@@ -258,11 +267,19 @@ class CollectorBase:
                         break
                     time.sleep(RENDER_WAIT_INTERVAL_SECONDS)
                 dom_jobs = self._collect_dom_cards(page)
+                if not self.search_page_ready(page):
+                    last_code, last_msg = 37, f'{self.label}未识别到岗位列表或明确空结果，进度已保留'
+                    break
                 if captured:
                     all_jobs.extend(self.format_jobs(captured, query, page_num))
                 elif dom_jobs:
                     all_jobs.extend(dom_jobs)
-                elif self.empty_list_hit(page):
+                if self.search_page_exhausted(page):
+                    collected_pages = page_num
+                    search_exhausted = True
+                    log('ℹ️', f'[{self.platform}] Page {page_num}: 相关岗位已采完，跳过平台补推岗位')
+                    break
+                if not captured and not dom_jobs and self.empty_list_hit(page):
                     log('ℹ️', f'[{self.platform}] Page {page_num}: 页面提示无符合条件岗位，提前结束「{query}」')
                     break
                 captured = []
@@ -276,7 +293,7 @@ class CollectorBase:
             # 风控/环境异常：整批作废 + 清除断点，下次重头采（宁重复不遗漏）
             store.clear_combo(self.platform, city, query)
             return {'ok': False, 'code': last_code, 'message': last_msg, 'jobs': []}
-        if collected_pages >= pages:
+        if collected_pages >= pages or search_exhausted:
             store.mark_combo_done(self.platform, city, query, pages=collected_pages, count=len(all_jobs))
         return {'ok': True, 'code': 0, 'jobs': all_jobs, 'pages': collected_pages}
 

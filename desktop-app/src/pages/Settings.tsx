@@ -65,6 +65,7 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { useSettingsStore, PROVIDER_DEFAULTS } from '@/store/useSettingsStore';
+import { WUBA_NATIVE_FILTERS } from '@/lib/bossclaw/wubaSearch';
 import { useAppStore, ThemeMode } from '@/store/useAppStore';
 import type { SettingsTabKey } from '@/store/useAppStore';
 import { callModel, clearAICache, getAICacheStats, getLLMUsageStats, resetLLMUsageStats } from '@/lib/bossclaw/llm';
@@ -1051,6 +1052,33 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                         onChange={v => { if (v !== null) setPlatformDailyTarget(p, v); }} style={{ width: 120 }} />
                       <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>条 / 天；0 使用平台上限 {dailyCap} 条。</span>
                     </div>
+                    {p === 'wuba' && (
+                      <div data-testid="wuba-search-filters" style={{ marginTop: 14 }}>
+                        <Text strong>58 搜索筛选</Text>
+                        <div className="settings-grid" style={{ marginTop: 8 }}>
+                          <div className="sg-item">
+                            <span className="field-label">发布时间</span>
+                            <Select value={config.wubaSearchFilters?.publishedWithinDays || 0}
+                              onChange={value => setConfig({ wubaSearchFilters: { ...config.wubaSearchFilters, publishedWithinDays: value } })}
+                              options={[{ value: 0, label: '不限' }, ...WUBA_NATIVE_FILTERS.publishedWithinDays.map(o => ({ value: o.days, label: o.label }))]} />
+                          </div>
+                          {Object.entries(WUBA_NATIVE_FILTERS.fields).map(([key, field]) => {
+                            const name = key as 'salary' | 'degree' | 'experience' | 'industry';
+                            return (
+                              <div className="sg-item" key={name}>
+                                <span className="field-label">{field.label}</span>
+                                <Select showSearch optionFilterProp="label" value={config.wubaSearchFilters?.[name] || ''}
+                                  onChange={value => setConfig({ wubaSearchFilters: { ...config.wubaSearchFilters, [name]: value } })}
+                                  options={[{ value: '', label: name === 'industry' ? '不限' : '跟随通用设置' },
+                                    ...(name === 'industry' ? [] : [{ value: '不限', label: '不限' }]),
+                                    ...field.options.map(o => ({ value: o.label, label: o.label }))]} />
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <Text type="secondary" style={{ fontSize: 12 }}>仅用于58搜索，与网页一致为单选。通用设置的多选或跨档范围无法对应时，不附加该项，请在此单独选择。发布时间与HR活跃度分别设置。</Text>
+                      </div>
+                    )}
                   </div>
                 );
               })}

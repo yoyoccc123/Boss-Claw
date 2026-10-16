@@ -1711,6 +1711,7 @@ function collectCards(quiet = false) {
   const uniq = [...new Set(candidates)];
   // 有效性过滤：内容长度合理 + 是真实岗位卡
   const valid = uniq.filter((el) => {
+    if (PLATFORM === 'wuba' && !WUBA.cardJob(el, location.href)) return false;
     const content = textOf(el);
     if (!content || (content.length > 900 && !(PLATFORM === 'zhaopin' && el.matches?.('.job-card, .joblist-box__item')))) return false;
     if (PLATFORM === 'zhaopin') {
@@ -2975,6 +2976,16 @@ async function visualCollectListOnly(opts = {}) {
     notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'blocked', loginRequired: block.kind === 'login' });
     return true;
   };
+  const wubaSearchEnded = (emptyOnly = false) => {
+    if (PLATFORM !== 'wuba') return false;
+    const state = WUBA.listState(document);
+    if (!state.endReached || (emptyOnly && state.resultCount > 0)) return false;
+    const status = `${state.resultCount ? '本组相关岗位已采完' : '本组无相关岗位'}，已跳过平台补推的 ${state.recommendationCount} 个岗位`;
+    notify('collect-progress', { phase: 'list-bottom', processed: processedCount, total: state.resultCount, maxJobs, status });
+    reportJdFillSummary();
+    notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'completed' });
+    return true;
+  };
   resetJdFillState(); // 每轮采集重置 JD 补齐计数 / 熔断状态
   notify('collect-progress', { phase: 'start', index: 0, total: 0, maxJobs, platform: PLATFORM, status: `准备中（${PLATFORM} · 列表级采集）` });
 
@@ -2991,6 +3002,7 @@ async function visualCollectListOnly(opts = {}) {
   let initialWaitCount = 0;
   while (Date.now() < listReadyDeadline && !stopped()) {
     if (wubaBlocked()) return;
+    if (wubaSearchEnded(true)) return;
     let cards = [];
     try { cards = collectCards(true); } catch (e) {
       notify('collect-progress', { phase: 'collect-error', index: 0, total: 0, processed: 0, maxJobs, status: `列表查询异常：${String(e?.message || e).slice(0, 80)}` });
@@ -3034,6 +3046,7 @@ async function visualCollectListOnly(opts = {}) {
       return Boolean(k) && !processed.has(k);
     });
     if (pending.length === 0) {
+      if (wubaSearchEnded()) return;
       // 本屏已采完 → 按设置渐进下拉加载更多（复用 BOSS 同一套滚动判定）
       if (!autoScroll) {
         notify('collect-progress', { phase: 'list-bottom', index: 0, total: cards.length, processed: processedCount, maxJobs, status: '已按「不自动下拉」设置采完首屏可见卡，停止加载' });
@@ -3069,6 +3082,7 @@ async function visualCollectListOnly(opts = {}) {
     if (stopped()) break;
     await waitWhilePaused();
     const job = extractJobFromCardOnly(card);
+    if (!job) continue; // A native recommendation boundary can arrive after a card was selected.
     // 补齐详情 JD / 技能 / 福利 / HR（智联经 JSON 详情接口、猎聘经同源详情页 HTML；
     // 其它平台能力表未声明 → 直接返回 false）
     await enrichJobDetail(job);
