@@ -329,8 +329,9 @@ export function buildWubaSearchUrl(query: { keyword?: string; city?: string; pag
   const types = query.criteria?.employmentTypes || [];
   if (types.length && types.every(t => t === '兼职')) throw new Error('58兼职是独立招聘页面，当前接入全职招聘列表；请调整求职类型后采集');
   const city = String(query.city || '').trim().replace(/市$/, '');
+  if (!city || /^(全国|不限|全部|不限制)$/.test(city)) throw new Error('58招聘需要选择具体城市，请在设置的目标城市中添加城市后再采集');
   const cities: Record<string, string> = wubaSite.cities;
-  const slug = !city || /^(全国|不限|全部)$/.test(city) ? 'www' : cities[city];
+  const slug = cities[city];
   if (!slug) throw new Error(`58同城暂未登记城市“${city}”，请选择已支持城市后采集`);
   const page = Math.max(1, Math.floor(Number(query.page) || 1));
   const url = new URL(`https://${slug}.58.com/quanzhizhaopin/${page > 1 ? `pn${page}/` : ''}`);

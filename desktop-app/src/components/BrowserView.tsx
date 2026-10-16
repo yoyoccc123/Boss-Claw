@@ -1252,8 +1252,9 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             </div>
           ))}
         </div>
-        <Tooltip title="新标签页">
+        <Tooltip title="选择新标签页平台；采集平台请在左侧岗位进度中选择">
           <Select
+            aria-label="新标签页平台"
             size="small"
             style={{ width: 112 }}
             value={newTabPlatform}
