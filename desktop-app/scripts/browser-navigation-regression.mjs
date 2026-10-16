@@ -33,8 +33,17 @@ const fixtureDocument = url => {
     (query ? "setTimeout(()=>history.replaceState({},'',location.pathname),80);" : '') + '</script></body></html>';
 };
 const uiCheck = async function () {
-  const wait = async (predicate, label) => { const end = Date.now() + 10000; while (!await predicate()) {
-    if (Date.now() > end) throw Error(label); await new Promise(r => setTimeout(r, 30)); } };
+  const wait = async (predicate, label) => {
+    const end = Date.now() + 10000;
+    for (;;) {
+      try { if (await predicate()) return; } catch (error) {
+        // React can mount the element before Electron attaches its native guest. Keep waiting for that handshake.
+        if (!/WebView must be attached to the DOM and the dom-ready event emitted/.test(String(error))) throw error;
+      }
+      if (Date.now() > end) throw Error(label);
+      await new Promise(r => setTimeout(r, 30));
+    }
+  };
   const check = (condition, label) => { if (!condition) throw Error(label); window.checks.push(label); };
   window.checks = []; await wait(() => window.browserRef.current, 'actual BrowserView API');
   const api = window.browserRef.current, webview = id => document.querySelector('webview[data-fixture-id="' + id + '"]');
