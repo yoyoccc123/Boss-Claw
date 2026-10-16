@@ -40,10 +40,15 @@ export async function smokePackaged({ packaged, fixture, electron, env, run }) {
   await run(path.join(packaged, 'BossClaw.exe'), [], { env: smokeEnv });
   const result = JSON.parse(fs.readFileSync(path.join(fixture, 'smoke-result.json')));
   assert.ok(result.success, result.error);
+  const wubaExternal = path.join(packaged, 'resources/camoufox/platforms/wuba-dom.cjs');
+  const wubaPreload = path.join(packaged, 'resources/app.asar.unpacked/electron/preload/wuba.cjs');
+  assert.ok(fs.readFileSync(wubaExternal).equals(fs.readFileSync(wubaPreload)), '58 DOM rules must match between Python and webview resources');
+  result.wubaRulesShared = true;
   // Python must see real files, not the virtual ASAR filesystem.
   const pythonRoot = path.join(packaged, 'resources/camoufox');
   await run(env.BOSSCLAW_PYTHON || 'python', ['-c',
-    "import ast,pathlib; r=pathlib.Path(" + JSON.stringify(pythonRoot) + "); files=list(r.rglob('*.py')); assert files; [ast.parse(p.read_text(encoding='utf-8-sig')) for p in files]; print('PASS external Python resources:',len(files))"], { env });
+    "import ast,pathlib,sys; r=pathlib.Path(" + JSON.stringify(pythonRoot) + "); files=list(r.rglob('*.py')); assert files; [ast.parse(p.read_text(encoding='utf-8-sig')) for p in files]; pathlib.Path.home=staticmethod(lambda:pathlib.Path(" + JSON.stringify(path.join(fixture, 'python-profile')) + "));sys.path.insert(0,str(r));from platforms.wuba import build_search_url;assert 'zs.58.com' in build_search_url('Python','中山');print('PASS external Python resources and 58 shared module:',len(files))"], { env });
+  result.wubaPythonLoaded = true;
   // The child Node bridge must resolve DOCX support without archive-relative require paths.
   const bridgeDir = path.join(packaged, 'resources/bridge'), dataDir = path.join(fixture, 'bridge-data');
   assertSafeChild(fixture, dataDir);

@@ -203,7 +203,7 @@ export default function Tasks() {
   const isCollectRun = (t: TaskRun) => String(t.id || '').startsWith('cr_');
   const runPlatform = (t: TaskRun): JobPlatform => {
     const p = String(t.id || '').split('_')[1] as JobPlatform;
-    return (['boss', 'liepin', 'zhaopin', 'job51'] as JobPlatform[]).includes(p) ? p : 'boss';
+    return (['boss', 'liepin', 'zhaopin', 'job51', 'wuba'] as JobPlatform[]).includes(p) ? p : 'boss';
   };
   /** 是否已跑过：决定按钮文案显示「开始」还是「继续」 */
   const everStarted = (t: TaskRun) =>

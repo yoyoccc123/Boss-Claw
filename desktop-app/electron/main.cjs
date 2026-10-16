@@ -1963,12 +1963,14 @@ const WEBVIEW_AUTH_COOKIE_HINTS = {
   liepin: ['lp_login', 'lp_token', 'token'],
   zhaopin: ['zp_auto', 'zp_sign', 'swordman', 'zm_job_pc', ['=at', '=rt']],
   job51: ['j_ticket', 'sajssp', '51job', 'job51'],
+  wuba: ['=ppu'],
 };
 const WEBVIEW_PLATFORM_DOMAIN = {
   boss: 'zhipin.com',
   liepin: 'liepin.com',
   zhaopin: 'zhaopin.com',
   job51: '51job.com',
+  wuba: '58.com',
 };
 function cookieUrl(c) {
   if (c.url) return c.url;

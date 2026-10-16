@@ -30,6 +30,7 @@ PLATFORM_CAPABILITIES: dict[str, frozenset] = {
     'liepin': frozenset({'collect', 'score', 'greet', 'deliver'}),
     'zhaopin': frozenset({'collect', 'score', 'greet', 'deliver'}),
     'job51': frozenset({'collect', 'score', 'greet', 'deliver'}),
+    'wuba': frozenset({'collect', 'score', 'greet', 'deliver'}),
 }
 
 # 已知能力全集（UI 可据此列举，避免各处硬编码字符串）
@@ -43,6 +44,7 @@ PLATFORM_DELIVERY_KIND: dict[str, str] = {
     'liepin': 'chat',
     'zhaopin': 'resume',
     'job51': 'resume',
+    'wuba': 'resume',
 }
 
 

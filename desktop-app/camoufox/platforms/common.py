@@ -29,7 +29,7 @@ DATA_DIR = Path.home() / '.bossclaw'
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # 平台：boss / liepin / zhaopin / job51（BOSS 为默认兼容路径）
-PLATFORMS = ('boss', 'liepin', 'zhaopin', 'job51')
+PLATFORMS = ('boss', 'liepin', 'zhaopin', 'job51', 'wuba')
 
 
 def cookie_file(platform: str = 'boss') -> Path:

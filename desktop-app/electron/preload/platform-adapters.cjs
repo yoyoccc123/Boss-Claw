@@ -21,7 +21,8 @@
 //     与 `camoufox/platforms/{zhaopin,job51}.py` 的 DOM 兜底选择器同源。
 //   三类平台的字段抓取一律「选择器 → 文本正则兜底」，避免单一通道失效导致整链路空采。
 
-const ALL_PLATFORMS = Object.freeze(['boss', 'liepin', 'zhaopin', 'job51']);
+const ALL_PLATFORMS = Object.freeze(['boss', 'liepin', 'zhaopin', 'job51', 'wuba']);
+const WUBA = require('./wuba.cjs');
 const OFFICE = require('./office-address.cjs');
 const COMPANY_SIZE = require('./company-size.cjs');
 
@@ -35,6 +36,7 @@ function detectPlatform(hostname) {
   if (host === 'liepin.com' || host.endsWith('.liepin.com')) return 'liepin';
   if (host === 'zhaopin.com' || host.endsWith('.zhaopin.com')) return 'zhaopin';
   if (host === '51job.com' || host.endsWith('.51job.com')) return 'job51';
+  if (host === '58.com' || host.endsWith('.58.com')) return 'wuba';
   return 'boss';
 }
 
@@ -46,6 +48,7 @@ const PLATFORM_LINK_SELECTOR = Object.freeze({
   liepin: 'a[href*="/job/"], a[href*="/a/"]',
   zhaopin: 'a[href*="/jobdetail/"]',
   job51: "a[href*='/pc/jobdetail'], a[href*='jobs.51job.com/']",
+  wuba: 'a[href*="x.shtml"]',
 });
 
 /**
@@ -63,6 +66,7 @@ const PLATFORM_LINK_KIND = Object.freeze({
   liepin: 'page',
   zhaopin: 'page',
   job51: 'page',
+  wuba: 'page',
 });
 
 /** 列表卡片候选选择器（按优先级；`.closest()` 归一到卡片容器） */
@@ -111,6 +115,7 @@ const PLATFORM_CARD_SELECTORS = Object.freeze({
     '.joblist li',
     '.j_joblist .joblist-item',
   ],
+  wuba: ['#list_con .job_item', '.job_item', '.job-list-item', '.joblist li', '.job-list li'],
 });
 
 /** 卡片归一容器（`el.closest(...)` 用） */
@@ -121,6 +126,7 @@ const PLATFORM_CARD_CONTAINER_SELECTOR = Object.freeze({
   liepin: 'div[class*="jobCardPcContainer"], li, [class*="job-card"], [class*="joblist"], [class*="jobItem"], [class*="job-list"]',
   zhaopin: '.job-card, .joblist-box__item, [class*="jobItem"], li',
   job51: 'li, [class*="job-card"], [class*="joblist"], [class*="jobItem"], [class*="job-list"]',
+  wuba: '.job_item, .job-list-item, li',
 });
 
 /** 列表根节点候选（诊断 / 滚动容器定位用） */
@@ -130,6 +136,7 @@ const PLATFORM_LIST_ROOT_SELECTORS = Object.freeze({
   // 智联：兼容新版拆分布局（.job-list-panel / .jobs-list-sort-scroll）与旧版 .joblist / .joblist-box
   zhaopin: ['[class*="job-list-panel"]', '[class*="job-sort-scroll"]', '[class*="joblist-box"]', '[class*="joblist"]', '[class*="search-result"]', 'ul'],
   job51: ['.j_joblist', '.joblist', '[class*="joblist"]', '[class*="job-list"]'],
+  wuba: ['#list_con', '.joblist', '.job-list'],
 });
 
 /** 可滚动容器候选（「加载更多」用；取不到时回落 document.scrollingElement） */
@@ -142,6 +149,7 @@ const PLATFORM_SCROLLER_SELECTORS = Object.freeze({
   // 页面 body 不可滚 —— 若只认旧版 .joblist，findListScroller 会误回 window 导致下拉失效。
   zhaopin: ['[class*="job-sort-scroll"]', '[class*="job-list-panel"]', '[class*="job-split-layout"]', '[class*="joblist"]', '[class*="job-list"]', '[class*="search-result"]', 'main'],
   job51: ['.j_joblist', '.joblist', '[class*="joblist"]', '[class*="job-list"]', 'main'],
+  wuba: ['#list_con', '.joblist', '.job-list'],
 });
 
 /**
@@ -156,6 +164,13 @@ const PLATFORM_FORCE_OVERFLOW_SCAN = Object.freeze({
 
 /** 卡片内字段选择器（命中优先；未命中走文本正则兜底） */
 const PLATFORM_FIELD_SELECTORS = Object.freeze({
+  wuba: {
+    title: ['.job_name a', '.job_name', '.job-name', '.job-title'],
+    company: ['.comp_name a', '.comp_name', '.company-name'],
+    salary: ['.job_salary', '.salary', '.job-salary'],
+    location: ['.job_address', '.job-area', '.job-address'],
+    recruiterTitle: [],
+  },
   boss: {
     title: ['.job-name', '.job-title .job-name', '.job-title', '.position-name', '[class*="job-name"]', '[class*="job-title"]', '[class*="jobName"]', 'h3', 'h4'],
     company: ['.company-name', '.job-card-right .company-info h3', 'h3.company-name', 'a.company-name', '[class*="company-name"]', '[class*="companyName"]', '[class*="company-brand"]', 'a[href*="gongsi"]'],
@@ -262,6 +277,7 @@ const PLATFORM_LIST_URL_RE = Object.freeze({
   // （2026-09 起官网跳转/用户手输的规范形态，如 https://www.zhaopin.com/jobs/?pageMode=recommend）
   zhaopin: /\/(sou|jobs)\//i,
   job51: /\/pc\/search/i,
+  wuba: /\/(?:quanzhizhaopin|job|tech|zhaopin)(?:\/|\.shtml)/i,
 });
 
 /** 详情页 URL 形态 */
@@ -270,6 +286,7 @@ const PLATFORM_DETAIL_URL_RE = Object.freeze({
   liepin: /\/job\/[^/]*\d/i,
   zhaopin: /jobdetail\//i,
   job51: /jobdetail|jobs\.51job\.com\//i,
+  wuba: /\/\d{8,}x\.shtml/i,
 });
 
 /** 详情页 URL 通用否定形态（列表页判定用：命中即非列表页） */
@@ -296,6 +313,7 @@ const DETAIL_URL_ANY_RE = /job_detail|jobdetail|\/job\/\d+/i;
 function jobIdFromUrl(raw) {
   const s = String(raw == null ? '' : raw).trim();
   if (!s) return '';
+  if (detectPlatform((() => { try { return new URL(s).hostname; } catch { return ''; } })()) === 'wuba') return WUBA.jobIdentity(s);
 
   // ① 51job 路径式（`jobs.51job.com/all/12345678.html`）：
   //    必须**先于** `/job/` 分支判定，否则 `jobs.51job.com/job/...` 会被 `/job/` 截胡；
@@ -711,6 +729,7 @@ function decodeLiepinSalary(raw) {
 const PLATFORM_DETAIL_API_FILL = Object.freeze({
   zhaopin: true,
   liepin: true,
+  wuba: true,
 });
 
 /** 该平台是否为「列表页内联详情」形态（仅 BOSS） */
@@ -833,6 +852,7 @@ const PLATFORM_APPLY_SPEC = Object.freeze({
 
 /** 列表页判定（URL 形态 + 非详情页） */
 function isListPage(platform, url) {
+  if (platform === 'wuba' && (WUBA.jobIdentity(url) || /passport\.|callback\./i.test(String(url)))) return false;
   const re = PLATFORM_LIST_URL_RE[platform];
   if (!re || !re.test(String(url || ''))) return false;
   return !DETAIL_URL_ANY_RE.test(String(url || ''));
@@ -840,6 +860,7 @@ function isListPage(platform, url) {
 
 /** 详情页判定 */
 function isDetailPage(platform, url) {
+  if (platform === 'wuba') return !!WUBA.jobIdentity(url);
   const re = PLATFORM_DETAIL_URL_RE[platform];
   return Boolean(re && re.test(String(url || '')));
 }

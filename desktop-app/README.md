@@ -203,6 +203,14 @@ npm run package:linux      # 构建 Linux 产物，尚未纳入固定 Windows �
 
 ***
 
+## 58 同城
+
+在「设置 → 招聘平台」启用 58 同城并登录求职账号，再在工作台选择 58 进行采集和投递。城市与关键词进入 58 全职招聘列表，完整职位描述用于现有本地规则和 AI 筛选；实习可配合实习关键词。兼职为独立站点分类，本版不把全职列表冒充兼职采集。
+
+58 使用平台账号中当前选中的在线简历。程序按「申请职位 → 选择简历 → 立即申请」操作，在最终确认前再次检查停止状态，并绑定岗位号、弹窗职位和选中简历。已有申请跳过；登录、验证、缺少在线简历或结果不明会保留页面交人工核对。不会将工作台招呼语当作 58 简历申请，也不会点击图片或附件上传入口。
+
+2026-10-16 通过登录后的真实列表与详情只读验证、官方前端两步投递契约核对，以及隔离 Electron 实际宿主/preload 和 DOM 回归；验证未向招聘方实际投递。58 DOM 规则在 webview 和外置 Python 间共用，打包时核对两份资源一致并实际导入外置模块。
+
 ## 固定发布流程
 
 简历事实回归覆盖多轮补充遗漏已有内容、岗位要点名称漂移、模型漏判及复核中断。仅恢复仍有原始资料和正文引文支持的已体现内容，删除与纠错优先；补充框的岗位定位标签不作事实，学历和 AI 工具熟练程度分别核对，不强制提升匹配分。
@@ -229,7 +237,7 @@ Windows 源码和依赖固定在 E:\自动投简历脚本\Boss-Claw\desktop-app�
 
 Windows 发布会升级 E:\自动投简历脚本\BossClaw-新版-2.5.15\BossClaw.exe。替换前正常退出程序，备份用户数据、引擎数据和简历文件，逐文件核验程序及用户数据的 SHA-256；安装失败恢复旧程序。安装后保持关闭，由用户启动。
 
-发布必须依次通过类型检查、生产界面构建、清理边界校验，以及 delivery-stop、collection-resume、collection-goal、delivery-throttle、boss-chat、browser-navigation、zhaopin-greeting、resume-facts、tailor-iteration、resume-variants、resume 十一组离线回归。打包后还会启动真实 EXE，核对 ASAR 界面、两份基础简历与旧 file:// 存储兼容、主窗口和网页预加载、CloakBrowser 模块、外置 Python 脚本和 Node 桥 DOCX 解析。测试使用合成数据并阻断平台网络请求。browser-navigation 在真实 Electron 网页和 React BrowserView 中验证 BOSS 会话地址清理、四平台页面状态保留、预加载就绪和显式导航，防止把已观察到的网址再写回 src 导致重复刷新。boss-chat 同时运行实际 Electron 发送控件回归，核对文字按钮与图片上传按钮、过期坐标、遮挡、焦点变化和发送途中 HR 回复；HR 已回复的岗位直接跳过，不计为新投递，也不转入自动沟通队列。
+发布必须依次通过类型检查、生产界面构建、清理边界校验，以及 delivery-stop、collection-resume、collection-goal、delivery-throttle、boss-chat、browser-navigation、zhaopin-greeting、wuba、resume-facts、tailor-iteration、resume-variants、resume 十二组离线回归。打包后还会启动真实 EXE，核对 ASAR 界面、两份基础简历与旧 file:// 存储兼容、主窗口和网页预加载、CloakBrowser 模块、外置 Python 脚本和 Node 桥 DOCX 解析。测试使用合成数据并阻断平台网络请求。browser-navigation 在真实 Electron 网页和 React BrowserView 中验证 BOSS 会话地址清理、五平台页面状态保留、预加载就绪和显式导航，防止把已观察到的网址再写回 src 导致重复刷新。boss-chat 同时运行实际 Electron 发送控件回归，核对文字按钮与图片上传按钮、过期坐标、遮挡、焦点变化和发送途中 HR 回复；HR 已回复的岗位直接跳过，不计为新投递，也不转入自动沟通队列。
 
 当前程序通过上述验收、安装校验和 Git 推送后才标记发布成功，并清理旧的自有打包目录，只保留本次产物。旧版本源码保存在 v<version> 标签；未发布候选使用 bossclaw-source/v<version>-<commit> 源码快照标签。失败时保留当前产物、日志和回退程序，下次成功发布再清理；用户数据、简历、引擎环境和私有备份不参与产物清理。发布要求工作树已提交，使用当前仓库的 origin 推送源码与标签。
 

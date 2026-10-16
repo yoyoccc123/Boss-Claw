@@ -57,11 +57,12 @@ class CollectorRegistry:
 
 def build_default_registry() -> CollectorRegistry:
     """内置三平台（BOSS 之外）注册表。延迟导入以避免循环依赖。"""
-    from . import job51, liepin, zhaopin
+    from . import job51, liepin, zhaopin, wuba
     return CollectorRegistry({
         'liepin': liepin._COLLECTOR,
         'zhaopin': zhaopin._COLLECTOR,
         'job51': job51._COLLECTOR,
+        'wuba': wuba._COLLECTOR,
     })
 
 
@@ -69,7 +70,7 @@ def build_default_registry() -> CollectorRegistry:
 registry = build_default_registry()
 
 # 已知平台全集（含 BOSS —— 由 camoufox_server 处理，不在本注册表内）
-ALL_PLATFORMS: tuple = ('boss', 'liepin', 'zhaopin', 'job51')
+ALL_PLATFORMS: tuple = ('boss', 'liepin', 'zhaopin', 'job51', 'wuba')
 
 # BOSS 是否由本注册表提供采集实现（False：走 camoufox_server 既有链路）
 BOSS_HANDLED_BY_SERVER = True

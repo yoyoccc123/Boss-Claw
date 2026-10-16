@@ -1490,9 +1490,17 @@ export default function Workbench() {
     //              一并拼进 URL，前程无忧仍只带城市/薪资/关键词）—— 与隐身采集同一构建器
     if (platform === 'boss') await loadBossCityCodes();
     if (generation !== collectBatchGenerationRef.current) return 'abort';
-    const queue = platform === 'boss'
-      ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
-      : filterQueueByRunIds(platform, buildPlatformSearchQueue(platform, directionPlan, config), runIds);
+    const queue = (() => {
+      try {
+        return platform === 'boss'
+          ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
+          : filterQueueByRunIds(platform, buildPlatformSearchQueue(platform, directionPlan, config), runIds);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        message.warning(detail); addLog('warn', detail); return null;
+      }
+    })();
+    if (!queue) return 'skip';
     if (!queue.length) {
       if (runIds?.length) {
         // 定向重跑：该组合已不在当前搜索条件中（方向/关键词/城市/求职类型被改过）→ 收口卡片并说明原因
@@ -1859,9 +1867,17 @@ export default function Workbench() {
     }
     if (platform === 'boss') await loadBossCityCodes();
     if (generation !== collectBatchGenerationRef.current) return 'abort';
-    const queue = platform === 'boss'
-      ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
-      : filterQueueByRunIds(platform, buildPlatformSearchQueue(platform, directionPlan, config), runIds);
+    const queue = (() => {
+      try {
+        return platform === 'boss'
+          ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
+          : filterQueueByRunIds(platform, buildPlatformSearchQueue(platform, directionPlan, config), runIds);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        message.warning(detail); addLog('warn', detail); return null;
+      }
+    })();
+    if (!queue) return 'skip';
     if (!queue.length) {
       if (runIds?.length) {
         for (const rid of runIds) {

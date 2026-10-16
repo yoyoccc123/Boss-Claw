@@ -60,6 +60,7 @@ const PLATFORM_SHORT: Partial<Record<JobPlatform, string>> = {
   liepin: '猎聘',
   zhaopin: '智联',
   job51: '无忧',
+  wuba: '58',
 };
 const platformShort = (platform: JobPlatform): string =>
   PLATFORM_SHORT[platform] || PLATFORM_META[platform]?.label.replace(/(直聘|招聘|无忧)$/, '') || PLATFORM_META[platform]?.label || '加载';
@@ -976,8 +977,21 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
               resolve({ ok: false, stage: 'failed', error: '投递请求已下发，但结果未在规定时间内确认；请核对平台投递记录后再重试', needsReview: true, tabId });
             }
           }, platform === 'liepin' ? 55000 : 26000);
-          apiResolvers.current.set(seq, (payload: any) => {
+          apiResolvers.current.set(seq, async (payload: any) => {
             clearTimeout(timer);
+            if (platform === 'wuba' && payload?.stage === 'resume_ready') {
+              // Selecting a resume is a separate native submission boundary. Stop wins here.
+              if (!aliveRef.current || !hasTab(tabId) || (control && !control.canStart())) {
+                resolve({ ok: false, stage: 'cancelled', tabId }); return;
+              }
+              try {
+                const result = await cmdOnce('platform-apply', { platform, job, phase: 'confirm', token: payload.token }, 18000, tabId);
+                resolve({ ...result, tabId });
+              } catch {
+                resolve({ ok: false, stage: 'failed', needsReview: true, error: '58提交结果未确认，请核对平台记录', tabId });
+              }
+              return;
+            }
             resolve({ ...(payload || {}), tabId });
           });
           control?.onStart();
@@ -1027,7 +1041,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           });
         })();
       }),
-    [openInNewTab, isPreloadReady, isLoading, sendInTab, pageStatus, hasTab, closeTabById],
+    [openInNewTab, isPreloadReady, isLoading, sendInTab, pageStatus, hasTab, closeTabById, cmdOnce],
   );
 
   // A native Continue entry navigates away and destroys preload. Rebind after navigation,

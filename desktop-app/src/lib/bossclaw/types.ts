@@ -10,7 +10,7 @@ import type { ActiveHoursConfig, BatchRestConfig } from './activityWindow';
 export type ExecutionMode = 'review' | 'auto';
 
 // 招聘平台（多平台适配：BOSS 基础上新增 猎聘 / 智联招聘 / 前程无忧 51Job）
-export type JobPlatform = 'boss' | 'liepin' | 'zhaopin' | 'job51';
+export type JobPlatform = 'boss' | 'liepin' | 'zhaopin' | 'job51' | 'wuba';
 
 // 预设提供商：OpenAI / DeepSeek / 通义千问 / 智谱 GLM / 硅基流动 / 火山方舟 / 自定义
 // （硅基流动、火山方舟参考 AI-BossJob 的多模型接入，均为 OpenAI 兼容端点）

@@ -160,4 +160,5 @@ export const PLATFORM_EXPIRY_DEFAULT: Record<string, boolean> = {
   liepin: true,
   zhaopin: false,
   job51: false,
+  wuba: false,
 };
