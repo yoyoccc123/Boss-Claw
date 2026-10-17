@@ -31,7 +31,7 @@ def build_search_url(query='', city='', salary='', page=1, criteria=None):
     number = max(1, int(page or 1))
     filters = filter_params({**(criteria or {}), 'salary': salary or (criteria or {}).get('salary')})
     path = '_'.join(f'pve_{key}_{value}' for key, value in filters.items() if key != 'postdate')
-    category = category_option(criteria)
+    category = category_option(criteria, keyword=query)
     url = f'https://{slug}.58.com/{category["value"]}/' + (f'pn{number}/' if number > 1 else '')
     if path:
         url += path + '/'

@@ -1,6 +1,8 @@
 """Verified native 58 single-select filters; public option codes are shared with TypeScript."""
 import json
 import time
+import re
+import unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -11,10 +13,46 @@ if not _CATEGORIES_FILE.is_file():
 CATEGORIES = json.loads(_CATEGORIES_FILE.read_text(encoding='utf-8'))
 
 
-def category_option(criteria=None):
+def _normalized(text):
+    return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', str(text or '')).lower()).strip()
+
+
+def _under(child, parent):
+    return child['fullPath'] == parent['fullPath'] or child['fullPath'].startswith(parent['fullPath'] + ',')
+
+
+def _category_from_text(text):
+    source, matches = _normalized(text), []
+    options = [o for o in CATEGORIES['options'] if o['fullPath'] != '674']
+    for option in options:
+        for name in [option['label'], *CATEGORIES['autoAliases'].get(option['value'], [])]:
+            term = _normalized(name)
+            if not term:
+                continue
+            start = source.find(term)
+            while start >= 0:
+                end = start + len(term)
+                before = source[start - 1:start] if start else ''
+                after = source[end:end + 1]
+                if not (re.fullmatch('[a-z0-9]', term[0]) and re.fullmatch('[a-z0-9]', before)) and not (re.fullmatch('[a-z0-9]', term[-1]) and re.fullmatch('[a-z0-9]', after)):
+                    matches.append((start, end, option))
+                start = source.find(term, start + 1)
+    matched = {o['value']: o for start, end, o in matches if not any(a <= start and b >= end and b - a > end - start for a, b, _ in matches)}
+    candidates = [o for o in matched.values() if not any(other['value'] != o['value'] and _under(other, o) for other in matched.values())]
+    if not candidates:
+        return None
+    parents = [o for o in options if all(_under(child, o) for child in candidates)]
+    return max(parents, key=lambda o: len(o['fullPath'].split(',')), default=None)
+
+
+def category_option(criteria=None, keyword='', direction_name=''):
     raw = criteria or {}
     filters = raw.get('wubaSearchFilters') or raw.get('wuba_search_filters') or {}
     value = filters.get('category') or CATEGORIES['default']
+    if not filters.get('category') or value == 'auto':
+        direction, query = _category_from_text(direction_name), _category_from_text(keyword)
+        resolved = query if direction and query and _under(query, direction) else direction or query
+        value = resolved['value'] if resolved else CATEGORIES['default']
     option = next((o for o in CATEGORIES['options'] if o['value'] == value), None)
     if not option:
         raise ValueError('58职位类别无效，请重新选择')

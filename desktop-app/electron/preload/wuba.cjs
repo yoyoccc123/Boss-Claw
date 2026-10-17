@@ -1,6 +1,27 @@
 'use strict';
 
 // 58 job-page DOM contract. No network writes, login automation or CAPTCHA interaction.
+// Native IT category routes, mirrored from wuba-categories.json and checked in regression.
+// This module stays self-contained for its browser/Python DOM evaluation consumers.
+const INTERNET_JOB_ROUTES = new Set([
+  "hulianwangtx", "ruanjianyf", "njavakf", "ncckf", "nphpkf", "netkf",
+  "npythonkf", "giskf", "quanzhangchsh", "ruanjianyfgchsh", "nwebqd", "ncsharpkf",
+  "yyshptxkaifa", "golang", "ruanjianxiangmujingli", "gaoxingnengjisuan", "yidongyf", "nandroid",
+  "nios", "nud", "ncocosdx", "xiaochengxukf", "rengongzhn", "nlpziranyychl",
+  "asryuyinshb", "tuxiangsuanfa", "sousuotjsf", "suanfagchsh", "suanfayanjiuyuan", "jiqixuexi",
+  "shenduxuexi", "jushenzhineng", "aizhinengti", "damoxingweitiao", "dmtdmxyy", "damoxingsuanfa",
+  "guikongsuanfa", "slamsuanfa", "fengkongsuanfa", "zdjsxtgchsh", "zhinengzuocang", "chezaixinxianquan",
+  "zhisuanzhongxinyunwei", "evtolfeikong", "jishucsh", "ceshigchsh", "youxicsh", "yingjiancsh",
+  "ruanjiancsh", "shentoucsh", "yunweijshzhch", "yunweigchsh", "wangluogchsh", "itjshzhch",
+  "xitonggly", "wangluoxtaq", "dba", "yunweikaifa", "shujuzhongxinyunwei", "tongxinbuxian",
+  "yelenganzhuangyunwei", "aishebeizhuangtiao", "shujukffx", "etlgchsh", "shujuck", "shujukf",
+  "shujufxsh", "shujucj", "xiangmugl", "xiangmujlzhg", "xiangmuzhyzhl", "tongxinxmzhy",
+  "tongxinxmjl", "xuqiufxgchsh", "chanpinjl", "chanpinjld", "chanpinzhy", "nyouxich",
+  "chanpinzj", "chanpinvp", "dianshangchanpin", "aichanpin", "shujuchanpin", "yingjianchanpin",
+  "jishugl", "jishujl", "jishuzj", "cto", "ntongxin", "tongxinjshgchsh",
+  "yidongtxgchsh", "dianxinwlgchsh", "youxianchshgchsh", "wuxianshptxgchsh", "tongxinbzhhgchsh", "hexinwanggchsh",
+  "tongxincshgchsh", "kuandaizhuangwei", "shujutongxin", "guangwangluo", "wuxiantianxiangchsh",
+]);
 const APPLY = ['申请职位', '立即申请', '投递简历', '立即投递'];
 const ALREADY = ['已申请', '已投递', '申请成功', '投递成功'];
 const ACTIONS = '.pos_operate .applyJobBtn, .applyJobBtn';
@@ -28,7 +49,9 @@ function jobIdentity(value) {
     if (!/^https?:$/.test(u.protocol) || !(u.hostname === '58.com' || u.hostname.endsWith('.58.com'))) return '';
     // A posting number alone cannot turn a housing/product or redirect URL into a job detail.
     const m = u.pathname.match(/\/(?:tech|zhaopin|renli|caiwu|kefu|yewu|sales|shangwu|fuwuyuan|yingye|wuliucangchu|shengchankaifa|jiaoyupeixun|sheji|siji|baojie|baomu|jiudian|meirongjianshen|xiaoshou|kuaidi|zhaogong|jinrongbaoxian|yiyuanyiliao|zplvyoujiudian|zpshengchankaifa|zpjianshenmeirong|zpanmo|zpshangmao|zpwenyitiyu|zpsiji|zpwuliucangchu|hulianwangtx|ruanjianyf|npythonkf|rengongzhn|aizhinengti|dmtdmxyy|quanzhangchsh|nwebqd|chanpinjl|jishucsh|jishugl|ntongxin|shujukffx|xiangmugl|yidongyf|yunweijshzhch|zhikonganfang)\/(\d{8,})x\.shtml$/i);
-    return m?.[1] || '';
+    if (m) return m[1];
+    const detail = u.pathname.match(/^\/([a-z0-9]+)\/(\d{8,})x\.shtml$/i);
+    return detail && INTERNET_JOB_ROUTES.has(detail[1].toLowerCase()) ? detail[2] : '';
   } catch { return ''; }
 }
 function searchScopeMatches(current, expected) {

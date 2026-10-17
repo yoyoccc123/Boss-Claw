@@ -14,6 +14,7 @@ import {
   Alert,
   AutoComplete,
   Button,
+  Cascader,
   Checkbox,
   Input,
   InputNumber,
@@ -65,7 +66,8 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { useSettingsStore, PROVIDER_DEFAULTS } from '@/store/useSettingsStore';
-import { WUBA_CATEGORIES, WUBA_NATIVE_FILTERS } from '@/lib/bossclaw/wubaSearch';
+import { WUBA_CATEGORY_TREE, WUBA_NATIVE_FILTERS, isWubaCategoryAutomatic, resolveWubaCategory, wubaCategoryLabel, wubaCategoryPath } from '@/lib/bossclaw/wubaSearch';
+import { selectedDirectionItems } from '@/lib/bossclaw/directions';
 import { useAppStore, ThemeMode } from '@/store/useAppStore';
 import type { SettingsTabKey } from '@/store/useAppStore';
 import { callModel, clearAICache, getAICacheStats, getLLMUsageStats, resetLLMUsageStats } from '@/lib/bossclaw/llm';
@@ -181,6 +183,13 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
     visibleRef.current = isVisible;
   }, [isVisible]);
   const { config, setConfig, setModel, applyProviderDefaults, isLLMConfigured } = useSettingsStore();
+  const directionPlan = useDataStore(s => s.directionPlan);
+  const wubaAutomatic = isWubaCategoryAutomatic(config.wubaSearchFilters);
+  const wubaDirectionPreview = selectedDirectionItems(directionPlan).map(direction => ({
+    id: direction.id, name: direction.name,
+    categories: [...new Set((config.collectWithoutKeyword ? [''] : direction.keywords)
+      .map(keyword => wubaCategoryLabel(resolveWubaCategory(undefined, direction.name, keyword).value)))],
+  }));
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
   const setRoute = useAppStore((s) => s.setRoute);
@@ -1056,11 +1065,23 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                       <div data-testid="wuba-search-filters" style={{ marginTop: 14 }}>
                         <Text strong>58 搜索筛选</Text>
                         <div className="settings-grid" style={{ marginTop: 8 }}>
-                          <div className="sg-item">
+                          <div className="sg-item" data-testid="wuba-occupation">
                             <span className="field-label">职位类别</span>
-                            <Select showSearch optionFilterProp="label" value={config.wubaSearchFilters?.category || WUBA_CATEGORIES.default}
-                              onChange={value => setConfig({ wubaSearchFilters: { ...config.wubaSearchFilters, category: value } })}
-                              options={WUBA_CATEGORIES.options.map(o => ({ value: o.value, label: o.label }))} />
+                            <Select data-testid="wuba-category-mode" value={wubaAutomatic ? 'auto' : 'manual'}
+                              onChange={value => setConfig({ wubaSearchFilters: { ...config.wubaSearchFilters, category: value === 'auto' ? 'auto' : 'hulianwangtx' } })}
+                              options={[{ value: 'auto', label: '跟随投递方向' }, { value: 'manual', label: '手动选择' }]} />
+                            {!wubaAutomatic && (
+                            <Cascader changeOnSelect allowClear={false} multiple={false}
+                              value={wubaCategoryPath(config.wubaSearchFilters?.category)}
+                              options={WUBA_CATEGORY_TREE}
+                              onChange={values => {
+                                const category = values[values.length - 1];
+                                if (typeof category === 'string') setConfig({ wubaSearchFilters: { ...config.wubaSearchFilters, category } });
+                              }}
+                              showSearch={{ filter: (input, path) => path.some(o => o.label.toLowerCase().includes(input.trim().toLowerCase())) }}
+                              placeholder="选择方向和细分岗位" style={{ width: '100%', marginTop: 8 }}
+                              popupMenuColumnStyle={{ minWidth: 168, maxWidth: 280 }} />
+                            )}
                           </div>
                           <div className="sg-item">
                             <span className="field-label">发布时间</span>
@@ -1082,7 +1103,13 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                             );
                           })}
                         </div>
-                        <Text type="secondary" style={{ fontSize: 12 }}>先限定职位类别，再在类别内按关键词搜索，默认互联网/通信；无结果不会退回全职总类。职位类别与公司行业独立，与网页一致为单选。通用多选或跨档范围无法对应时，不附加该项，可在此单独选择。</Text>
+                        {wubaAutomatic && (
+                          <div data-testid="wuba-category-preview" style={{ margin: '8px 0', fontSize: 12 }}>
+                            {wubaDirectionPreview.length ? wubaDirectionPreview.map(d => <div key={d.id}>{d.name}：{d.categories.join('；')}</div>)
+                              : '请先设置投递方向；暂未匹配时使用互联网/通信。'}
+                          </div>
+                        )}
+                        <Text type="secondary" style={{ fontSize: 12 }}>默认按投递方向选择类别，关键词只在对应方向内细分；无法准确对应时使用互联网/通信，无结果不会退回全职总类。手动选择可覆盖所有方向，可逐级选择上级或细分岗位，也可搜索名称。原有手动类别继续保留，可切换为跟随投递方向。职位类别与公司行业独立。通用多选或跨档范围无法对应时，可在此单独选择。</Text>
                       </div>
                     )}
                   </div>

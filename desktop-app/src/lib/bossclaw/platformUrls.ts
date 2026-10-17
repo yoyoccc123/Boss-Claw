@@ -19,7 +19,7 @@ import { buildJobSearchUrl, RANDOM_COLLECT_LABEL } from './searchUrl';
 import wubaSite from '../../../camoufox/platforms/wuba-site.json';
 import { normalizeProvinceName, PROVINCE_CITIES } from './locationFilter';
 import { normalizeTargetLocations } from './targetLocations';
-import { wubaCategory, wubaFilterParams } from './wubaSearch';
+import { isWubaCategoryAutomatic, resolveWubaCategory, wubaFilterParams } from './wubaSearch';
 import type { WubaSearchFilters } from './types';
 
 // ==================== 猎聘 liepin ====================
@@ -346,7 +346,7 @@ export function expandWubaSearchLocations(locations: readonly string[]): string[
   return [...result];
 }
 
-export function buildWubaSearchUrl(query: { keyword?: string; city?: string; page?: number; salary?: string; criteria?: PlatformSearchCriteria } = {}): string {
+export function buildWubaSearchUrl(query: { keyword?: string; directionName?: string; city?: string; page?: number; salary?: string; criteria?: PlatformSearchCriteria } = {}): string {
   const types = query.criteria?.employmentTypes || [];
   if (types.length && types.every(t => t === '兼职')) throw new Error('58兼职是独立招聘页面，当前接入全职招聘列表；请调整求职类型后采集');
   const city = String(query.city || '').trim().replace(/市$/, '');
@@ -355,7 +355,7 @@ export function buildWubaSearchUrl(query: { keyword?: string; city?: string; pag
   const slug = cities[city];
   if (!slug) throw new Error(`58同城暂未登记城市“${city}”，请选择已支持城市后采集`);
   const page = Math.max(1, Math.floor(Number(query.page) || 1));
-  const category = wubaCategory(query.criteria?.wubaSearchFilters);
+  const category = resolveWubaCategory(query.criteria?.wubaSearchFilters, query.directionName, query.keyword);
   const filters = wubaFilterParams({ ...query.criteria, salary: query.salary ?? query.criteria?.salary });
   const path = Object.entries(filters).filter(([key]) => key !== 'postdate').map(([key, value]) => `pve_${key}_${value}`).join('_');
   const params: Record<string, string> = {};
@@ -374,6 +374,7 @@ export function buildWubaSearchUrl(query: { keyword?: string; city?: string; pag
 // ==================== 统一入口 ====================
 export interface PlatformSearchQuery {
   keyword?: string;
+  directionName?: string;
   city?: string;
   salary?: string;
   page?: number;
@@ -493,43 +494,52 @@ export function buildPlatformSearchQueue(
   const locations = platform === 'wuba' ? expandWubaSearchLocations(requestedLocations) : requestedLocations;
   const employmentTypes = config.employmentTypes?.filter(Boolean).length ? config.employmentTypes : ['不限'];
   const criteria = platformSearchCriteria(config);
+  const itemCriteria = (directionName = '', keyword = ''): PlatformSearchCriteria => platform === 'wuba'
+    ? { ...criteria, wubaSearchFilters: { ...criteria.wubaSearchFilters, category: resolveWubaCategory(criteria.wubaSearchFilters, directionName, keyword).value } }
+    : criteria;
+  const directions = selectedDirectionItems(directionPlan);
 
   const queue: PlatformSearchQueueItem[] = [];
   const seen = new Set<string>();
 
   // 无关键字采集：同 buildSearchQueue —— 只删除关键词字段，其余筛选按用户设置保留。
   if (config.collectWithoutKeyword) {
-    for (const location of locations) {
-      for (const employmentType of employmentTypes) {
-        const url = buildPlatformSearchUrl(platform, {
-          city: location, salary: config.salary, page: 1, criteria,
-        });
-        if (seen.has(url)) continue;
-        seen.add(url);
-        queue.push({
-          platform, url, keyword: '', location, employmentType, criteria,
-          directionId: '',
-          directionName: RANDOM_COLLECT_LABEL,
-          directionPriority: 0,
-          directionScore: 0,
-        });
+    // Without a keyword, 58 still searches each configured occupation rather than all full-time jobs.
+    const categoryDirections = platform === 'wuba' && isWubaCategoryAutomatic(criteria.wubaSearchFilters) && directions.length ? directions : [null];
+    for (const direction of categoryDirections) {
+      const resolvedCriteria = itemCriteria(direction?.name);
+      for (const location of locations) {
+        for (const employmentType of employmentTypes) {
+          const url = buildPlatformSearchUrl(platform, {
+            city: location, salary: config.salary, page: 1, criteria: resolvedCriteria,
+          });
+          if (seen.has(url)) continue;
+          seen.add(url);
+          queue.push({
+            platform, url, keyword: '', location, employmentType, criteria: resolvedCriteria,
+            directionId: direction?.id || '',
+            directionName: direction?.name || RANDOM_COLLECT_LABEL,
+            directionPriority: direction?.priority || 0,
+            directionScore: direction?.score || 0,
+          });
+        }
       }
     }
     return queue;
   }
 
-  const directions = selectedDirectionItems(directionPlan);
   for (const direction of directions) {
     for (const location of locations) {
       for (const keyword of direction.keywords) {
+        const resolvedCriteria = itemCriteria(direction.name, keyword);
         for (const employmentType of employmentTypes) {
           const url = buildPlatformSearchUrl(platform, {
-            keyword, city: location, salary: config.salary, page: 1, criteria,
+            keyword, city: location, salary: config.salary, page: 1, criteria: resolvedCriteria,
           });
           if (seen.has(url)) continue;
           seen.add(url);
           queue.push({
-            platform, url, keyword, location, employmentType, criteria,
+            platform, url, keyword, location, employmentType, criteria: resolvedCriteria,
             directionId: direction.id,
             directionName: direction.name,
             directionPriority: direction.priority,
