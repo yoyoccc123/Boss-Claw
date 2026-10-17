@@ -19,10 +19,14 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const wait = async fn => { for (let i = 0; i < 100; i++) { if (fn()) return; await delay(5); } throw Error('fixture condition timed out'); };
 const secret = 'SYNTHETIC_COOKIE_VALUE_MUST_NOT_BE_LOGGED';
 const cookie = { name: 'PPU', domain: '.58.com', value: secret, session: false, expirationDate: 2000000000 };
-assert.deepEqual(authMetadata(cookie), { name: 'ppu', domain: '58.com', session: false, expires: 2000000000, present: true }); checks++;
+assert.deepEqual(authMetadata(cookie), { platform: 'wuba', name: 'ppu', domain: '58.com', session: false, expires: 2000000000, present: true }); checks++;
 for (const domain of ['evil58.com', '58.com.evil.test', 'zhipin.com', '']) check(authMetadata({ ...cookie, domain }) === null, 'reject unrelated authentication domain');
 check(authMetadata({ ...cookie, name: 'tracking' }) === null, 'tracking cookie is excluded');
 check(authMetadata({ ...cookie, name: 'cloudpassport', domain: '.passport.58.com' })?.name === 'cloudpassport', 'native passport subdomain is included');
+for (const [platform, name, domain] of [['boss', 'wt2', '.zhipin.com'], ['liepin', 'lp_token', '.liepin.com'], ['zhaopin', 'at', '.zhaopin.com'], ['zhaopin', 'rt', '.zhaopin.com'], ['job51', 'J_Ticket', '.51job.com']]) {
+  check(authMetadata({ ...cookie, name, domain })?.platform === platform, 'observe authentication changes for ' + platform);
+  check(authMetadata({ ...cookie, name, domain: domain.slice(1) + '.evil.test' }) === null, 'reject spoofed platform domains for ' + platform);
+}
 
 function mock(flushStore = async () => {}) {
   const app = new EventEmitter(); app.exited = 0;

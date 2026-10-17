@@ -68,12 +68,11 @@ where node >nul 2>&1 || (set "ERRMSG=Node.js not found in PATH" & goto :fail)
 if not exist "node_modules\vite\bin\vite.js"           (set "ERRMSG=node_modules missing, run npm install first" & goto :fail)
 if not exist "node_modules\electron\dist\electron.exe" (set "ERRMSG=electron binary missing, run npm install in desktop-app" & goto :fail)
 
-REM ---- kill stale processes from previous runs (single fast PowerShell pass) ----
-REM      1) this project's Electron instances (main + renderer + gpu + bridge)
-REM      2) anything listening on dev ports 5173-5179 (stale Vite)
-REM      3) Camoufox Python bridge - only needed when starting the dev server
-echo [INFO] Cleaning up stale BossClaw processes ...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*desktop-app*' } | Stop-Process -Force -ErrorAction SilentlyContinue; Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 5173 -and $_.LocalPort -le 5179 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; if('%MODE%' -eq 'dev'){ Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python' -and $_.CommandLine -like '*camoufox_server.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }"
+REM ---- keep an existing Electron owner alive; its native lock will focus the window ----
+REM      Do not force-kill the process that owns browser storage and pending cookie writes.
+REM      Only clean up stale development servers here.
+echo [INFO] Checking development servers; existing BossClaw sessions are preserved ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 5173 -and $_.LocalPort -le 5179 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; if('%MODE%' -eq 'dev'){ Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python' -and $_.CommandLine -like '*camoufox_server.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }"
 
 if /i "%MODE%"=="dev" goto :dev_mode
 

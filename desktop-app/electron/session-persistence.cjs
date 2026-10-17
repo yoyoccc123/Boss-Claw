@@ -2,12 +2,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const WUBA_AUTH = new Set(['ppu', 'ppu.sig', 'cloudpassport', 'passportaccount']);
+const { cookiePlatform } = require('./browser-auth.cjs');
 function authMetadata(cookie) {
+  const platform = cookiePlatform(cookie);
+  if (!platform) return null;
   const name = String(cookie?.name || '').toLowerCase();
   const domain = String(cookie?.domain || '').toLowerCase().replace(/^\.+/, '');
-  if (!WUBA_AUTH.has(name) || (domain !== '58.com' && !domain.endsWith('.58.com'))) return null;
-  return { name, domain, session: Boolean(cookie.session),
+  return { platform, name, domain, session: Boolean(cookie.session),
     expires: Number.isFinite(cookie.expirationDate) ? cookie.expirationDate : null,
     present: Boolean(cookie.value) };
 }
@@ -23,7 +24,7 @@ function createMetadataLog(file) {
         fs.writeFileSync(file, tail.slice(tail.indexOf('\n') + 1));
       }
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n');
+      fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), pid: process.pid, ...entry }) + '\n');
     } catch { /* A diagnostic write must never prevent normal browser use or quitting. */ }
   };
 }

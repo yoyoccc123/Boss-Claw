@@ -30,17 +30,19 @@ export async function smokePackaged({ packaged, fixture, electron, env, run }) {
   };
   const seed = path.join(fixture, 'seed.cjs');
   fs.writeFileSync(seed, [
-    "const {app,BrowserWindow}=require('electron');",
+    "const {app,BrowserWindow,session}=require('electron');",
     "app.setName('BossClaw');app.setPath('userData'," + JSON.stringify(profile) + ");app.setPath('sessionData'," + JSON.stringify(profile) + ");",
     "app.whenReady().then(async()=>{const w=new BrowserWindow({show:false,webPreferences:{nodeIntegration:false,contextIsolation:true}});",
     "try{await w.loadFile(" + JSON.stringify(seedHtml) + ");await w.webContents.executeJavaScript(" +
-      JSON.stringify("(()=>{for(const [k,v]of Object.entries(" + JSON.stringify(keys) + "))localStorage.setItem(k,v);})()") + ");}finally{w.destroy();app.quit();}});",
+      JSON.stringify("(()=>{for(const [k,v]of Object.entries(" + JSON.stringify(keys) + "))localStorage.setItem(k,v);})()") + ");",
+    "const s=session.fromPartition('persist:bossclaw');for(const[name,host]of [['wt2','www.zhipin.com'],['lp_token','www.liepin.com'],['at','www.zhaopin.com'],['rt','www.zhaopin.com'],['PPU','gz.58.com'],['J_Ticket','www.51job.com']])await s.cookies.set({url:'https://'+host,name,value:'offline-release-fixture',httpOnly:true,secure:true,expirationDate:Date.now()/1000+86400});await s.cookies.flushStore();}finally{w.destroy();app.quit();}});",
   ].join('\n'));
   await run(electron, [seed], { env });
   const smokeEnv = { ...env, BOSSCLAW_RELEASE_SMOKE_DIR: fixture, BOSSCLAW_DEBUG: '0', BOSSCLAW_CONTROL: '0' };
   await run(path.join(packaged, 'BossClaw.exe'), [], { env: smokeEnv });
   const result = JSON.parse(fs.readFileSync(path.join(fixture, 'smoke-result.json')));
   assert.ok(result.success, result.error);
+  assert.ok(result.authPreservedPlatforms && Object.keys(result.authPreservedPlatforms).length === 5 && Object.values(result.authPreservedPlatforms).every(Boolean), 'packaged EXE must restore the five synthetic platform logins saved by the previous process');
   const wubaExternal = path.join(packaged, 'resources/camoufox/platforms/wuba-dom.cjs');
   const wubaPreload = path.join(packaged, 'resources/app.asar.unpacked/electron/preload/wuba.cjs');
   assert.ok(fs.readFileSync(wubaExternal).equals(fs.readFileSync(wubaPreload)), '58 DOM rules must match between Python and webview resources');

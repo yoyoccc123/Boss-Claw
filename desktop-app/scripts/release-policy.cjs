@@ -2,7 +2,7 @@
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const OWNER = 'BossClaw-release-v1';
 const SUITES = ['delivery-stop', 'collection-resume', 'collection-goal', 'delivery-throttle',
-  'boss-chat', 'browser-navigation', 'session-persistence', 'zhaopin-greeting', 'wuba', 'resume-facts', 'tailor-iteration', 'resume-variants', 'resume'];
+  'boss-chat', 'browser-navigation', 'session-persistence', 'single-instance', 'zhaopin-greeting', 'wuba', 'resume-facts', 'tailor-iteration', 'resume-variants', 'resume'];
 const same = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 const inside = (parent, target) => {
   const relative = path.relative(path.resolve(parent), path.resolve(target));
