@@ -340,9 +340,9 @@ export function buildSearchQueue(directionPlan: DirectionPlan | null, config: Ap
   }
 
   const directions = selectedDirectionItems(directionPlan);
-  // 城市优先遍历：完成当前城市全部关键词后再切下一城（对齐 AI-BossJob 的「多城市轮询」语义）
-  for (const direction of directions) {
-    for (const location of locations) {
+  // 当前城市按优先级遍历全部方向，再进入下一城市。
+  for (const location of locations) {
+    for (const direction of directions) {
       for (const keyword of direction.keywords) {
         for (const employmentType of employmentTypes) {
           const url = buildJobSearchUrl({ keyword, city: location, jobType: employmentType, experience, degree, scale });
