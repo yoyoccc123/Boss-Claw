@@ -11,6 +11,12 @@ const { spawn, execFile } = require('node:child_process');
 const { runtimePaths } = require('./runtime-paths.cjs');
 const { installSessionPersistence, createMetadataLog } = require('./session-persistence.cjs');
 const releaseSmoke = require('./release-smoke.cjs').configureReleaseSmoke(app, session, nativeImage);
+app.setName('BossClaw');
+let mainWindow = null;
+const { claimSingleInstance } = require('./single-instance.cjs');
+// A duplicate launch must return before profile initialization, cookie reads or migration.
+if (!claimSingleInstance(app, () => mainWindow)) return;
+const { WEBVIEW_AUTH_COOKIE_HINTS, WEBVIEW_PLATFORM_DOMAIN } = require('./browser-auth.cjs');
 // 本地控制桥（供外部 agent / MCP 操作运行中的应用；默认关闭，见 control-bridge.cjs 的开启条件）
 const { startControlBridge, resolveEnablement } = require('./control-bridge.cjs');
 const { createZhaopinNativeChatBindings } = require('./zhaopin-native-chat.cjs');
@@ -328,7 +334,6 @@ const isDev = !app.isPackaged && process.argv.includes('--dev');
 const DEV_URL = 'http://localhost:5173';
 const APP_ID = 'com.bossclaw.desktop';
 
-app.setName('BossClaw');
 // 主窗口图标（nativeImage 加载 .ico，可同时作为大/小图标源：
 // Windows 任务栏缩略图/右键预览小窗取的是窗口 ICON_SMALL，仅设 exe 资源不足，需在此显式设置）。
 const APP_ICON_ICO = runtimePaths(app).icon;
@@ -369,7 +374,6 @@ async function resolveDevUrl() {
 // 最后一次构建产物入口：dev 服务器不可达时的兜底加载目标
 const DIST_INDEX = path.join(__dirname, '..', 'dist', 'index.html');
 
-let mainWindow = null;
 let bridgeProcess = null;
 // 本地控制桥句柄（BOSSCLAW_CONTROL=1 时才非空）
 let controlBridge = null;
@@ -1959,20 +1963,6 @@ ipcMain.on('jc:window-always-on-top-set', (_event, value) => mainWindow?.setAlwa
 //           数组 = 成对条件（如智联 SPA 的 at+rt 需同时存在才认登录）；
 //           其余 = 子串匹配（与 camoufox_server.py PLATFORM_AUTH_COOKIE_HINTS 尽量保持一致；
 //           该表在 Python 侧做同构扩展（=精确/数组成对）后需同步回这里）。
-const WEBVIEW_AUTH_COOKIE_HINTS = {
-  boss: ['wt2'],
-  liepin: ['lp_login', 'lp_token', 'token'],
-  zhaopin: ['zp_auto', 'zp_sign', 'swordman', 'zm_job_pc', ['=at', '=rt']],
-  job51: ['j_ticket', 'sajssp', '51job', 'job51'],
-  wuba: ['=ppu'],
-};
-const WEBVIEW_PLATFORM_DOMAIN = {
-  boss: 'zhipin.com',
-  liepin: 'liepin.com',
-  zhaopin: 'zhaopin.com',
-  job51: '51job.com',
-  wuba: '58.com',
-};
 function cookieUrl(c) {
   if (c.url) return c.url;
   const d = String(c.domain || '').replace(/^\.+/, '');
@@ -2191,9 +2181,7 @@ ipcMain.on('jc:bridge-control', (_event, type) => {
   if (type === 'stop' && bridgeProcess) { try { bridgeProcess.kill(); } catch {} bridgeProcess = null; }
 });
 
-// 说明：不启用 app.requestSingleInstanceLock()——该 API 在部分受限/沙箱环境下
-// 无其他实例时也会返回 false 导致主进程直接退出（实测 WorkBuddy 沙箱复现）。
-// 进程去重由启动脚本 start-bossclaw.cmd 在启动前统一清理旧进程完成。
+// The single-instance guard above runs before any ready callback can access the profile.
 app.whenReady().then(async () => {
   // 数据版本重置：v3 重建后首次启动清空旧登录态/缓存（一次性，见 resetDataForVersion）。
   // 必须 await 完成后再创建窗口——否则清理会与用户「首次启动后立即登录」的写入竞态。
@@ -2206,7 +2194,7 @@ app.whenReady().then(async () => {
   // 提前初始化还可以触发 session 的磁盘缓存预热，减少 BOSS 首页冷加载延迟。
   try {
     const bossclawSession = session.fromPartition('persist:bossclaw');
-    // Persist fresh 58 login changes promptly and await pending browser writes on normal exit.
+    // Persist login changes for all platforms and await browser writes on normal exit.
     // Do not extend platform expiry or resurrect cookies removed by logout/the server.
     installSessionPersistence({ app, browserSession: bossclawSession, otherSessions: [session.defaultSession],
       record: createMetadataLog(path.join(app.getPath('userData'), 'browser-session-state.jsonl')) });

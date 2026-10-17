@@ -1,6 +1,6 @@
 // 平台登录态检测（渲染进程侧）。
 // 以主进程读取 webview 持久化会话（persist:bossclaw）中的各平台鉴权 cookie 为准。
-// 候选 cookie 名权威源 = main.cjs `WEBVIEW_AUTH_COOKIE_HINTS`（与 camoufox_server.py
+// 候选 cookie 名权威源 = electron/browser-auth.cjs `WEBVIEW_AUTH_COOKIE_HINTS`（与 camoufox_server.py
 // `PLATFORM_AUTH_COOKIE_HINTS` 双源同步），本文件不再重复枚举。
 // 未登录（cookie 缺失/异常）时返回 false / null，供启动自动辅助 / 搜索采集前拦截，
 // 以及底部状态栏展示各平台整体登录情况。

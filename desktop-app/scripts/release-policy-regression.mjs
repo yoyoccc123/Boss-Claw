@@ -31,7 +31,7 @@ try {
   const saved = await manifest(data); await verifyManifest(data, saved); checks++;
   fs.writeFileSync(path.join(data, 'resume.json'), 'tampered');
   await assert.rejects(verifyManifest(data, saved)); checks++;
-  for (const name of ['delivery-stop', 'collection-resume', 'browser-navigation', 'session-persistence', 'wuba', 'resume-facts', 'tailor-iteration', 'resume-variants']) ok(SUITES.includes(name), 'required release gate ' + name);
+  for (const name of ['delivery-stop', 'collection-resume', 'browser-navigation', 'session-persistence', 'single-instance', 'wuba', 'resume-facts', 'tailor-iteration', 'resume-variants']) ok(SUITES.includes(name), 'required release gate ' + name);
   const { resolveRuntimePaths } = createRequire(import.meta.url)('../electron/runtime-paths.cjs');
   const resources = path.join(root, 'installed', 'resources'), userData = path.join(root, 'userData');
   const runtime = resolveRuntimePaths({ packaged: true, appPath: path.join(resources, 'app.asar'), resourcesPath: resources, userData, platform: 'win32' });

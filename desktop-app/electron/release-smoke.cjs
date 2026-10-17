@@ -55,11 +55,15 @@ function configureReleaseSmoke(app, session, nativeImage) {
         if (nativeImage.createFromPath(paths.icon).isEmpty()) throw Error('Packaged application icon is empty');
         const cloak = await import('cloakbrowser');
         if (typeof cloak.launchPersistentContext !== 'function') throw Error('CloakBrowser production dependency was not preserved');
+        const cookies = await session.fromPartition('persist:bossclaw').cookies.get({});
+        const seeds = [['boss','wt2','www.zhipin.com'],['liepin','lp_token','www.liepin.com'],['zhaopin','at','www.zhaopin.com'],['zhaopin','rt','www.zhaopin.com'],['wuba','PPU','gz.58.com'],['job51','J_Ticket','www.51job.com']];
+        const authPreservedPlatforms = Object.fromEntries(seeds.map(([platform]) => [platform, seeds.filter(s => s[0] === platform).every(([,name,host]) => cookies.some(c => c.name === name && c.domain === host && c.value === 'offline-release-fixture'))]));
+        if (!Object.values(authPreservedPlatforms).every(Boolean)) throw Error('Packaged EXE did not restore prior synthetic platform logins');
         if (!app.getAppPath().endsWith('app.asar') || !state.rendered || !state.appPreload || !guestPreloadLoaded ||
             state.resumeVariants !== 2 || state.pending !== 1 || state.autoAssist !== false) throw Error('ASAR UI, preloads or prior file-origin storage failed verification');
         clearTimeout(deadline);
         finish({ success: true, version: app.getVersion(), electronVersion: process.versions.electron, asar: true, guestPreloadLoaded, ...state,
-          externalResourcesVerified: true, cloakModuleLoaded: true, platformRequestsAllowed: false, userProfileUsed: false });
+          externalResourcesVerified: true, cloakModuleLoaded: true, authPreservedPlatforms, platformRequestsAllowed: false, userProfileUsed: false });
       } catch (e) { clearTimeout(deadline); finish({ success: false, error: e.message, events, lastState, platformRequestsAllowed: false }, 1); }
     });
   } };
