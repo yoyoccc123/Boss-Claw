@@ -25,7 +25,7 @@ const log = path.join(logDir, checkOnly ? 'checks.log' : 'release.log');
 const fixtures = path.join(buildRoot, 'test-tmp', pkg.version);
 fs.mkdirSync(fixtures, { recursive: true });
 fs.writeFileSync(path.join(fixtures, '.bossclaw-owned.json'), JSON.stringify({ owner: P.OWNER, kind: 'fixtures' }));
-const env = { ...process.env, TEMP: fixtures, TMP: fixtures, BOSSCLAW_BUILD_ROOT: buildRoot, BOSSCLAW_DEBUG: '0', BOSSCLAW_CONTROL: '0',
+const env = { ...process.env, TEMP: fixtures, TMP: fixtures, BOSSCLAW_TEST_TMP: fixtures, BOSSCLAW_BUILD_ROOT: buildRoot, BOSSCLAW_DEBUG: '0', BOSSCLAW_CONTROL: '0',
   ELECTRON_CACHE: path.join(buildRoot, 'cache/electron'), ELECTRON_BUILDER_CACHE: path.join(buildRoot, 'cache/electron-builder'),
   npm_config_cache: path.join(buildRoot, 'cache/npm') };
 delete env.ELECTRON_RUN_AS_NODE; delete env.BOSSCLAW_RELEASE_SMOKE_DIR;
@@ -110,7 +110,7 @@ try {
       report.smoke = await smokePackaged({ packaged, fixture: path.join(fixtures, 'packaged-smoke'), electron, env, run });
       if (report.smoke.version !== pkg.version) throw Error('Packaged EXE version mismatch');
       const archive = path.join(packaged, 'resources/app.asar'), asar = require('@electron/asar');
-      const requiredSources = ['electron/main.cjs', 'electron/preload/webview.cjs', 'electron/preload/platform-adapters.cjs', 'electron/preload/wuba.cjs', 'electron/preload/boss-chat-context.cjs', 'electron/preload/text-send-control.cjs', 'electron/runtime-paths.cjs',
+      const requiredSources = ['electron/main.cjs', 'electron/session-persistence.cjs', 'electron/preload/webview.cjs', 'electron/preload/platform-adapters.cjs', 'electron/preload/wuba.cjs', 'electron/preload/boss-chat-context.cjs', 'electron/preload/text-send-control.cjs', 'electron/runtime-paths.cjs',
         ...P.files(path.join(project, 'dist')).map(file => path.relative(project, file))];
       for (const relative of requiredSources) {
         const actual = asar.extractFile(archive, path.normalize(relative));
