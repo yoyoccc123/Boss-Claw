@@ -122,6 +122,15 @@ async function host(){
 }
 {
   const h=await host();const wait=h.c.visualCollectInTab('tab',{}),seq=h.sent[0][2].seq;
+  h.c.handleCollectDone({seq:'old',error:'stale page failure'});
+  check(!h.logs.length,'stale search errors cannot become the current stop explanation');
+  h.c.handleCollectDone({seq,reason:'failed',error:'Synthetic native search scope mismatch'});await wait;
+  check(h.c.collectTerminalRef.current==='failed'&&h.logs.some(l=>l[1].includes('Synthetic native search scope mismatch')),'native collection failure is logged with its concrete reason');
+  h.c.handleCollectDone({seq,finalized:true});
+  check(h.c.collectTerminalRef.current==='failed'&&h.logs.length===1,'a finalizer cannot overwrite or duplicate the original failure');
+}
+{
+  const h=await host();const wait=h.c.visualCollectInTab('tab',{}),seq=h.sent[0][2].seq;
   h.c.handleCollectProgress({seq,phase:'list-bottom',status:'加载完毕'});
   const terminal=[...h.timers.values()].find(t=>t.ms===5000);check(!!terminal,'list-bottom has a short completion fallback');
   terminal.fn();await wait;check(h.logs.some(l=>l[1].includes('未收到结束确认')),'missing completion is reported and the wait finishes');

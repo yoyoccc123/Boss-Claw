@@ -361,6 +361,7 @@ export default function Workbench() {
   const collectListReadyLoggedRef = useRef(false);
   // 本次会话已处理过的岗位 URL（无论入库还是被跳过），避免同一卡片被采集循环重复 analyze/打重复日志
   const ingestedSeenRef = useRef<Set<string>>(new Set());
+  const ingestAcknowledgmentsRef = useRef(new Map<string, { processed: boolean; callbacks: Set<() => void> }>());
   // 可视化采集：该平台未登录 / 登录态已失效（由页内 loginWallDetected() 回传 login-required）。
   // 属「平台级」故障 —— 只收口本平台本批剩余搜索组合，其余平台照常采集（与 collectFaultScope 口径一致）。
   const visualLoginBlockedRef = useRef('');
@@ -1070,7 +1071,17 @@ export default function Workbench() {
   }, [addLog]);
 
   const ingestJob = useCallback(async (job: any, generation = collectBatchGenerationRef.current, onProcessed?: () => void): Promise<boolean> => {
-    const processed = () => { if (generation === collectBatchGenerationRef.current) onProcessed?.(); return false; };
+    let seenKey = '';
+    const processed = () => {
+      if (generation !== collectBatchGenerationRef.current) return false;
+      const acknowledgment = seenKey ? ingestAcknowledgmentsRef.current.get(seenKey) : undefined;
+      if (acknowledgment) {
+        acknowledgment.processed = true;
+        for (const callback of acknowledgment.callbacks) callback();
+        acknowledgment.callbacks.clear();
+      } else onProcessed?.();
+      return false;
+    };
     if (generation !== collectBatchGenerationRef.current) return false;
     job = normalizeJobDetailMetadata(job);
     const platform: JobPlatform = job.platform || 'boss';
@@ -1103,9 +1114,19 @@ export default function Workbench() {
       return processed();
     }
     // 本次会话去重：同一岗位无论入库还是被过滤跳过，都不重复 analyze/打日志（采集滚动常重复扫到同一卡片）
-    const seenKey = normUrl || jobId.toLowerCase();
-    if (seenKey && ingestedSeenRef.current.has(seenKey)) return false;
-    if (seenKey) ingestedSeenRef.current.add(seenKey);
+    seenKey = normUrl || jobId.toLowerCase();
+    if (seenKey) {
+      const acknowledgment = ingestAcknowledgmentsRef.current.get(seenKey);
+      if (acknowledgment) {
+        // A repeated card still needs its own checkpoint acknowledgment. An in-flight/failed
+        // analysis must not be acknowledged until its original processing actually succeeds.
+        if (acknowledgment.processed) onProcessed?.();
+        else if (onProcessed) acknowledgment.callbacks.add(onProcessed);
+        return false;
+      }
+      ingestAcknowledgmentsRef.current.set(seenKey, { processed: false, callbacks: new Set(onProcessed ? [onProcessed] : []) });
+      ingestedSeenRef.current.add(seenKey);
+    }
     const hrFilter = cfg.hrActivityFilter || 'any';
     if (hrFilter !== 'any' && !meetsHrActivityFilter(job?.hrActive, hrFilter)) return processed();
     if (cfg.excludeHeadhunters && job?.isHeadhunter) {
@@ -1356,11 +1377,12 @@ export default function Workbench() {
   const handleCollectDone = useCallback((data: any) => {
     if (!collectAwaitingSeqRef.current || data?.seq !== collectAwaitingSeqRef.current) return;
     collectTerminalRef.current = data?.reason || (data?.error ? 'failed' : data?.loginRequired ? 'blocked' : data?.finalized ? 'failed' : 'completed');
+    if (data?.error) addLog('warn', `本组采集未完成：${String(data.error).slice(0, 400)}`);
     // 不采用 webview 回传的 processed（卡片 key 去重不稳定，会虚高如"5181"）；
     // 「已处理」以 batch 内实际入库/入眼的唯一岗位数（ingestedSeenRef.size）为准，见 runVisualCollect。
     const finish = collectDoneResolve.current;
     if (finish) { collectDoneResolve.current = null; finish(); }
-  }, []);
+  }, [addLog]);
 
   // 单标签内启动可视化采集，返回由 collect-done 回传 resolve 的 Promise（带超时兜底）
   const visualCollectInTab = useCallback((tabId: string, opts: any): Promise<void> => {
@@ -1469,6 +1491,7 @@ export default function Workbench() {
     const generation = collectBatchGenerationRef.current;
     if (checkCollectionGoal(platform)) return 'skip';
     ingestedSeenRef.current = new Set(); // 新一采集批重置去重，允许重新扫描
+    ingestAcknowledgmentsRef.current = new Map();
     collectListReadyLoggedRef.current = false; // 新一批重新记录首个「列表就绪」
     visualLoginBlockedRef.current = '';
     // BOSS 登录态由 wt2 cookie 判定（webview 与隐身引擎共用同一会话）；
@@ -1792,7 +1815,8 @@ export default function Workbench() {
       const got = Math.max(0, ingestedSeenRef.current.size - before);
       if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
       if (checkpointContext.unresolved.size || collectTerminalRef.current !== 'completed') {
-        addLog('warn', '本组尚未完成，已保存城市、关键词和已处理岗位；下次可继续采集');
+        const terminalLabels: Record<string, string> = { completed: '已采完', stopped: '已中止', limit: '达到本组采集上限', blocked: '页面要求登录或验证', failed: '采集异常' };
+        addLog('warn', `本组尚未完成（页面：${terminalLabels[collectTerminalRef.current] || '未收到结束确认'}；未完成分析确认：${checkpointContext.unresolved.size} 个），已保存城市、关键词和已处理岗位；下次可继续采集`);
         visualActiveRef.current = false;
         break;
       }
@@ -1847,6 +1871,7 @@ export default function Workbench() {
     if (checkCollectionGoal(platform)) return 'skip';
     const generation = collectBatchGenerationRef.current;
     ingestedSeenRef.current = new Set(); // 新一采集批重置去重，允许重新扫描
+    ingestAcknowledgmentsRef.current = new Map();
     const cfg0 = useSettingsStore.getState().config;
     const cfx0 = cfg0.camoufox || { enabled: false, os: 'windows', pages: 1, prefer: false };
     if (!cfx0.enabled) { message.warning('请在「设置 → Camoufox 隐身引擎」启用后再使用'); return 'skip'; }
