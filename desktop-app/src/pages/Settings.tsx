@@ -65,7 +65,7 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { useSettingsStore, PROVIDER_DEFAULTS } from '@/store/useSettingsStore';
-import { WUBA_NATIVE_FILTERS } from '@/lib/bossclaw/wubaSearch';
+import { WUBA_CATEGORIES, WUBA_NATIVE_FILTERS } from '@/lib/bossclaw/wubaSearch';
 import { useAppStore, ThemeMode } from '@/store/useAppStore';
 import type { SettingsTabKey } from '@/store/useAppStore';
 import { callModel, clearAICache, getAICacheStats, getLLMUsageStats, resetLLMUsageStats } from '@/lib/bossclaw/llm';
@@ -1057,6 +1057,12 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                         <Text strong>58 搜索筛选</Text>
                         <div className="settings-grid" style={{ marginTop: 8 }}>
                           <div className="sg-item">
+                            <span className="field-label">职位类别</span>
+                            <Select showSearch optionFilterProp="label" value={config.wubaSearchFilters?.category || WUBA_CATEGORIES.default}
+                              onChange={value => setConfig({ wubaSearchFilters: { ...config.wubaSearchFilters, category: value } })}
+                              options={WUBA_CATEGORIES.options.map(o => ({ value: o.value, label: o.label }))} />
+                          </div>
+                          <div className="sg-item">
                             <span className="field-label">发布时间</span>
                             <Select value={config.wubaSearchFilters?.publishedWithinDays || 0}
                               onChange={value => setConfig({ wubaSearchFilters: { ...config.wubaSearchFilters, publishedWithinDays: value } })}
@@ -1076,7 +1082,7 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                             );
                           })}
                         </div>
-                        <Text type="secondary" style={{ fontSize: 12 }}>仅用于58搜索，与网页一致为单选。通用设置的多选或跨档范围无法对应时，不附加该项，请在此单独选择。发布时间与HR活跃度分别设置。</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>先限定职位类别，再在类别内按关键词搜索，默认互联网/通信；无结果不会退回全职总类。职位类别与公司行业独立，与网页一致为单选。通用多选或跨档范围无法对应时，不附加该项，可在此单独选择。</Text>
                       </div>
                     )}
                   </div>

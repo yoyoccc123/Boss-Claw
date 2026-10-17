@@ -1,6 +1,6 @@
 {
   "name": "bossclaw-desktop",
-  "version": "2.5.48",
+  "version": "2.5.49",
   "description": "BossClaw —— 面向求职者的本地 AI 投递助手",
   "private": true,
   "author": "YanQuan",
@@ -69,6 +69,10 @@
       "!**/.venv/**"
     ],
     "extraResources": [
+      {
+        "from": "electron/preload/wuba-categories.json",
+        "to": "camoufox/platforms/wuba-categories.json"
+      },
       {
         "from": "electron/preload/wuba.cjs",
         "to": "camoufox/platforms/wuba-dom.cjs"

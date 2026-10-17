@@ -11,7 +11,9 @@ import { spawnSync } from 'node:child_process';
 const require = createRequire(import.meta.url), root = dirname(dirname(fileURLToPath(import.meta.url)));
 const fixture = mkdtempSync(join(tmpdir(), 'bossclaw-wuba-search-'));
 const metadata = JSON.parse(readFileSync(join(root, 'camoufox/platforms/wuba-filters.json'), 'utf8'));
-const compiled = await build({ stdin: { contents: "export * from './src/lib/bossclaw/platformUrls';export * from './src/lib/bossclaw/wubaSearch';export {DEFAULT_CONFIG} from './src/lib/bossclaw/defaults';", resolveDir: root, loader: 'ts' },
+const categories = JSON.parse(readFileSync(join(root, 'electron/preload/wuba-categories.json'), 'utf8'));
+const A = require('../electron/preload/platform-adapters.cjs');
+const compiled = await build({ stdin: { contents: "export * from './src/lib/bossclaw/platformUrls';export * from './src/lib/bossclaw/wubaSearch';export * from './src/lib/bossclaw/collectionResume';export {DEFAULT_CONFIG} from './src/lib/bossclaw/defaults';", resolveDir: root, loader: 'ts' },
   bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
 const env = { module: { exports: {} }, URL, URLSearchParams, Date, localStorage: { getItem: () => null } };
 vm.createContext(env); vm.runInContext(compiled.outputFiles[0].text, env); const T = env.module.exports;
@@ -44,8 +46,27 @@ const urls = ['Vibe Coding', 'C++', 'AI / Python'].flatMap(keyword => [1, 2].map
 for (const c of urls) {
   const u = new URL(c.url);
   check(u.searchParams.get('key') === c.keyword && u.searchParams.get('final') === '1' && !c.url.includes('+'), 'native keyword preserves spaces/literal plus and final classification flag');
-  check(u.pathname === `/quanzhizhaopin/${c.page > 1 ? 'pn2/' : ''}pve_5354_5000_7999_pve_5356_6_pve_5357_4_pve_5363_245/`, 'all native path fields and page survive together');
+  check(u.pathname === `/hulianwangtx/${c.page > 1 ? 'pn2/' : ''}pve_5354_5000_7999_pve_5356_6_pve_5357_4_pve_5363_245/`, 'occupation, all native path fields and page survive together');
 }
+check(T.wubaCategory().value === 'hulianwangtx' && T.wubaCategory({ industry: '计算机软件' }).value === 'hulianwangtx', 'legacy filters default to an IT occupation independently of employer industry');
+const categoryUrls = categories.options.flatMap(option => [1, 2].map(page => {
+  const criteria = { wubaSearchFilters: { ...overrides, category: option.value } };
+  const url = T.buildWubaSearchUrl({ city: '广州', keyword: 'AI工具应用', page, criteria });
+  check(new URL(url).pathname.startsWith(`/${option.value}/`) && A.isListPage('wuba', url), 'every supported occupation is an actual recognized list route: ' + option.label);
+  check(new URL(url).searchParams.get('fullPath') === option.fullPath, 'native full occupation hierarchy is retained: ' + option.label);
+  return { criteria, page, url };
+}));
+assert.throws(() => T.buildWubaSearchUrl({ city: '广州', criteria: { wubaSearchFilters: { category: '../quanzhizhaopin' } } }), /职位类别无效/);
+check(!A.isListPage('wuba', 'https://gz.58.com/zufang/') && !A.isListPage('wuba', 'https://evil58.com/hulianwangtx/'), 'occupation support cannot turn unrelated pages into job lists');
+const config = { ...structuredClone(T.DEFAULT_CONFIG), targetLocations: ['广州'] };
+const direction = { items: [{ id: 'python', name: 'Python开发', enabled: true, keywords: ['Python'], priority: 1, score: 80 }] };
+const oldQueue = T.buildPlatformSearchQueue('wuba', direction, config);
+const oldSignature = T.collectionSignature(oldQueue, config);
+const checkpoint = T.acknowledgeCollectionJob(T.beginCollection(oldQueue, oldSignature).checkpoint, 'old-factory-card', '旧总类岗位');
+config.wubaSearchFilters = { category: 'npythonkf' };
+const newQueue = T.buildPlatformSearchQueue('wuba', direction, config);
+const next = T.beginCollection(newQueue, T.collectionSignature(newQueue, config), checkpoint);
+check(next.changed && !next.checkpoint.processedKeys.length && newQueue.every(q => new URL(q.url).pathname.startsWith('/npythonkf/')), 'changing native occupation invalidates stale city/keyword card acknowledgments');
 
 // Actual Settings controls and Zustand persistence, with network blocked by the Electron main process.
 await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import Settings from './src/pages/Settings';import{useSettingsStore}from'./src/store/useSettingsStore';import{useAppStore}from'./src/store/useAppStore';import{platformSearchCriteria,buildWubaSearchUrl}from'./src/lib/bossclaw/platformUrls';
@@ -69,9 +90,28 @@ const runChecks = async function (source) {
   check(!W.listState(d).endReached && W.collect(d, 'https://gz.58.com/quanzhizhaopin/').length === 1, 'a real job mentioning empty-state words is retained');
   d.querySelector('ul').insertAdjacentHTML('afterbegin', marker.replace('暂无相关职位', '搜索结果：<span>暂无符合条件岗位</span>'));
   check(W.collect(d, 'https://gz.58.com/quanzhizhaopin/').length === 0, 'prefixed and wrapped native end marker excludes later cards');
+  const scope = 'https://gz.58.com/hulianwangtx/?fullPath=674%2C413795';
+  const categorized = (id, category) => card(id).replace('<a href=', `<a tracelogext='${JSON.stringify({ new_catepath: category })}' href=`);
+  d = parse(categorized('22222222222222', '674,413795,413796,413801') + categorized('33333333333333', '674,413249,413425') + categorized('44444444444444', '674,413246,413287,413295'));
+  check(W.collect(d, scope).map(j => j.jobId).join() === '22222222222222' && W.listState(d, scope).excludedCategoryCount === 2, 'native per-card category removes factory and mislabeled legacy-tech non-IT results');
+  const unknown = parse(card('33333333333333') + categorized('44444444444444', '674,413795,invalid') + card('55555555555555').replace('<a href=', '<a tracelogext="invalid-json" href='));
+  check(!W.collect(unknown, scope).length, 'missing, malformed and non-numeric occupation metadata cannot enter a restricted search');
+  Object.defineProperty(d, 'readyState', { value: 'loading', configurable: true });
+  check(!W.collect(d, scope).length && !W.listState(d, scope).endReached, 'streaming native DOM cannot publish cards before the trailing boundary is parsed');
+  d = parse('<div class="noData">抱歉，暂时没有符合该条件的职位，请重新修改搜索条件后再搜索、筛选</div><div id="pc_list_rec">' + categorized('33333333333333', '674,413249,413425') + '</div>');
+  check(W.listState(d, scope).endReached && W.collect(d, scope).length === 0 && W.listState(d, scope).recommendationCount === 1, 'native noData completes empty pages while supplementary recommendations stay excluded');
+  d = parse('<div id="list_con">' + categorized('22222222222222', '674,413795,413796,413801') + '</div><div id="pc_list_rec">' + categorized('55555555555555', '674,413795,413796,413801') + '</div>');
+  check(W.collect(d, scope).map(j => j.jobId).join() === '22222222222222', 'recommendation containers outside the native result list never enter collection, even in the same category');
+  check(W.jobIdentity('https://gz.58.com/rengongzhn/22222222222222x.shtml') === '22222222222222' && W.jobIdentity('https://gz.58.com/zhikonganfang/22222222222222x.shtml') === '22222222222222', 'native AI and technical testing detail paths remain identifiable');
+  const target = 'https://gz.58.com/npythonkf/?key=Vibe%20Coding&final=1&fullPath=674%2C413795%2C413796%2C413801';
+  check(W.searchScopeMatches(target, target), 'native occupation and keyword scope match');
+  for (const wrong of [target.replace('/npythonkf/', '/quanzhizhaopin/'), target.replace('gz.58.com', 'sz.58.com'), target.replace('Vibe%20Coding', '普工'), target.replace('gz.58.com', 'gz.58.com.evil.test'), target.replace('413795', '413892')]) {
+    check(!W.searchScopeMatches(wrong, target), 'wrong occupation/city/keyword/origin cannot become a matching search');
+  }
   const wait = async (fn, label) => { const end = Date.now() + 8000; while (!fn()) { if (Date.now() > end) throw Error(label); await new Promise(r => setTimeout(r, 30)); } };
   await wait(() => document.querySelector('[data-testid="wuba-search-filters"]'), 'actual 58 settings card rendered');
-  const choices = ['七天以内', '5000-8000元', '本科', '1年以下', '计算机软件'];
+  check(document.querySelector('[data-testid="wuba-search-filters"]').textContent.includes('互联网/通信'), 'actual legacy Settings starts inside the IT occupation');
+  const choices = ['Python开发', '七天以内', '5000-8000元', '本科', '1年以下', '计算机软件'];
   for (let i = 0; i < choices.length; i++) {
     const input = document.querySelectorAll('[data-testid="wuba-search-filters"] .ant-select input')[i];
     input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -81,13 +121,13 @@ const runChecks = async function (source) {
     await new Promise(r => setTimeout(r, 100));
   }
   const selected = window.settings.getState().config.wubaSearchFilters;
-  check(selected.publishedWithinDays === 7 && selected.salary === choices[1] && selected.degree === choices[2] && selected.experience === choices[3] && selected.industry === choices[4], 'actual UI updates all five fields without overwriting previous selections');
-  await wait(() => JSON.parse(localStorage.getItem('bossclaw-settings-v2') || '{}').state?.config?.wubaSearchFilters?.industry === choices[4], 'settings disk persistence');
+  check(selected.category === 'npythonkf' && selected.publishedWithinDays === 7 && selected.salary === choices[2] && selected.degree === choices[3] && selected.experience === choices[4] && selected.industry === choices[5], 'actual UI keeps occupation and all five filters independently');
+  await wait(() => JSON.parse(localStorage.getItem('bossclaw-settings-v2') || '{}').state?.config?.wubaSearchFilters?.industry === choices[5], 'settings disk persistence');
   const saved = JSON.parse(localStorage.getItem('bossclaw-settings-v2')).state;
   const merged = window.settings.persist.getOptions().merge(saved, window.settings.getState());
   check(JSON.stringify(merged.config.wubaSearchFilters) === JSON.stringify(selected), 'saved filters survive hydration');
   const criteria = window.criteria(merged.config), url = window.searchUrl({ city: '广州', keyword: 'Vibe Coding', criteria });
-  check(url.includes('pve_5356_6') && url.includes('pve_5363_245') && url.includes('postdate=') && url.includes('Vibe%20Coding') && url.includes('final=1'), 'saved Settings feed the actual native search URL');
+  check(new URL(url).pathname.startsWith('/npythonkf/') && url.includes('pve_5356_6') && url.includes('pve_5363_245') && url.includes('postdate=') && url.includes('Vibe%20Coding') && url.includes('final=1'), 'saved occupation and Settings feed the actual native search URL');
   return results;
 };
 const reportPath = join(fixture, 'report.json'), entry = join(fixture, 'main.cjs');
@@ -112,25 +152,27 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as home:
    assert filter_params(case['criteria'],now=${now / 1000})==case['params'],case
   for case in json.loads(${JSON.stringify(JSON.stringify(urls))}):
    assert build_search_url(case['keyword'],'广州',page=case['page'],criteria={'wubaSearchFilters':${JSON.stringify(overrides)}})==case['url']
+  for case in json.loads(${JSON.stringify(JSON.stringify(categoryUrls))}):
+   assert build_search_url('AI工具应用','广州',page=case['page'],criteria=case['criteria'])==case['url']
   for value in (2,1.5,-1,'bad'):
    try: filter_params({'wubaSearchFilters':{'publishedWithinDays':value}});raise AssertionError('invalid date accepted')
    except ValueError: pass
   class Page:
-   def __init__(self,jobs,ready,exhausted): self.jobs=jobs;self.ready=ready;self.exhausted=exhausted
+   def __init__(self,jobs,ready,exhausted,scope=True): self.jobs=jobs;self.ready=ready;self.exhausted=exhausted;self.scope=scope
    def on(self,*args): pass
    def evaluate(self,js,*args):
     if 'return W.collect' in js: return self.jobs
-    if 's.endReached||s.resultCount>0' in js: return self.ready
+    if 's.endReached||s.resultCount>0' in js: return self.ready and self.scope
     if 'return W.listState(document).endReached' in js: return self.exhausted
     raise AssertionError(js)
-  for jobs,ready,exhausted in (([],True,True),([{'jobId':'22222222222222','title':'Python实习生'}],True,True),([],False,False)):
-   page=Page(jobs,ready,exhausted);store=Mock();store.completed_combo.return_value=False
+  for jobs,ready,exhausted,scope in (([],True,True,True),([{'jobId':'22222222222222','title':'Python实习生'}],True,True,True),([],False,False,True),([{'jobId':'11111111111111','title':'普工'}],True,False,False)):
+   page=Page(jobs,ready,exhausted,scope);store=Mock();store.completed_combo.return_value=False
    @contextmanager
    def browser(**kwargs): yield page
    with patch.object(base,'progress_store',return_value=store),patch.object(base,'open_browser',browser),patch.object(base,'load_cookies',return_value=[]),patch.object(base,'goto_stable',return_value=True) as navigate,patch.object(base,'risk_text_hit',return_value=None),patch.object(base,'human_sleep'):
     result=WubaCollector().search_jobs('Vibe Coding','广州',pages=5)
    assert navigate.call_count==1,'native boundary or failed page must not load more pages'
-   if ready:
+   if ready and scope:
     assert result['ok'] and result['jobs']==jobs and result['pages']==1
     assert store.mark_combo_done.call_count==1,'completed combo advances exactly once'
     assert store.mark_combo_done.call_args.kwargs['count']==len(jobs)

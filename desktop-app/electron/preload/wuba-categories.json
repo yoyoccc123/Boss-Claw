@@ -1,0 +1,57 @@
+{
+  "source": "https://gz.58.com/quanzhizhaopin/",
+  "verifiedOn": "2026-10-17",
+  "default": "hulianwangtx",
+  "options": [
+    {
+      "label": "全部职位（不限类别）",
+      "value": "quanzhizhaopin",
+      "fullPath": "674"
+    },
+    {
+      "label": "互联网/通信",
+      "value": "hulianwangtx",
+      "fullPath": "674,413795"
+    },
+    {
+      "label": "软件研发",
+      "value": "ruanjianyf",
+      "fullPath": "674,413795,413796"
+    },
+    {
+      "label": "Python开发",
+      "value": "npythonkf",
+      "fullPath": "674,413795,413796,413801"
+    },
+    {
+      "label": "人工智能",
+      "value": "rengongzhn",
+      "fullPath": "674,413795,413812"
+    },
+    {
+      "label": "AI智能体工程师",
+      "value": "aizhinengti",
+      "fullPath": "674,413795,413812,418084"
+    },
+    {
+      "label": "多模态大模型应用工程师",
+      "value": "dmtdmxyy",
+      "fullPath": "674,413795,413812,418086"
+    },
+    {
+      "label": "全栈工程师",
+      "value": "quanzhangchsh",
+      "fullPath": "674,413795,413796,413803"
+    },
+    {
+      "label": "Web前端",
+      "value": "nwebqd",
+      "fullPath": "674,413795,413796,413805"
+    },
+    {
+      "label": "产品经理",
+      "value": "chanpinjl",
+      "fullPath": "674,413795,413970"
+    }
+  ]
+}

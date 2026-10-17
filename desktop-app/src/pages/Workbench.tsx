@@ -1767,6 +1767,7 @@ export default function Workbench() {
       //   listScrollRounds（每批下拉轮数上限，0=滚到物理底部/连续空轮停止）、
       //   maxJobsPerRun（单次采集兜底上限，0 或缺失沿用 webview 内置 1000 防失控）。
       await visualCollectInTab(tabId, {
+        expectedSearchUrl: platform === 'wuba' ? item.url : undefined,
         settleMs: collectSpeedMs,
         listTimeoutMs: pageTimeoutMs,
         autoScroll: config.listAutoScroll !== false,

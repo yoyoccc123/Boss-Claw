@@ -37,6 +37,8 @@ export interface ImageResume {
 }
 
 export interface WubaSearchFilters {
+  /** Native occupation category, distinct from the employer's industry. */
+  category?: string;
   salary?: string;
   degree?: string;
   experience?: string;

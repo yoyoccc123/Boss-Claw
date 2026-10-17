@@ -27,9 +27,18 @@ function jobIdentity(value) {
     const u = new URL(value);
     if (!/^https?:$/.test(u.protocol) || !(u.hostname === '58.com' || u.hostname.endsWith('.58.com'))) return '';
     // A posting number alone cannot turn a housing/product or redirect URL into a job detail.
-    const m = u.pathname.match(/\/(?:tech|zhaopin|renli|caiwu|kefu|yewu|sales|shangwu|fuwuyuan|yingye|wuliucangchu|shengchankaifa|jiaoyupeixun|sheji|siji|baojie|baomu|jiudian|meirongjianshen|xiaoshou|kuaidi|zhaogong|jinrongbaoxian|yiyuanyiliao|zplvyoujiudian|zpshengchankaifa|zpjianshenmeirong|zpanmo|zpshangmao|zpwenyitiyu|zpsiji|zpwuliucangchu)\/(\d{8,})x\.shtml$/i);
+    const m = u.pathname.match(/\/(?:tech|zhaopin|renli|caiwu|kefu|yewu|sales|shangwu|fuwuyuan|yingye|wuliucangchu|shengchankaifa|jiaoyupeixun|sheji|siji|baojie|baomu|jiudian|meirongjianshen|xiaoshou|kuaidi|zhaogong|jinrongbaoxian|yiyuanyiliao|zplvyoujiudian|zpshengchankaifa|zpjianshenmeirong|zpanmo|zpshangmao|zpwenyitiyu|zpsiji|zpwuliucangchu|hulianwangtx|ruanjianyf|npythonkf|rengongzhn|aizhinengti|dmtdmxyy|quanzhangchsh|nwebqd|chanpinjl|jishucsh|jishugl|ntongxin|shujukffx|xiangmugl|yidongyf|yunweijshzhch|zhikonganfang)\/(\d{8,})x\.shtml$/i);
     return m?.[1] || '';
   } catch { return ''; }
+}
+function searchScopeMatches(current, expected) {
+  try {
+    const actual = new URL(current), wanted = new URL(expected);
+    return /^https?:$/.test(wanted.protocol) && /^[a-z0-9-]+\.58\.com$/i.test(wanted.hostname)
+      && actual.origin === wanted.origin && actual.pathname.split('/')[1] === wanted.pathname.split('/')[1]
+      && (!wanted.searchParams.has('fullPath') || actual.searchParams.get('fullPath') === wanted.searchParams.get('fullPath'))
+      && (actual.searchParams.get('key') || '').trim() === (wanted.searchParams.get('key') || '').trim();
+  } catch { return false; }
 }
 function pick(doc, selectors) {
   for (const s of selectors) { const el = doc.querySelector(s); if (el && text(el)) return text(el); }
@@ -108,7 +117,7 @@ function selectedResume(doc, title) {
   return { resumeId: String(selected.value), button };
 }
 function cardJob(card, href) {
-  if (!searchCards(card.ownerDocument).cards.includes(card)) return null;
+  if (!searchCards(card.ownerDocument, href).cards.includes(card)) return null;
   const a = card.querySelector('.job_name a[href]');
   if (!a) return null;
   let url; try { url = new URL(a.getAttribute('href'), href).href; } catch { return null; }
@@ -122,23 +131,50 @@ function cardJob(card, href) {
     location: [city, name.length > 1 ? name[0] : ''].filter(Boolean).join('-'),
     description: text(card), labels: [], skills: [], welfare: [] };
 }
-function searchCards(doc) {
-  const items = [...doc.querySelectorAll('.job_item')];
+function categoryScope(doc, href) {
+  try {
+    const u = new URL(href || doc.URL);
+    let value = u.searchParams.get('fullPath');
+    if (!value) {
+      const selected = doc.querySelector('#filterJob li.select a[href]');
+      const native = selected && new URL(selected.getAttribute('href'), u.href);
+      if (native && native.origin === u.origin && native.pathname.split('/')[1] === u.pathname.split('/')[1]) value = native.searchParams.get('fullPath');
+    }
+    return /^674(?:,\d+)*$/.test(value || '') ? value : '';
+  } catch { return ''; }
+}
+function cardMatchesCategory(card, scope) {
+  if (!scope || scope === '674') return true;
+  try {
+    const data = JSON.parse(card.querySelector('.job_name a[href]')?.getAttribute('tracelogext') || '{}');
+    const path = String(data.new_catepath || '');
+    return /^674(?:,\d+)*$/.test(path) && (path === scope || path.startsWith(scope + ','));
+  } catch { return false; }
+}
+function searchCards(doc, href) {
+  // Native SSR streams cards before the trailing recommendation marker. Wait for the full DOM.
+  if (doc.readyState === 'loading') return { cards: [], endReached: false, recommendationCount: 0, excludedCategoryCount: 0 };
+  const root = doc.querySelector('#list_con') || doc;
+  const items = [...root.querySelectorAll('.job_item')].filter(item => !item.closest('#pc_list_rec, #pc_list_rec_right'));
   // Native 58 inserts this job-less LI between matching results and fallback recommendations.
   const boundary = items.findIndex(item => !item.querySelector('.job_name a[href]')
     && /暂无(?:相关)?(?:职位|岗位)|没有找到(?:相关)?职位|暂无符合条件/.test(compact(text(item))));
-  const cards = (boundary < 0 ? items : items.slice(0, boundary)).filter(item => item.querySelector('.job_name a[href]'));
-  return { cards, endReached: boundary >= 0,
-    recommendationCount: boundary < 0 ? 0 : items.slice(boundary + 1).filter(item => item.querySelector('.job_name a[href]')).length };
+  const matching = (boundary < 0 ? items : items.slice(0, boundary)).filter(item => item.querySelector('.job_name a[href]'));
+  const scope = categoryScope(doc, href);
+  const cards = matching.filter(card => cardMatchesCategory(card, scope));
+  const nativeEmpty = !matching.length && [...doc.querySelectorAll('.noData')].some(el => /暂时没有符合该条件的职位|暂无符合条件|暂无相关职位/.test(compact(text(el))));
+  const outside = doc.querySelectorAll('#pc_list_rec .job_item, #pc_list_rec_right .job_item').length;
+  return { cards, endReached: boundary >= 0 || nativeEmpty, excludedCategoryCount: matching.length - cards.length,
+    recommendationCount: outside + (boundary < 0 ? 0 : items.slice(boundary + 1).filter(item => item.querySelector('.job_name a[href]')).length) };
 }
-function listState(doc) {
-  const state = searchCards(doc);
-  return { endReached: state.endReached, resultCount: state.cards.length, recommendationCount: state.recommendationCount };
+function listState(doc, href) {
+  const state = searchCards(doc, href);
+  return { endReached: state.endReached, resultCount: state.cards.length, recommendationCount: state.recommendationCount, excludedCategoryCount: state.excludedCategoryCount };
 }
 function collect(doc, href) {
   const seen = new Set();
-  return searchCards(doc).cards.map(card => cardJob(card, href)).filter(job => {
+  return searchCards(doc, href).cards.map(card => cardJob(card, href)).filter(job => {
     if (!job || seen.has(job.jobId)) return false; seen.add(job.jobId); return true;
   });
 }
-module.exports = { APPLY, ALREADY, JOB_BODY, visible, jobIdentity, readPageBlock, readAction, successSignals, inspect, extract, selectedResume, listState, cardJob, collect };
+module.exports = { APPLY, ALREADY, JOB_BODY, visible, jobIdentity, searchScopeMatches, readPageBlock, readAction, successSignals, inspect, extract, selectedResume, listState, cardJob, collect };
