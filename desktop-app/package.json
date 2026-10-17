@@ -1,6 +1,6 @@
 {
   "name": "bossclaw-desktop",
-  "version": "2.5.49",
+  "version": "2.5.50",
   "description": "BossClaw —— 面向求职者的本地 AI 投递助手",
   "private": true,
   "author": "YanQuan",
@@ -44,6 +44,7 @@
     "test:boss-chat": "node scripts/boss-chat-regression.mjs",
     "test:release-policy": "node scripts/release-policy-regression.mjs",
     "test:browser-navigation": "node scripts/browser-navigation-regression.mjs",
+    "test:session-persistence": "node scripts/session-persistence-regression.mjs",
     "test:wuba": "node scripts/wuba-regression.mjs"
   },
   "build": {

@@ -9,6 +9,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { spawn, execFile } = require('node:child_process');
 const { runtimePaths } = require('./runtime-paths.cjs');
+const { installSessionPersistence, createMetadataLog } = require('./session-persistence.cjs');
 const releaseSmoke = require('./release-smoke.cjs').configureReleaseSmoke(app, session, nativeImage);
 // 本地控制桥（供外部 agent / MCP 操作运行中的应用；默认关闭，见 control-bridge.cjs 的开启条件）
 const { startControlBridge, resolveEnablement } = require('./control-bridge.cjs');
@@ -2205,6 +2206,10 @@ app.whenReady().then(async () => {
   // 提前初始化还可以触发 session 的磁盘缓存预热，减少 BOSS 首页冷加载延迟。
   try {
     const bossclawSession = session.fromPartition('persist:bossclaw');
+    // Persist fresh 58 login changes promptly and await pending browser writes on normal exit.
+    // Do not extend platform expiry or resurrect cookies removed by logout/the server.
+    installSessionPersistence({ app, browserSession: bossclawSession, otherSessions: [session.defaultSession],
+      record: createMetadataLog(path.join(app.getPath('userData'), 'browser-session-state.jsonl')) });
 
     // ===== webview preload 双保险：session 级注入（绕过 webview 元素 preload 属性的各种问题）=====
     // <webview> 的 preload 属性要求 file: 协议且须在元素初始化时就位；sandbox:true 时还可能被忽略。
