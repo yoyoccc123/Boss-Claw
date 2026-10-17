@@ -506,9 +506,9 @@ export function buildPlatformSearchQueue(
   if (config.collectWithoutKeyword) {
     // Without a keyword, 58 still searches each configured occupation rather than all full-time jobs.
     const categoryDirections = platform === 'wuba' && isWubaCategoryAutomatic(criteria.wubaSearchFilters) && directions.length ? directions : [null];
-    for (const direction of categoryDirections) {
-      const resolvedCriteria = itemCriteria(direction?.name);
-      for (const location of locations) {
+    for (const location of locations) {
+      for (const direction of categoryDirections) {
+        const resolvedCriteria = itemCriteria(direction?.name);
         for (const employmentType of employmentTypes) {
           const url = buildPlatformSearchUrl(platform, {
             city: location, salary: config.salary, page: 1, criteria: resolvedCriteria,
@@ -528,8 +528,8 @@ export function buildPlatformSearchQueue(
     return queue;
   }
 
-  for (const direction of directions) {
-    for (const location of locations) {
+  for (const location of locations) {
+    for (const direction of directions) {
       for (const keyword of direction.keywords) {
         const resolvedCriteria = itemCriteria(direction.name, keyword);
         for (const employmentType of employmentTypes) {

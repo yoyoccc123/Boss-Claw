@@ -206,3 +206,4 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
   check(events.some(e => e.data.seq === 'old-loop' && e.data.reason === 'stopped'), `${platform}: old loop reports interruption rather than completion`);
 }
 console.log(`PASS collection resume and withdrawal: ${checks} production policy/store/host/preload checks; no platform calls.`);
+await import('./collection-traversal-regression.mjs');

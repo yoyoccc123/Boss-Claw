@@ -23,13 +23,37 @@ export function collectionSignature(queue: CollectionCombination[], config: AppC
   return JSON.stringify([queue.map(q => [q.keyword, q.location, q.employmentType, q.url]),
     criteria.map(k => (config as unknown as Record<string, unknown>)[k])]);
 }
-export function beginCollection(queue: CollectionCombination[], signature: string, saved?: CollectionCheckpoint,
-  mode: CollectionStartMode = 'continue'): { checkpoint: CollectionCheckpoint; changed: boolean } {
+export function beginCollection<T extends CollectionCombination>(queue: T[], signature: string, saved?: CollectionCheckpoint,
+  mode: CollectionStartMode = 'continue'): { checkpoint: CollectionCheckpoint; changed: boolean; queue: T[]; reordered?: boolean } {
   const valid = saved?.signature === signature && Number.isInteger(saved.index) && saved.index >= 0 && saved.index <= queue.length;
-  if (mode === 'continue' && valid) return { checkpoint: { ...saved!, processedKeys: [...saved!.processedKeys] }, changed: false };
+  if (mode === 'continue' && valid) return { checkpoint: { ...saved!, processedKeys: [...saved!.processedKeys] }, changed: false, queue };
+  // A traversal-order update is not a search-criteria change. Keep completed combinations and
+  // the partial current combination in place, then traverse the remaining items in the new order.
+  // Keeping that prefix allows legacy index-based checkpoints to resume without losing any work.
+  if (mode === 'continue' && saved && Number.isInteger(saved.index) && saved.index >= 0 && saved.index <= queue.length) {
+    try {
+      const [before, beforeCriteria] = JSON.parse(saved.signature);
+      const [after, afterCriteria] = JSON.parse(signature);
+      const keys = (items: unknown[]) => items.map(item => JSON.stringify(item));
+      if (Array.isArray(before) && Array.isArray(after) && before.length === after.length &&
+          JSON.stringify(beforeCriteria) === JSON.stringify(afterCriteria)) {
+        const oldKeys = keys(before), newKeys = keys(after);
+        const itemMap = new Map(newKeys.map((key, index) => [key, queue[index]]));
+        if (itemMap.size === queue.length && new Set(oldKeys).size === oldKeys.length && oldKeys.every(key => itemMap.has(key))) {
+          const prefix = oldKeys.slice(0, Math.min(saved.index + 1, queue.length));
+          const retained = new Set(prefix);
+          const aligned = [...prefix, ...newKeys.filter(key => !retained.has(key))];
+          const restoredQueue = aligned.map(key => itemMap.get(key)!);
+          const restoredSignature = JSON.stringify([aligned.map(key => JSON.parse(key)), afterCriteria]);
+          return { checkpoint: { ...saved, signature: restoredSignature, processedKeys: [...saved.processedKeys] },
+            changed: false, queue: restoredQueue, reordered: restoredSignature !== saved.signature };
+        }
+      }
+    } catch { /* Invalid or genuinely changed checkpoints use the normal restart requirement. */ }
+  }
   const first = queue[0];
   return { checkpoint: { signature, index: 0, keyword: first?.keyword || '', location: first?.location || '',
-    processedKeys: [], lastTitle: '', updatedAt: Date.now(), complete: !queue.length }, changed: Boolean(saved && !valid) };
+    processedKeys: [], lastTitle: '', updatedAt: Date.now(), complete: !queue.length }, changed: Boolean(saved && !valid), queue };
 }
 export function acknowledgeCollectionJob(checkpoint: CollectionCheckpoint, key: string, title: string): CollectionCheckpoint {
   if (!key || checkpoint.processedKeys.includes(key)) return checkpoint;

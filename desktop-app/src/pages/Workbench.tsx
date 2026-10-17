@@ -878,17 +878,18 @@ export default function Workbench() {
     if (useAppStore.getState().autoAssist) requestRunNext();
   };
 
-  const prepareCollectionCheckpoint = (platform: JobPlatform, queue: CollectionCombination[], mode: CollectionStartMode, targeted = false) => {
+  const prepareCollectionCheckpoint = <T extends CollectionCombination,>(platform: JobPlatform, queue: T[], mode: CollectionStartMode, targeted = false) => {
     const signature = collectionSignature(queue, useSettingsStore.getState().config);
     const saved = targeted ? undefined : useDataStore.getState().collectionCheckpoints[platform];
-    const { checkpoint, changed } = beginCollection(queue, signature, saved, targeted ? 'restart' : mode);
+    const { checkpoint, changed, queue: restoredQueue, reordered } = beginCollection(queue, signature, saved, targeted ? 'restart' : mode);
     if (changed && mode === 'continue' && !targeted) {
       message.warning(`${platformLabel(platform)} 搜索条件已改变，请选择「从头采集」；原进度仍保留`); return null;
     }
     if (checkpoint.complete) { addLog('info', `${platformLabel(platform)} 上次搜索组合已全部完成，如需重新搜索请选择「从头采集」`); return null; }
-    const ctx = { platform, generation: collectBatchGenerationRef.current, checkpoint, queue, persist: !targeted, unresolved: new Set<string>() };
+    const ctx = { platform, generation: collectBatchGenerationRef.current, checkpoint, queue: restoredQueue, persist: !targeted, unresolved: new Set<string>() };
     checkpointContextRef.current = ctx;
     if (ctx.persist) useDataStore.getState().setCollectionCheckpoint(platform, checkpoint);
+    if (reordered) addLog('info', '采集顺序已更新：保留已完成组合和当前断点，剩余按城市依次遍历各投递方向');
     addLog('info', `${platformLabel(platform)} ${mode === 'restart' ? '从头采集' : '继续采集'}：${checkpoint.location || '全国'} · ${keywordLabel(checkpoint.keyword)}，已处理 ${checkpoint.processedKeys.length} 个岗位`);
     return ctx;
   };
@@ -1513,7 +1514,7 @@ export default function Workbench() {
     //              一并拼进 URL，前程无忧仍只带城市/薪资/关键词）—— 与隐身采集同一构建器
     if (platform === 'boss') await loadBossCityCodes();
     if (generation !== collectBatchGenerationRef.current) return 'abort';
-    const queue = (() => {
+    let queue: Array<ReturnType<typeof buildSearchQueue>[number] | PlatformSearchQueueItem> | null = (() => {
       try {
         return platform === 'boss'
           ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
@@ -1546,6 +1547,7 @@ export default function Workbench() {
 
     const checkpointContext = prepareCollectionCheckpoint(platform, queue, mode, Boolean(runIds?.length));
     if (!checkpointContext) return 'skip';
+    queue = checkpointContext.queue;
     // BOSS 城市码校验（非 BOSS 平台的城市码由 platformUrls.ts 各自解析并直接进 URL，此处不适用）
     if (platform === 'boss') {
       const unresolvedCities = [...new Set(queue.map((q) => q.location).filter(Boolean))] as string[];
@@ -1695,7 +1697,7 @@ export default function Workbench() {
       if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current || checkCollectionGoal(platform)) break;
       // 该平台未登录：后续搜索组合必然同样失败 → 立即收口（登录墙判定在页内完成，不靠猜）
       if (visualLoginBlockedRef.current) break;
-      addLog('info', `可视化采集「${item.keyword}」· ${item.location || '全国'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）`);
+      addLog('info', `可视化采集「${item.keyword}」· ${item.location || '全国'} · 方向：${item.directionName || '随机推荐'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）`);
       let tabId = collectTabId;
       if (!webviewApi.current?.hasTab(tabId)) {
         const t = webviewApi.current?.getFirstTabId?.() || webviewApi.current?.getActiveTabId?.();
@@ -1893,7 +1895,7 @@ export default function Workbench() {
     }
     if (platform === 'boss') await loadBossCityCodes();
     if (generation !== collectBatchGenerationRef.current) return 'abort';
-    const queue = (() => {
+    let queue: Array<ReturnType<typeof buildSearchQueue>[number] | PlatformSearchQueueItem> | null = (() => {
       try {
         return platform === 'boss'
           ? filterQueueByRunIds('boss', buildSearchQueue(directionPlan, config), runIds)
@@ -1925,6 +1927,7 @@ export default function Workbench() {
     const pfLabel = platformLabel(platform);
     const checkpointContext = prepareCollectionCheckpoint(platform, queue, mode, Boolean(runIds?.length));
     if (!checkpointContext) return 'skip';
+    queue = checkpointContext.queue;
 
     cfxActiveRef.current = true;
     collectingPlatformRef.current = platform;
@@ -1949,7 +1952,7 @@ export default function Workbench() {
       // （BOSS 队列项来自 searchUrl.ts，不含 criteria —— 故按 platform 收窄类型）
       const itemCriteria = platform === 'boss' ? undefined : (item as PlatformSearchQueueItem).criteria;
       const criteriaNote = platform === 'boss' ? '' : describePlatformCriteria(itemCriteria);
-      addLog('info', `隐身搜索（${pfLabel}）「${item.keyword}」· ${item.location || '全国'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）${criteriaNote ? ` · 基础求职条件：${criteriaNote}` : ''}`);
+      addLog('info', `隐身搜索（${pfLabel}）「${item.keyword}」· ${item.location || '全国'} · 方向：${item.directionName || '随机推荐'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）${criteriaNote ? ` · 基础求职条件：${criteriaNote}` : ''}`);
       // 采集任务卡片（与「任务进度」页共用 taskRuns）
       const runId = collectRunId(platform, item);
       cfxRunIds.push(runId);
