@@ -163,7 +163,8 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as isolated:
         assert registry.registry.has('wuba')
         assert capabilities.delivery_kind('wuba')=='resume'
         assert not capabilities.platform_supports('wuba','attach')
-        assert build_search_url('Python','中山','',2)=='https://zs.58.com/hulianwangtx/pn2/?fullPath=674%2C413795&key=Python&final=1'
+        assert build_search_url('Python','中山','',2)=='https://zs.58.com/npythonkf/pn2/?fullPath=674%2C413795%2C413796%2C413801&key=Python&final=1'
+        assert build_search_url('Python','中山','',2,criteria={'wubaSearchFilters':{'category':'hulianwangtx'}})=='https://zs.58.com/hulianwangtx/pn2/?fullPath=674%2C413795&key=Python&final=1'
         for entry in ${JSON.stringify(provinceQueue.map(q => ({ city: q.location, url: q.url })))}:
             assert build_search_url('Python',entry['city'])==entry['url']
         c=WubaCollector()
