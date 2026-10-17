@@ -25,8 +25,10 @@ const fixtureDocument = url => {
   if (detail) return '<html><body><a id="continue" href="https://www.zhipin.com/web/geek/chat?id=fixture-hr&jobId=fixture-job&securityId=fixture-ticket">继续沟通</a></body></html>';
   const query = Boolean(u.search), chat = u.pathname === '/web/geek/chat';
   const wuba = u.hostname === 'gz.58.com';
-  if (wuba && u.pathname.startsWith('/quanzhizhaopin/')) {
-    const card = (id, title) => `<li class="job_item"><div class="job_name"><a href="https://gz.58.com/tech/${id}x.shtml">天河 | ${title}</a></div><div class="job_salary">150元/天</div><div class="comp_name">合成公司</div></li>`;
+  if (wuba && ['/quanzhizhaopin/', '/hulianwangtx/', '/npythonkf/'].some(path => u.pathname.startsWith(path))) {
+    const card = (id, title, category = '674,413795,413796,413801') => `<li class="job_item"><div class="job_name"><a tracelogext='${JSON.stringify({ new_catepath: category })}' href="https://gz.58.com/tech/${id}x.shtml">天河 | ${title}</a></div><div class="job_salary">150元/天</div><div class="comp_name">合成公司</div></li>`;
+    if (u.searchParams.get('key') === 'ads-only') return '<html><body><ul id="list_con">' + card('11111111111111', '普工', '674,413249,413425') + '</ul></body></html>';
+    if (u.searchParams.get('key') === 'native-empty') return '<html><body><div class="noData">抱歉，暂时没有符合该条件的职位，请重新修改搜索条件后再搜索、筛选</div><div id="pc_list_rec">' + card('11111111111111', '普工', '674,413249,413425') + '</div></body></html>';
     return '<html><body><ul>' + (u.searchParams.get('key') === 'mixed' ? card('22222222222222', 'Python实习生') : '') +
       '<li class="job_item">暂无相关职位，为您提供以下职位</li>' + card('11111111111111', '服务员') + '</ul></body></html>';
   }
@@ -90,19 +92,26 @@ const uiCheck = async function () {
   const nativeCounts = await findActive().executeJavaScript('({checks:window.checkClicks,submits:window.submitClicks})');
   check(nativeCounts.checks === 1 && nativeCounts.submits === 1, '58 native check and online-resume submission each occur once');
   api.closeTab(delivered.tabId);
-  for (const key of ['empty', 'mixed']) {
-    const list = await open('https://gz.58.com/quanzhizhaopin/?key=' + key + '&final=1');
+  for (const key of ['empty', 'mixed', 'ads-only', 'native-empty']) {
+    const url = 'https://gz.58.com/' + (key === 'mixed' ? 'npythonkf' : 'hulianwangtx') + '/?key=' + key + '&final=1&fullPath=' + (key === 'mixed' ? '674,413795,413796,413801' : '674,413795');
+    const list = await open(url);
     const seq = 'native-58-' + key;
-    api.sendInTab(list.id, 'visual-collect', { seq, settleMs: 400, maxJobs: 10, autoScroll: true });
+    api.sendInTab(list.id, 'visual-collect', { seq, expectedSearchUrl: url, settleMs: 400, maxJobs: 10, autoScroll: true });
     await wait(() => window.collectDone.some(d => d.seq === seq), '58 explicit native end completes without scrolling recommendations');
     const done = window.collectDone.find(d => d.seq === seq);
     const jobs = window.collected.filter(d => d.seq === seq && d.phase === 'done').map(d => d.job);
     check(done.reason === 'completed' && jobs.length === (key === 'mixed' ? 1 : 0), '58 actual collector completes ' + key + ' native result set');
     check(jobs.every(j => j.jobId === '22222222222222'), '58 actual collection never emits recommended service jobs');
+    if (key === 'ads-only') check(window.collected.some(d => d.seq === seq && d.phase === 'list-bottom' && /滚动到列表底部|连续 3 轮/.test(d.status)), 'all-excluded cards still perform the normal bottom check before completing');
     const loads = await window.electron.invoke('jc:fixture-loads');
     check(!loads.some(u => u.includes('/11111111111111x.shtml')), '58 recommendation detail is never fetched');
     api.closeTab(list.id);
   }
+  const wrongCategory = await open('https://gz.58.com/quanzhizhaopin/?key=mixed&final=1');
+  api.sendInTab(wrongCategory.id, 'visual-collect', { seq: 'wrong-category', expectedSearchUrl: 'https://gz.58.com/hulianwangtx/?key=mixed&final=1', settleMs: 400 });
+  await wait(() => window.collectDone.some(d => d.seq === 'wrong-category'), 'wrong native occupation stops before collecting');
+  check(window.collectDone.find(d => d.seq === 'wrong-category').reason === 'failed' && !window.collected.some(d => d.seq === 'wrong-category' && d.phase === 'done'), 'redirect to the full recruitment category cannot collect or complete an IT search');
+  api.closeTab(wrongCategory.id);
   // Explicit navigation before React mounts a new guest must still use the latest requested URL.
   const first = 'https://www.zhipin.com/before-mount', latest = 'https://www.zhipin.com/requested-before-mount';
   const id = api.openInNewTab(first, 'offline before mount', 'detail'); api.loadURLInTab(id, latest);

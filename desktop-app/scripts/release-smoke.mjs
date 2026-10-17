@@ -45,6 +45,10 @@ export async function smokePackaged({ packaged, fixture, electron, env, run }) {
   const wubaPreload = path.join(packaged, 'resources/app.asar.unpacked/electron/preload/wuba.cjs');
   assert.ok(fs.readFileSync(wubaExternal).equals(fs.readFileSync(wubaPreload)), '58 DOM rules must match between Python and webview resources');
   result.wubaRulesShared = true;
+  const categoryExternal = path.join(packaged, 'resources/camoufox/platforms/wuba-categories.json');
+  const categoryPreload = path.join(packaged, 'resources/app.asar.unpacked/electron/preload/wuba-categories.json');
+  assert.ok(fs.readFileSync(categoryExternal).equals(fs.readFileSync(categoryPreload)), '58 occupation category metadata must match across both engines');
+  result.wubaCategoriesShared = true;
   // Python must see real files, not the virtual ASAR filesystem.
   const pythonRoot = path.join(packaged, 'resources/camoufox');
   await run(env.BOSSCLAW_PYTHON || 'python', ['-c',

@@ -19,7 +19,7 @@ import { buildJobSearchUrl, RANDOM_COLLECT_LABEL } from './searchUrl';
 import wubaSite from '../../../camoufox/platforms/wuba-site.json';
 import { normalizeProvinceName, PROVINCE_CITIES } from './locationFilter';
 import { normalizeTargetLocations } from './targetLocations';
-import { wubaFilterParams } from './wubaSearch';
+import { wubaCategory, wubaFilterParams } from './wubaSearch';
 import type { WubaSearchFilters } from './types';
 
 // ==================== 猎聘 liepin ====================
@@ -355,9 +355,11 @@ export function buildWubaSearchUrl(query: { keyword?: string; city?: string; pag
   const slug = cities[city];
   if (!slug) throw new Error(`58同城暂未登记城市“${city}”，请选择已支持城市后采集`);
   const page = Math.max(1, Math.floor(Number(query.page) || 1));
+  const category = wubaCategory(query.criteria?.wubaSearchFilters);
   const filters = wubaFilterParams({ ...query.criteria, salary: query.salary ?? query.criteria?.salary });
   const path = Object.entries(filters).filter(([key]) => key !== 'postdate').map(([key, value]) => `pve_${key}_${value}`).join('_');
   const params: Record<string, string> = {};
+  params.fullPath = category.fullPath;
   if (query.keyword?.trim()) {
     params.key = query.keyword.trim();
     // Native filter links carry final=1. Without it, keyword classification redirects discard filters/page.
@@ -366,7 +368,7 @@ export function buildWubaSearchUrl(query: { keyword?: string; city?: string; pag
   if (filters.postdate) params.postdate = filters.postdate;
   // 58 decodes percent escapes but keeps literal '+', unlike form-style URLSearchParams encoding.
   const search = Object.entries(params).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
-  return `https://${slug}.58.com/quanzhizhaopin/${page > 1 ? `pn${page}/` : ''}${path ? path + '/' : ''}${search ? '?' + search : ''}`;
+  return `https://${slug}.58.com/${category.value}/${page > 1 ? `pn${page}/` : ''}${path ? path + '/' : ''}${search ? '?' + search : ''}`;
 }
 
 // ==================== 统一入口 ====================

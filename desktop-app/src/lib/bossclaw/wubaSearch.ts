@@ -1,7 +1,15 @@
 import data from '../../../camoufox/platforms/wuba-filters.json';
+import categories from '../../../electron/preload/wuba-categories.json';
 import type { WubaSearchFilters } from './types';
 
 export const WUBA_NATIVE_FILTERS = data;
+export const WUBA_CATEGORIES = categories;
+export function wubaCategory(filters?: WubaSearchFilters) {
+  const value = filters?.category || categories.default;
+  const option = categories.options.find(o => o.value === value);
+  if (!option) throw new Error('58职位类别无效，请在招聘平台设置中重新选择');
+  return option;
+}
 type Field = keyof typeof data.fields;
 type Criteria = { salary?: string; degrees?: string[]; experiences?: string[]; wubaSearchFilters?: WubaSearchFilters };
 const noFilter = (v: string) => !v || ['不限', '全部', '不限制', '所有', '不限学历'].includes(v);

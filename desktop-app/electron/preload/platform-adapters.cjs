@@ -23,6 +23,7 @@
 
 const ALL_PLATFORMS = Object.freeze(['boss', 'liepin', 'zhaopin', 'job51', 'wuba']);
 const WUBA = require('./wuba.cjs');
+const WUBA_CATEGORIES = require('./wuba-categories.json');
 const OFFICE = require('./office-address.cjs');
 const COMPANY_SIZE = require('./company-size.cjs');
 
@@ -853,6 +854,14 @@ const PLATFORM_APPLY_SPEC = Object.freeze({
 /** 列表页判定（URL 形态 + 非详情页） */
 function isListPage(platform, url) {
   if (platform === 'wuba' && (WUBA.jobIdentity(url) || /passport\.|callback\./i.test(String(url)))) return false;
+  if (platform === 'wuba') {
+    try {
+      const u = new URL(url), category = u.pathname.split('/')[1];
+      return /^https?:$/.test(u.protocol) && /^[a-z0-9-]+\.58\.com$/i.test(u.hostname)
+        && (WUBA_CATEGORIES.options.some(o => o.value === category) || ['job', 'tech', 'zhaopin'].includes(category))
+        && !DETAIL_URL_ANY_RE.test(u.href);
+    } catch { return false; }
+  }
   const re = PLATFORM_LIST_URL_RE[platform];
   if (!re || !re.test(String(url || ''))) return false;
   return !DETAIL_URL_ANY_RE.test(String(url || ''));

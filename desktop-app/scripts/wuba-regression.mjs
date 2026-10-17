@@ -25,7 +25,7 @@ check(T.resolvePlatform('https://evil58.com/') !== 'wuba' && T.resolvePlatform('
 check(T.isWhitelistedUrl('https://passport.58.com/login/') && !T.isWhitelistedUrl('https://evil58.com/'), 'native login remains in whitelist');
 for (const [city, slug] of Object.entries({ 广州: 'gz', 深圳: 'sz', 中山: 'zs', 惠州: 'huizhou', 佛山: 'fs' })) {
   const u = new URL(T.buildWubaSearchUrl({ city, keyword: 'AI / Python', page: 2 }));
-  check(u.hostname === `${slug}.58.com` && u.pathname === '/quanzhizhaopin/pn2/' && u.searchParams.get('key') === 'AI / Python', 'city/keyword/page: ' + city);
+  check(u.hostname === `${slug}.58.com` && u.pathname === '/hulianwangtx/pn2/' && u.searchParams.get('key') === 'AI / Python', 'city/keyword/page stays inside the default IT category: ' + city);
 }
 assert.throws(() => T.buildWubaSearchUrl({ city: '不存在的城市' }), /暂未登记/); checks++;
 for (const city of [undefined, '', '全国', '不限', '全部', '不限制']) {
@@ -163,7 +163,7 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as isolated:
         assert registry.registry.has('wuba')
         assert capabilities.delivery_kind('wuba')=='resume'
         assert not capabilities.platform_supports('wuba','attach')
-        assert build_search_url('Python','中山','',2)=='https://zs.58.com/quanzhizhaopin/pn2/?key=Python&final=1'
+        assert build_search_url('Python','中山','',2)=='https://zs.58.com/hulianwangtx/pn2/?fullPath=674%2C413795&key=Python&final=1'
         for entry in ${JSON.stringify(provinceQueue.map(q => ({ city: q.location, url: q.url })))}:
             assert build_search_url('Python',entry['city'])==entry['url']
         c=WubaCollector()

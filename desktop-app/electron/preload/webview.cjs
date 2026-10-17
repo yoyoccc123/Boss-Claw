@@ -2970,6 +2970,11 @@ async function visualCollectListOnly(opts = {}) {
   const wubaBlocked = () => {
     if (PLATFORM !== 'wuba') return false;
     const block = WUBA.readPageBlock(document, location.href);
+    if (!block && opts.expectedSearchUrl && !WUBA.searchScopeMatches(location.href, opts.expectedSearchUrl)) {
+      notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'failed',
+        error: '58未进入所选职位类别或关键词发生变化，已停止本组并保留进度，请核对页面' });
+      return true;
+    }
     if (!block) return false;
     if (block.kind === 'risk') notify('apply-stage', { stage: 'risk', code: 35, message: block.message });
     else notify('collect-progress', { phase: 'login-required', status: block.message });
@@ -2980,7 +2985,8 @@ async function visualCollectListOnly(opts = {}) {
     if (PLATFORM !== 'wuba') return false;
     const state = WUBA.listState(document);
     if (!state.endReached || (emptyOnly && state.resultCount > 0)) return false;
-    const status = `${state.resultCount ? '本组相关岗位已采完' : '本组无相关岗位'}，已跳过平台补推的 ${state.recommendationCount} 个岗位`;
+    const status = `${state.resultCount ? '本组相关岗位已采完' : '本组无相关岗位'}，已跳过平台补推的 ${state.recommendationCount} 个岗位`
+      + (state.excludedCategoryCount ? `，排除其他或未确认类别 ${state.excludedCategoryCount} 个岗位` : '');
     notify('collect-progress', { phase: 'list-bottom', processed: processedCount, total: state.resultCount, maxJobs, status });
     reportJdFillSummary();
     notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'completed' });
@@ -3007,7 +3013,7 @@ async function visualCollectListOnly(opts = {}) {
     try { cards = collectCards(true); } catch (e) {
       notify('collect-progress', { phase: 'collect-error', index: 0, total: 0, processed: 0, maxJobs, status: `列表查询异常：${String(e?.message || e).slice(0, 80)}` });
     }
-    if (cards.length > 0) {
+    if (cards.length > 0 || (PLATFORM === 'wuba' && WUBA.listState(document).excludedCategoryCount > 0)) {
       notify('collect-progress', { phase: 'list-ready', index: 0, total: cards.length, processed: 0, maxJobs, status: `列表就绪（${cards.length} 卡）` });
       break;
     }
@@ -3026,7 +3032,8 @@ async function visualCollectListOnly(opts = {}) {
 
   // 主循环：逐卡滚动 + 高亮 + 回传（**不点击卡片** —— 见函数头注释）
   // 智联额外一步：入库前按 number 调平台详情接口补齐 JD（失败保留卡片文本兜底）。
-  if (!stopped() && !collectCards().length && !collectionListExplicitlyEmpty()) {
+  if (!stopped() && !collectCards().length && !collectionListExplicitlyEmpty()
+    && !(PLATFORM === 'wuba' && WUBA.listState(document).excludedCategoryCount > 0)) {
     notify('collect-done', { listUrl: location.href, processed: 0, total: 0, maxJobs, reason: 'failed', error: '未识别到岗位列表，进度已保留' });
     return;
   }

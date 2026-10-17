@@ -5,6 +5,22 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 DATA = json.loads((Path(__file__).parent / 'wuba-filters.json').read_text(encoding='utf-8'))
+_CATEGORIES_FILE = Path(__file__).parent / 'wuba-categories.json'
+if not _CATEGORIES_FILE.is_file():
+    _CATEGORIES_FILE = Path(__file__).resolve().parents[2] / 'electron/preload/wuba-categories.json'
+CATEGORIES = json.loads(_CATEGORIES_FILE.read_text(encoding='utf-8'))
+
+
+def category_option(criteria=None):
+    raw = criteria or {}
+    filters = raw.get('wubaSearchFilters') or raw.get('wuba_search_filters') or {}
+    value = filters.get('category') or CATEGORIES['default']
+    option = next((o for o in CATEGORIES['options'] if o['value'] == value), None)
+    if not option:
+        raise ValueError('58职位类别无效，请重新选择')
+    return option
+
+
 NO_FILTER = ('', '不限', '全部', '不限制', '所有', '不限学历')
 SALARY_ALIASES = {
     '1K以下': '1000元以下', '1-2K': '1000-2000元', '2-3K': '2000-3000元', '3-5K': '3000-5000元',
