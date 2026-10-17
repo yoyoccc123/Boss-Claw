@@ -98,6 +98,62 @@ host.settleCollectRuns(['cr_boss_same'], 'old cleanup', oldGeneration);
 check(stored.getState().taskRuns.find(r => r.id === 'cr_boss_same').status === 'running', 'old cleanup cannot stop a restarted task with the same combination ID');
 host.settleCollectRuns(['cr_boss_same'], 'current cleanup');
 check(stored.getState().taskRuns.find(r => r.id === 'cr_boss_same').status === 'skipped', 'current batch still settles its owned task');
+
+// Repeated search terms commonly return already-filtered jobs. Exercise the real ingest callback,
+// including in-flight duplicates and failed analyses, before advancing a real checkpoint.
+Object.assign(host, {
+  Map, ingestedSeenRef: { current: new Set() }, ingestAcknowledgmentsRef: { current: new Map() },
+  checkCollectionGoal: () => false, addPendingItem: () => { throw Error('Rejected fixtures must never enter the delivery queue'); },
+  addSkipLogOnce: () => {}, flushLastSkipLog: () => {}, meetsHrActivityFilter: () => true,
+  isLocationExcluded: () => false, isCompanyExcluded: () => ({ excluded: false }), isJdKeywordExcluded: () => ({ excluded: false }),
+  isExpiryFilterEnabled: () => false, PLATFORM_EXPIRY_DEFAULT: {}, detectInterviewMode: () => 'unknown',
+  resolveQueueMinScore: () => 60, enrichWelfareRef: { current: () => {} },
+});
+stored.setState({ pending: [], profile: { hardConstraints: {} } });
+vm.runInContext((await transform(`globalThis.ingestJob=${vars.get('ingestJob')};`, { loader: 'tsx' })).code, host);
+let analyses = 0;
+const rejectJob = async () => { analyses++; return { score: 25, decision: 'reject', scoreSource: 'local' }; };
+host.analyzeJobWithResume = rejectJob;
+const generation = host.collectBatchGenerationRef.current;
+for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
+  const job = { platform, jobId: 'repeat-' + platform, title: '合成低匹配岗位', url: `https://example.test/${platform}/repeat` };
+  host.prepareCollectionCheckpoint(platform, queue, 'restart');
+  await host.ingestJob(job, generation, host.checkpointJobAcknowledgment(platform + '-first-card', job.title));
+  host.advanceCollectionCheckpoint();
+  check(host.checkpointContextRef.current.checkpoint.index === 1, `${platform}: the first filtered job completes its search combination`);
+  const countBefore = analyses;
+  await host.ingestJob({ ...job, url: job.url + '?tracking=changed' }, generation, host.checkpointJobAcknowledgment(platform + '-next-card', job.title));
+  check(host.checkpointContextRef.current.unresolved.size === 0 && analyses === countBefore, `${platform}: a repeat in the next search is acknowledged without reanalysis`);
+  host.advanceCollectionCheckpoint();
+  check(host.checkpointContextRef.current.checkpoint.complete, `${platform}: duplicate filtered results cannot stop the next search`);
+}
+host.prepareCollectionCheckpoint('wuba', queue, 'restart');
+let releaseAnalysis;
+host.analyzeJobWithResume = () => { analyses++; return new Promise(resolve => { releaseAnalysis = resolve; }); };
+const concurrent = { platform: 'wuba', jobId: 'concurrent', title: '合成异步岗位', url: 'https://example.test/wuba/concurrent' };
+const firstIngest = host.ingestJob(concurrent, generation, host.checkpointJobAcknowledgment('card-one', concurrent.title));
+const concurrentBefore = analyses;
+await host.ingestJob(concurrent, generation, host.checkpointJobAcknowledgment('card-two', concurrent.title));
+check(host.checkpointContextRef.current.unresolved.size === 2 && analyses === concurrentBefore, 'an in-flight duplicate waits for its original analysis and starts no second analysis');
+host.advanceCollectionCheckpoint();
+check(host.checkpointContextRef.current.checkpoint.index === 0, 'a still-running original analysis never advances the checkpoint');
+releaseAnalysis({ score: 20, decision: 'reject', scoreSource: 'local' }); await firstIngest;
+check(host.checkpointContextRef.current.unresolved.size === 0 && host.checkpointContextRef.current.checkpoint.processedKeys.length === 2, 'both card identities are acknowledged only after the original processing succeeds');
+host.advanceCollectionCheckpoint();
+check(host.checkpointContextRef.current.checkpoint.index === 1, 'the completed shared analysis allows the next search');
+host.prepareCollectionCheckpoint('wuba', queue, 'restart');
+host.analyzeJobWithResume = async () => { throw Error('Synthetic analysis failure'); };
+const failing = { ...concurrent, jobId: 'failed', url: 'https://example.test/wuba/failed' };
+await host.ingestJob(failing, generation, host.checkpointJobAcknowledgment('failed-one', failing.title));
+await host.ingestJob(failing, generation, host.checkpointJobAcknowledgment('failed-two', failing.title));
+host.advanceCollectionCheckpoint();
+check(host.checkpointContextRef.current.unresolved.size === 2 && host.checkpointContextRef.current.checkpoint.index === 0, 'failed analysis and its duplicates remain unacknowledged and resumable');
+host.prepareCollectionCheckpoint('wuba', queue, 'restart');
+host.analyzeJobWithResume = () => new Promise(resolve => { releaseAnalysis = resolve; });
+const stale = host.ingestJob({ ...concurrent, jobId: 'stale', url: 'https://example.test/wuba/stale' }, generation, host.checkpointJobAcknowledgment('stale-card', concurrent.title));
+host.collectBatchGenerationRef.current++;
+releaseAnalysis({ score: 20, decision: 'reject' }); await stale;
+check(host.checkpointContextRef.current.checkpoint.processedKeys.length === 0, 'stopping during shared analysis prevents late acknowledgments');
 const preload = ts.createSourceFile('webview.cjs', readFileSync(join(root, 'electron/preload/webview.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const functions = new Map();
 const visitP = n => { if (ts.isFunctionDeclaration(n) && n.name) functions.set(n.name.text, n.getText(preload)); ts.forEachChild(n, visitP); }; visitP(preload);
