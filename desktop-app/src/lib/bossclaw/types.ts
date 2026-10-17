@@ -37,7 +37,7 @@ export interface ImageResume {
 }
 
 export interface WubaSearchFilters {
-  /** Native occupation category, distinct from the employer's industry. */
+  /** Missing/auto follows the configured direction; a native listname is a manual override. */
   category?: string;
   salary?: string;
   degree?: string;

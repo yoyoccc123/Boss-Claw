@@ -19,24 +19,34 @@
       "fullPath": "674,413795,413796"
     },
     {
+      "label": "JAVA开发",
+      "value": "njavakf",
+      "fullPath": "674,413795,413796,413797"
+    },
+    {
+      "label": "C/C++开发",
+      "value": "ncckf",
+      "fullPath": "674,413795,413796,413798"
+    },
+    {
+      "label": "PHP开发",
+      "value": "nphpkf",
+      "fullPath": "674,413795,413796,413799"
+    },
+    {
+      "label": ".NET开发",
+      "value": "netkf",
+      "fullPath": "674,413795,413796,413800"
+    },
+    {
       "label": "Python开发",
       "value": "npythonkf",
       "fullPath": "674,413795,413796,413801"
     },
     {
-      "label": "人工智能",
-      "value": "rengongzhn",
-      "fullPath": "674,413795,413812"
-    },
-    {
-      "label": "AI智能体工程师",
-      "value": "aizhinengti",
-      "fullPath": "674,413795,413812,418084"
-    },
-    {
-      "label": "多模态大模型应用工程师",
-      "value": "dmtdmxyy",
-      "fullPath": "674,413795,413812,418086"
+      "label": "GIS开发工程师",
+      "value": "giskf",
+      "fullPath": "674,413795,413796,413802"
     },
     {
       "label": "全栈工程师",
@@ -44,14 +54,605 @@
       "fullPath": "674,413795,413796,413803"
     },
     {
+      "label": "其他软件研发",
+      "value": "ruanjianyfgchsh",
+      "fullPath": "674,413795,413796,413804"
+    },
+    {
       "label": "Web前端",
       "value": "nwebqd",
       "fullPath": "674,413795,413796,413805"
     },
     {
+      "label": "C#开发",
+      "value": "ncsharpkf",
+      "fullPath": "674,413795,413796,414101"
+    },
+    {
+      "label": "语音/视频/图形开发",
+      "value": "yyshptxkaifa",
+      "fullPath": "674,413795,413796,418102"
+    },
+    {
+      "label": "Golang",
+      "value": "golang",
+      "fullPath": "674,413795,413796,418103"
+    },
+    {
+      "label": "软件项目经理",
+      "value": "ruanjianxiangmujingli",
+      "fullPath": "674,413795,413796,418104"
+    },
+    {
+      "label": "高性能计算工程师",
+      "value": "gaoxingnengjisuan",
+      "fullPath": "674,413795,413796,418105"
+    },
+    {
+      "label": "移动研发",
+      "value": "yidongyf",
+      "fullPath": "674,413795,413806"
+    },
+    {
+      "label": "Android",
+      "value": "nandroid",
+      "fullPath": "674,413795,413806,413807"
+    },
+    {
+      "label": "iOS",
+      "value": "nios",
+      "fullPath": "674,413795,413806,413808"
+    },
+    {
+      "label": "U3D",
+      "value": "nud",
+      "fullPath": "674,413795,413806,413809"
+    },
+    {
+      "label": "COCOS2DX",
+      "value": "ncocosdx",
+      "fullPath": "674,413795,413806,413810"
+    },
+    {
+      "label": "小程序开发",
+      "value": "xiaochengxukf",
+      "fullPath": "674,413795,413806,413811"
+    },
+    {
+      "label": "人工智能",
+      "value": "rengongzhn",
+      "fullPath": "674,413795,413812"
+    },
+    {
+      "label": "自然语言处理算法",
+      "value": "nlpziranyychl",
+      "fullPath": "674,413795,413812,413939"
+    },
+    {
+      "label": "语音算法",
+      "value": "asryuyinshb",
+      "fullPath": "674,413795,413812,413940"
+    },
+    {
+      "label": "图像算法",
+      "value": "tuxiangsuanfa",
+      "fullPath": "674,413795,413812,413941"
+    },
+    {
+      "label": "搜索/推荐算法",
+      "value": "sousuotjsf",
+      "fullPath": "674,413795,413812,413942"
+    },
+    {
+      "label": "算法工程师",
+      "value": "suanfagchsh",
+      "fullPath": "674,413795,413812,413943"
+    },
+    {
+      "label": "算法研究员",
+      "value": "suanfayanjiuyuan",
+      "fullPath": "674,413795,413812,418080"
+    },
+    {
+      "label": "机器学习",
+      "value": "jiqixuexi",
+      "fullPath": "674,413795,413812,418081"
+    },
+    {
+      "label": "深度学习",
+      "value": "shenduxuexi",
+      "fullPath": "674,413795,413812,418082"
+    },
+    {
+      "label": "具身智能工程师",
+      "value": "jushenzhineng",
+      "fullPath": "674,413795,413812,418083"
+    },
+    {
+      "label": "AI智能体工程师",
+      "value": "aizhinengti",
+      "fullPath": "674,413795,413812,418084"
+    },
+    {
+      "label": "大模型微调与对齐工程师",
+      "value": "damoxingweitiao",
+      "fullPath": "674,413795,413812,418085"
+    },
+    {
+      "label": "多模态大模型应用工程师",
+      "value": "dmtdmxyy",
+      "fullPath": "674,413795,413812,418086"
+    },
+    {
+      "label": "大模型算法",
+      "value": "damoxingsuanfa",
+      "fullPath": "674,413795,413812,418087"
+    },
+    {
+      "label": "规控算法",
+      "value": "guikongsuanfa",
+      "fullPath": "674,413795,413812,418088"
+    },
+    {
+      "label": "SLAM算法",
+      "value": "slamsuanfa",
+      "fullPath": "674,413795,413812,418089"
+    },
+    {
+      "label": "风控算法",
+      "value": "fengkongsuanfa",
+      "fullPath": "674,413795,413812,418090"
+    },
+    {
+      "label": "自动驾驶系统工程师",
+      "value": "zdjsxtgchsh",
+      "fullPath": "674,413795,413812,418091"
+    },
+    {
+      "label": "智能座舱系统工程师",
+      "value": "zhinengzuocang",
+      "fullPath": "674,413795,413812,418092"
+    },
+    {
+      "label": "车载信息安全工程师",
+      "value": "chezaixinxianquan",
+      "fullPath": "674,413795,413812,418093"
+    },
+    {
+      "label": "智算中心运维工程师",
+      "value": "zhisuanzhongxinyunwei",
+      "fullPath": "674,413795,413812,418094"
+    },
+    {
+      "label": "eVTOL飞控系统工程师",
+      "value": "evtolfeikong",
+      "fullPath": "674,413795,413812,418095"
+    },
+    {
+      "label": "技术测试",
+      "value": "jishucsh",
+      "fullPath": "674,413795,413944"
+    },
+    {
+      "label": "测试工程师",
+      "value": "ceshigchsh",
+      "fullPath": "674,413795,413944,413945"
+    },
+    {
+      "label": "游戏测试",
+      "value": "youxicsh",
+      "fullPath": "674,413795,413944,413946"
+    },
+    {
+      "label": "硬件测试",
+      "value": "yingjiancsh",
+      "fullPath": "674,413795,413944,413947"
+    },
+    {
+      "label": "软件测试",
+      "value": "ruanjiancsh",
+      "fullPath": "674,413795,413944,413948"
+    },
+    {
+      "label": "渗透测试",
+      "value": "shentoucsh",
+      "fullPath": "674,413795,413944,413949"
+    },
+    {
+      "label": "运维/技术支持",
+      "value": "yunweijshzhch",
+      "fullPath": "674,413795,413950"
+    },
+    {
+      "label": "运维工程师",
+      "value": "yunweigchsh",
+      "fullPath": "674,413795,413950,413951"
+    },
+    {
+      "label": "网络工程师",
+      "value": "wangluogchsh",
+      "fullPath": "674,413795,413950,413952"
+    },
+    {
+      "label": "IT技术支持",
+      "value": "itjshzhch",
+      "fullPath": "674,413795,413950,413953"
+    },
+    {
+      "label": "系统管理员",
+      "value": "xitonggly",
+      "fullPath": "674,413795,413950,413954"
+    },
+    {
+      "label": "网络/系统安全",
+      "value": "wangluoxtaq",
+      "fullPath": "674,413795,413950,413955"
+    },
+    {
+      "label": "DBA",
+      "value": "dba",
+      "fullPath": "674,413795,413950,413956"
+    },
+    {
+      "label": "运维开发工程师",
+      "value": "yunweikaifa",
+      "fullPath": "674,413795,413950,418110"
+    },
+    {
+      "label": "数据中心/服务器运维",
+      "value": "shujuzhongxinyunwei",
+      "fullPath": "674,413795,413950,418180"
+    },
+    {
+      "label": "通信布线/光纤熔接",
+      "value": "tongxinbuxian",
+      "fullPath": "674,413795,413950,418181"
+    },
+    {
+      "label": "液冷安装/运维",
+      "value": "yelenganzhuangyunwei",
+      "fullPath": "674,413795,413950,418183"
+    },
+    {
+      "label": "AI设备装调/运维 ",
+      "value": "aishebeizhuangtiao",
+      "fullPath": "674,413795,413950,418186"
+    },
+    {
+      "label": "数据开发/分析",
+      "value": "shujukffx",
+      "fullPath": "674,413795,413957"
+    },
+    {
+      "label": "ETL工程师",
+      "value": "etlgchsh",
+      "fullPath": "674,413795,413957,413959"
+    },
+    {
+      "label": "数据仓库",
+      "value": "shujuck",
+      "fullPath": "674,413795,413957,413960"
+    },
+    {
+      "label": "数据开发",
+      "value": "shujukf",
+      "fullPath": "674,413795,413957,413961"
+    },
+    {
+      "label": "数据分析师",
+      "value": "shujufxsh",
+      "fullPath": "674,413795,413957,413962"
+    },
+    {
+      "label": "数据采集",
+      "value": "shujucj",
+      "fullPath": "674,413795,413957,413963"
+    },
+    {
+      "label": "项目管理",
+      "value": "xiangmugl",
+      "fullPath": "674,413795,413964"
+    },
+    {
+      "label": "项目经理/主管",
+      "value": "xiangmujlzhg",
+      "fullPath": "674,413795,413964,413965"
+    },
+    {
+      "label": "项目专员/助理",
+      "value": "xiangmuzhyzhl",
+      "fullPath": "674,413795,413964,413966"
+    },
+    {
+      "label": "通信项目专员",
+      "value": "tongxinxmzhy",
+      "fullPath": "674,413795,413964,413967"
+    },
+    {
+      "label": "通信项目经理",
+      "value": "tongxinxmjl",
+      "fullPath": "674,413795,413964,413968"
+    },
+    {
+      "label": "需求分析工程师",
+      "value": "xuqiufxgchsh",
+      "fullPath": "674,413795,413964,413969"
+    },
+    {
       "label": "产品经理",
       "value": "chanpinjl",
       "fullPath": "674,413795,413970"
+    },
+    {
+      "label": "产品经理",
+      "value": "chanpinjld",
+      "fullPath": "674,413795,413970,413971"
+    },
+    {
+      "label": "产品专员/助理",
+      "value": "chanpinzhy",
+      "fullPath": "674,413795,413970,413972"
+    },
+    {
+      "label": "游戏策划",
+      "value": "nyouxich",
+      "fullPath": "674,413795,413970,413973"
+    },
+    {
+      "label": "产品总监",
+      "value": "chanpinzj",
+      "fullPath": "674,413795,413970,413974"
+    },
+    {
+      "label": "产品VP",
+      "value": "chanpinvp",
+      "fullPath": "674,413795,413970,413975"
+    },
+    {
+      "label": "电商产品经理",
+      "value": "dianshangchanpin",
+      "fullPath": "674,413795,413970,418076"
+    },
+    {
+      "label": "AI产品经理",
+      "value": "aichanpin",
+      "fullPath": "674,413795,413970,418077"
+    },
+    {
+      "label": "数据产品经理",
+      "value": "shujuchanpin",
+      "fullPath": "674,413795,413970,418078"
+    },
+    {
+      "label": "硬件产品经理",
+      "value": "yingjianchanpin",
+      "fullPath": "674,413795,413970,418079"
+    },
+    {
+      "label": "技术管理",
+      "value": "jishugl",
+      "fullPath": "674,413795,413976"
+    },
+    {
+      "label": "技术经理",
+      "value": "jishujl",
+      "fullPath": "674,413795,413976,413977"
+    },
+    {
+      "label": "技术总监",
+      "value": "jishuzj",
+      "fullPath": "674,413795,413976,413978"
+    },
+    {
+      "label": "CTO/首席技术官",
+      "value": "cto",
+      "fullPath": "674,413795,413976,413979"
+    },
+    {
+      "label": "通信",
+      "value": "ntongxin",
+      "fullPath": "674,413795,413980"
+    },
+    {
+      "label": "通信技术工程师",
+      "value": "tongxinjshgchsh",
+      "fullPath": "674,413795,413980,413981"
+    },
+    {
+      "label": "移动通信工程师",
+      "value": "yidongtxgchsh",
+      "fullPath": "674,413795,413980,413982"
+    },
+    {
+      "label": "电信网络工程师",
+      "value": "dianxinwlgchsh",
+      "fullPath": "674,413795,413980,413983"
+    },
+    {
+      "label": "有线传输工程师",
+      "value": "youxianchshgchsh",
+      "fullPath": "674,413795,413980,413984"
+    },
+    {
+      "label": "无线/射频通信工程师",
+      "value": "wuxianshptxgchsh",
+      "fullPath": "674,413795,413980,413985"
+    },
+    {
+      "label": "通信标准化工程师",
+      "value": "tongxinbzhhgchsh",
+      "fullPath": "674,413795,413980,413986"
+    },
+    {
+      "label": "核心网工程师",
+      "value": "hexinwanggchsh",
+      "fullPath": "674,413795,413980,413987"
+    },
+    {
+      "label": "通信测试工程师",
+      "value": "tongxincshgchsh",
+      "fullPath": "674,413795,413980,413988"
+    },
+    {
+      "label": "宽带装维",
+      "value": "kuandaizhuangwei",
+      "fullPath": "674,413795,413980,418106"
+    },
+    {
+      "label": "数据通信工程师",
+      "value": "shujutongxin",
+      "fullPath": "674,413795,413980,418107"
+    },
+    {
+      "label": "光网络工程师",
+      "value": "guangwangluo",
+      "fullPath": "674,413795,413980,418108"
+    },
+    {
+      "label": "无线/天线工程师",
+      "value": "wuxiantianxiangchsh",
+      "fullPath": "674,413795,413980,418109"
     }
-  ]
+  ],
+  "sourceSelector": ".zp_crumb a[data-listname][data-fullpath][data-catename]",
+  "autoAliases": {
+    "npythonkf": [
+      "Python"
+    ],
+    "njavakf": [
+      "Java"
+    ],
+    "ncckf": [
+      "C++",
+      "C/C++"
+    ],
+    "nphpkf": [
+      "PHP"
+    ],
+    "netkf": [
+      ".NET",
+      "Dotnet"
+    ],
+    "ncsharpkf": [
+      "C#"
+    ],
+    "golang": [
+      "Go",
+      "Golang"
+    ],
+    "nwebqd": [
+      "前端",
+      "JavaScript",
+      "TypeScript",
+      "React",
+      "Vue"
+    ],
+    "quanzhangchsh": [
+      "全栈",
+      "Full Stack",
+      "Fullstack"
+    ],
+    "ruanjianyf": [
+      "软件开发",
+      "后端",
+      "Backend"
+    ],
+    "rengongzhn": [
+      "AI",
+      "AI应用",
+      "AI 应用",
+      "大模型应用",
+      "LLM",
+      "RAG",
+      "LangChain",
+      "Vibe Coding",
+      "VibeCoding",
+      "AI工具"
+    ],
+    "aizhinengti": [
+      "Agent",
+      "智能体",
+      "LangGraph"
+    ],
+    "damoxingweitiao": [
+      "大模型微调",
+      "LoRA",
+      "Fine Tuning"
+    ],
+    "dmtdmxyy": [
+      "多模态"
+    ],
+    "tuxiangsuanfa": [
+      "计算机视觉",
+      "图像识别",
+      "YOLO",
+      "视觉算法",
+      "Computer Vision"
+    ],
+    "nlpziranyychl": [
+      "自然语言处理",
+      "NLP"
+    ],
+    "suanfagchsh": [
+      "算法"
+    ],
+    "jiqixuexi": [
+      "Machine Learning"
+    ],
+    "shenduxuexi": [
+      "Deep Learning"
+    ],
+    "ruanjiancsh": [
+      "软件测试",
+      "接口测试",
+      "自动化测试",
+      "Python自动化测试"
+    ],
+    "jishucsh": [
+      "测试"
+    ],
+    "aichanpin": [
+      "AI产品",
+      "AI 产品",
+      "AI产品经理",
+      "AI 产品经理",
+      "AI Product Manager"
+    ],
+    "chanpinjl": [
+      "产品"
+    ],
+    "shujucj": [
+      "爬虫",
+      "数据采集"
+    ],
+    "shujufxsh": [
+      "数据分析",
+      "Data Analyst"
+    ],
+    "shujukffx": [
+      "大数据"
+    ],
+    "yunweikaifa": [
+      "DevOps"
+    ],
+    "yunweigchsh": [
+      "运维",
+      "SRE"
+    ],
+    "nandroid": [
+      "Android"
+    ],
+    "nios": [
+      "iOS"
+    ],
+    "nud": [
+      "Unity"
+    ],
+    "xiaochengxukf": [
+      "小程序"
+    ],
+    "ntongxin": [
+      "通信"
+    ]
+  }
 }

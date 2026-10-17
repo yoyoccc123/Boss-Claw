@@ -40,7 +40,7 @@ for (const value of ['无效选项', '<script>']) assert.throws(() => T.wubaFilt
 for (const value of [2, 1.5, -1, 'bad']) assert.throws(() => T.wubaFilterParams({ wubaSearchFilters: { publishedWithinDays: value } }), /无效/);
 check(T.wubaFilterParams({ wubaSearchFilters: { publishedWithinDays: 7 } }, now).postdate === '20261010_20261017', 'publication dates follow native inclusive date range');
 check(T.wubaFilterParams({ wubaSearchFilters: { publishedWithinDays: 1 } }, Date.parse('2026-10-15T16:00:00Z')).postdate === '20261016_20261017', 'publication midnight follows Asia/Shanghai');
-const overrides = { degree: '本科', experience: '1年以下', salary: '5000-8000元', industry: '计算机软件' };
+const overrides = { category: 'hulianwangtx', degree: '本科', experience: '1年以下', salary: '5000-8000元', industry: '计算机软件' };
 const urls = ['Vibe Coding', 'C++', 'AI / Python'].flatMap(keyword => [1, 2].map(page => ({ keyword, page,
   url: T.buildWubaSearchUrl({ keyword, city: '广州', page, criteria: { wubaSearchFilters: overrides } }) })));
 for (const c of urls) {
@@ -56,10 +56,17 @@ const categoryUrls = categories.options.flatMap(option => [1, 2].map(page => {
   check(new URL(url).searchParams.get('fullPath') === option.fullPath, 'native full occupation hierarchy is retained: ' + option.label);
   return { criteria, page, url };
 }));
+const nativeDom = require('../electron/preload/wuba.cjs');
+for (const option of categories.options.filter(o => o.fullPath !== '674')) {
+  const url = `https://gz.58.com/${option.value}/22222222222222x.shtml`;
+  check(nativeDom.jobIdentity(url) === '22222222222222' && A.isDetailPage('wuba', url), 'every verified IT detail route is recognized by both engines: ' + option.value);
+}
+check(!nativeDom.jobIdentity('https://gz.58.com/zufang/22222222222222x.shtml'), 'housing details remain excluded');
 assert.throws(() => T.buildWubaSearchUrl({ city: '广州', criteria: { wubaSearchFilters: { category: '../quanzhizhaopin' } } }), /职位类别无效/);
 check(!A.isListPage('wuba', 'https://gz.58.com/zufang/') && !A.isListPage('wuba', 'https://evil58.com/hulianwangtx/'), 'occupation support cannot turn unrelated pages into job lists');
 const config = { ...structuredClone(T.DEFAULT_CONFIG), targetLocations: ['广州'] };
 const direction = { items: [{ id: 'python', name: 'Python开发', enabled: true, keywords: ['Python'], priority: 1, score: 80 }] };
+config.wubaSearchFilters = { category: 'hulianwangtx' };
 const oldQueue = T.buildPlatformSearchQueue('wuba', direction, config);
 const oldSignature = T.collectionSignature(oldQueue, config);
 const checkpoint = T.acknowledgeCollectionJob(T.beginCollection(oldQueue, oldSignature).checkpoint, 'old-factory-card', '旧总类岗位');
@@ -68,9 +75,47 @@ const newQueue = T.buildPlatformSearchQueue('wuba', direction, config);
 const next = T.beginCollection(newQueue, T.collectionSignature(newQueue, config), checkpoint);
 check(next.changed && !next.checkpoint.processedKeys.length && newQueue.every(q => new URL(q.url).pathname.startsWith('/npythonkf/')), 'changing native occupation invalidates stale city/keyword card acknowledgments');
 
+const internet = T.WUBA_CATEGORY_TREE.find(o => o.value === 'hulianwangtx');
+check(internet.children.length === 10 && internet.children.reduce((sum, o) => sum + o.children.length, 0) === 90, 'full native menu contains ten groups and ninety leaves');
+check(T.wubaCategoryPath('npythonkf').join('/') === 'hulianwangtx/ruanjianyf/npythonkf', 'legacy flat occupation resolves its complete hierarchy');
+check(T.wubaCategoryPath('chanpinjl').length === 2 && T.wubaCategoryPath('chanpinjld').length === 3, 'same-label product group and leaf retain distinct identities');
+const autoCases = [
+  ['Python开发与自动化', 'Python', 'npythonkf'], ['Python开发与自动化', 'AI工具', 'npythonkf'],
+  ['Vibe Coding / AI应用开发', 'Agent开发', 'aizhinengti'], ['Vibe Coding / AI应用开发', 'Python', 'rengongzhn'],
+  ['AI应用开发', '大模型应用', 'rengongzhn'], ['AI智能体', 'LangGraph', 'aizhinengti'],
+  ['计算机视觉', 'YOLO', 'tuxiangsuanfa'], ['AI产品经理', 'AI', 'aichanpin'], ['AI Product Manager', '', 'aichanpin'],
+  ['JavaScript开发', '', 'nwebqd'], ['Java后端', '', 'njavakf'], ['Golang', '', 'golang'], ['Django后端', '', 'ruanjianyf'],
+  ['Python自动化测试', '', 'ruanjiancsh'], ['Python / AI', 'Python', 'npythonkf'], ['Python / AI', 'Agent', 'aizhinengti'],
+  ['Python / Java', '', 'ruanjianyf'], ['数据分析师', '', 'shujufxsh'], ['全栈开发', 'React', 'quanzhangchsh'],
+  ['未知方向', '', 'hulianwangtx'], ['未知方向', 'Python实习生', 'npythonkf'], ['', 'mail', 'hulianwangtx'],
+  ['Ｐｙｔｈｏｎ开发', '', 'npythonkf'], ['AI    产品经理', '', 'aichanpin'],
+].map(([directionName, keyword, value]) => ({ directionName, keyword, value }));
+for (const c of autoCases) {
+  check(T.resolveWubaCategory(undefined, c.directionName, c.keyword).value === c.value, 'direction routing: ' + c.directionName + ' / ' + c.keyword);
+  check(T.resolveWubaCategory({ category: 'auto' }, c.directionName, c.keyword).value === c.value, 'explicit auto and legacy missing category agree');
+  check(T.resolveWubaCategory({ category: 'npythonkf' }, c.directionName, c.keyword).value === 'npythonkf', 'manual occupation overrides direction');
+}
+const multiPlan = { items: [...direction.items,
+  { id: 'ai', name: 'Vibe Coding / AI应用开发', enabled: true, keywords: ['Agent', 'Python'], priority: 2, score: 75 },
+  { id: 'disabled', name: 'JAVA开发', enabled: false, keywords: ['Java'], priority: 3, score: 70 }] };
+const autoConfig = { ...config, wubaSearchFilters: { category: 'auto', degree: '本科' } };
+const savedConfig = JSON.stringify(autoConfig);
+const autoQueue = T.buildPlatformSearchQueue('wuba', multiPlan, autoConfig);
+check(autoQueue.length === 3 && autoQueue.map(q => q.criteria.wubaSearchFilters.category).join() === 'npythonkf,aizhinengti,rengongzhn', 'each enabled direction/keyword receives its own concrete native category snapshot');
+check(autoQueue.every(q => new URL(q.url).pathname.startsWith('/' + q.criteria.wubaSearchFilters.category + '/')), 'webview URL and Python payload carry the same resolved occupation');
+check(autoQueue[0].criteria.wubaSearchFilters !== autoQueue[1].criteria.wubaSearchFilters && JSON.stringify(autoConfig) === savedConfig, 'queue routing never mutates another direction or saved settings');
+check(T.buildPlatformSearchQueue('wuba', multiPlan, { ...autoConfig, collectWithoutKeyword: true }).map(q => q.criteria.wubaSearchFilters.category).join() === 'npythonkf,rengongzhn', 'keyword-free collection still follows each configured occupation');
+check(T.buildPlatformSearchQueue('wuba', multiPlan, { ...autoConfig, wubaSearchFilters: { category: 'ruanjianyf' } }).every(q => q.criteria.wubaSearchFilters.category === 'ruanjianyf'), 'explicit manual category wins across all directions');
+check(T.buildPlatformSearchQueue('wuba', multiPlan, { ...autoConfig, collectWithoutKeyword: true, wubaSearchFilters: { category: 'npythonkf' } }).length === 1, 'manual keyword-free queues deduplicate the single category');
+check(T.buildPlatformSearchQueue('boss', multiPlan, autoConfig).every(q => q.criteria.wubaSearchFilters.category === 'auto'), '58 routing does not alter other platform queues');
+const autoCheckpoint = T.acknowledgeCollectionJob(T.beginCollection(autoQueue, T.collectionSignature(autoQueue, autoConfig)).checkpoint, 'seen-python', '旧岗位');
+const changedPlan = { items: [{ ...direction.items[0], name: 'AI应用开发' }] };
+const changedQueue = T.buildPlatformSearchQueue('wuba', changedPlan, autoConfig);
+check(T.beginCollection(changedQueue, T.collectionSignature(changedQueue, autoConfig), autoCheckpoint).changed, 'a direction category change cannot reuse a stale occupation checkpoint');
+
 // Actual Settings controls and Zustand persistence, with network blocked by the Electron main process.
-await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import Settings from './src/pages/Settings';import{useSettingsStore}from'./src/store/useSettingsStore';import{useAppStore}from'./src/store/useAppStore';import{platformSearchCriteria,buildWubaSearchUrl}from'./src/lib/bossclaw/platformUrls';
-const t:any=window;t.settings=useSettingsStore;t.criteria=platformSearchCriteria;t.searchUrl=buildWubaSearchUrl;useAppStore.getState().setSettingsTab('platforms');createRoot(document.getElementById('root')!).render(<Settings isVisible={false}/>);`, resolveDir: root, loader: 'tsx' },
+await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import Settings from './src/pages/Settings';import{useSettingsStore}from'./src/store/useSettingsStore';import{useDataStore}from'./src/store/useDataStore';import{useAppStore}from'./src/store/useAppStore';import{platformSearchCriteria,buildWubaSearchUrl}from'./src/lib/bossclaw/platformUrls';
+const t:any=window;t.settings=useSettingsStore;t.data=useDataStore;t.criteria=platformSearchCriteria;t.searchUrl=buildWubaSearchUrl;t.nativeCategories=${JSON.stringify(categories.options)};useDataStore.setState({directionPlan:${JSON.stringify(multiPlan)}} as any);useAppStore.getState().setSettingsTab('platforms');createRoot(document.getElementById('root')!).render(<Settings isVisible={false}/>);`, resolveDir: root, loader: 'tsx' },
   tsconfig: join(root, 'tsconfig.json'), bundle: true, platform: 'browser', format: 'iife', outfile: join(fixture, 'ui.js'), logLevel: 'silent' });
 writeFileSync(join(fixture, 'ui.html'), '<meta charset="utf-8"><div id="root"></div><script src="ui.js"></script>');
 const domSource = readFileSync(join(root, 'electron/preload/wuba.cjs'), 'utf8');
@@ -102,6 +147,14 @@ const runChecks = async function (source) {
   check(W.listState(d, scope).endReached && W.collect(d, scope).length === 0 && W.listState(d, scope).recommendationCount === 1, 'native noData completes empty pages while supplementary recommendations stay excluded');
   d = parse('<div id="list_con">' + categorized('22222222222222', '674,413795,413796,413801') + '</div><div id="pc_list_rec">' + categorized('55555555555555', '674,413795,413796,413801') + '</div>');
   check(W.collect(d, scope).map(j => j.jobId).join() === '22222222222222', 'recommendation containers outside the native result list never enter collection, even in the same category');
+  const nativeCategories = window.nativeCategories;
+  const agent = nativeCategories.find(o => o.value === 'aizhinengti');
+  const product = nativeCategories.find(o => o.value === 'aichanpin');
+  const ai = nativeCategories.find(o => o.value === 'rengongzhn');
+  d = parse(categorized('22222222222222', agent.fullPath) + categorized('33333333333333', product.fullPath));
+  const categoryScope = o => 'https://gz.58.com/' + o.value + '/?fullPath=' + encodeURIComponent(o.fullPath);
+  check(W.collect(d, categoryScope(agent)).map(j => j.jobId).join() === '22222222222222', 'an automatically selected Agent leaf rejects AI product jobs in another branch');
+  check(W.collect(d, categoryScope(ai)).map(j => j.jobId).join() === '22222222222222', 'the AI parent accepts its descendants and rejects a sibling product branch');
   check(W.jobIdentity('https://gz.58.com/rengongzhn/22222222222222x.shtml') === '22222222222222' && W.jobIdentity('https://gz.58.com/zhikonganfang/22222222222222x.shtml') === '22222222222222', 'native AI and technical testing detail paths remain identifiable');
   const target = 'https://gz.58.com/npythonkf/?key=Vibe%20Coding&final=1&fullPath=674%2C413795%2C413796%2C413801';
   check(W.searchScopeMatches(target, target), 'native occupation and keyword scope match');
@@ -110,24 +163,46 @@ const runChecks = async function (source) {
   }
   const wait = async (fn, label) => { const end = Date.now() + 8000; while (!fn()) { if (Date.now() > end) throw Error(label); await new Promise(r => setTimeout(r, 30)); } };
   await wait(() => document.querySelector('[data-testid="wuba-search-filters"]'), 'actual 58 settings card rendered');
-  check(document.querySelector('[data-testid="wuba-search-filters"]').textContent.includes('互联网/通信'), 'actual legacy Settings starts inside the IT occupation');
-  const choices = ['Python开发', '七天以内', '5000-8000元', '本科', '1年以下', '计算机软件'];
-  for (let i = 0; i < choices.length; i++) {
-    const input = document.querySelectorAll('[data-testid="wuba-search-filters"] .ant-select input')[i];
+  const preview = () => document.querySelector('[data-testid="wuba-category-preview"]')?.textContent || '';
+  check(preview().includes('Python开发') && preview().includes('AI智能体工程师') && !preview().includes('JAVA开发'), 'actual auto Settings previews each enabled direction and excludes disabled directions');
+  window.data.setState({ directionPlan: { items: [{ id: 'test', name: '计算机视觉', enabled: true, keywords: ['YOLO'], priority: 1, score: 80 }] } });
+  await wait(() => preview().includes('图像算法'), 'preview updates when the saved direction changes');
+  const select = async (input, choice) => {
     input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    await wait(() => [...document.querySelectorAll('.ant-select-item-option')].some(e => e.getAttribute('title') === choices[i]), 'native option dropdown: ' + choices[i]);
-    const option = [...document.querySelectorAll('.ant-select-item-option')].find(e => e.getAttribute('title') === choices[i]);
-    option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const options = () => [...document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option')];
+    await wait(() => options().some(e => e.getAttribute('title') === choice), 'native option dropdown: ' + choice);
+    options().find(e => e.getAttribute('title') === choice).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+  };
+  await select(document.querySelector('[data-testid="wuba-category-mode"] input'), '手动选择');
+  const cascader = document.querySelector('[data-testid="wuba-occupation"] .ant-cascader input');
+  cascader.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  for (const label of ['互联网/通信', '软件研发', 'Python开发']) {
+    const options = () => [...document.querySelectorAll('.ant-cascader-dropdown:not(.ant-cascader-dropdown-hidden) .ant-cascader-menu-item')];
+    await wait(() => options().some(e => e.getAttribute('title') === label), 'hierarchy option: ' + label);
+    options().find(e => e.getAttribute('title') === label).dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await new Promise(r => setTimeout(r, 100));
   }
+  check(window.settings.getState().config.wubaSearchFilters.category === 'npythonkf', 'actual hierarchical selection stores the native terminal value');
+  check(!document.querySelector('[data-testid="wuba-category-preview"]'), 'manual override hides automatic preview');
+  const choices = ['七天以内', '5000-8000元', '本科', '1年以下', '计算机软件'];
+  for (let i = 0; i < choices.length; i++) {
+    await select(document.querySelectorAll('[data-testid="wuba-search-filters"] .ant-select:not(.ant-cascader) input')[i + 1], choices[i]);
+  }
   const selected = window.settings.getState().config.wubaSearchFilters;
-  check(selected.category === 'npythonkf' && selected.publishedWithinDays === 7 && selected.salary === choices[2] && selected.degree === choices[3] && selected.experience === choices[4] && selected.industry === choices[5], 'actual UI keeps occupation and all five filters independently');
-  await wait(() => JSON.parse(localStorage.getItem('bossclaw-settings-v2') || '{}').state?.config?.wubaSearchFilters?.industry === choices[5], 'settings disk persistence');
+  check(selected.category === 'npythonkf' && selected.publishedWithinDays === 7 && selected.salary === choices[1] && selected.degree === choices[2] && selected.experience === choices[3] && selected.industry === choices[4], 'actual UI keeps occupation and all five filters independently');
+  await wait(() => JSON.parse(localStorage.getItem('bossclaw-settings-v2') || '{}').state?.config?.wubaSearchFilters?.industry === choices[4], 'settings disk persistence');
   const saved = JSON.parse(localStorage.getItem('bossclaw-settings-v2')).state;
   const merged = window.settings.persist.getOptions().merge(saved, window.settings.getState());
   check(JSON.stringify(merged.config.wubaSearchFilters) === JSON.stringify(selected), 'saved filters survive hydration');
   const criteria = window.criteria(merged.config), url = window.searchUrl({ city: '广州', keyword: 'Vibe Coding', criteria });
   check(new URL(url).pathname.startsWith('/npythonkf/') && url.includes('pve_5356_6') && url.includes('pve_5363_245') && url.includes('postdate=') && url.includes('Vibe%20Coding') && url.includes('final=1'), 'saved occupation and Settings feed the actual native search URL');
+  await select(document.querySelector('[data-testid="wuba-category-mode"] input'), '跟随投递方向');
+  check(preview().includes('图像算法') && !document.querySelector('[data-testid="wuba-occupation"] .ant-cascader'), 'returning to auto uses the latest configured direction');
+  const automatic = window.settings.getState().config.wubaSearchFilters;
+  check(automatic.category === 'auto' && automatic.salary === selected.salary && automatic.industry === selected.industry, 'switching modes preserves all native non-occupation filters');
+  await wait(() => JSON.parse(localStorage.getItem('bossclaw-settings-v2') || '{}').state?.config?.wubaSearchFilters?.category === 'auto', 'auto mode persists');
+  check(window.settings.persist.getOptions().merge(JSON.parse(localStorage.getItem('bossclaw-settings-v2')).state, window.settings.getState()).config.wubaSearchFilters.category === 'auto', 'auto mode survives hydration');
   return results;
 };
 const reportPath = join(fixture, 'report.json'), entry = join(fixture, 'main.cjs');
@@ -144,7 +219,7 @@ from contextlib import contextmanager
 sys.path.insert(0,${JSON.stringify(join(root, 'camoufox'))})
 with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as home:
  with patch.object(pathlib.Path,'home',return_value=pathlib.Path(home)):
-  from platforms.wuba_filters import filter_params
+  from platforms.wuba_filters import filter_params,category_option
   from platforms.wuba import WubaCollector,build_search_url
   from platforms import base
   import json
@@ -154,6 +229,12 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as home:
    assert build_search_url(case['keyword'],'广州',page=case['page'],criteria={'wubaSearchFilters':${JSON.stringify(overrides)}})==case['url']
   for case in json.loads(${JSON.stringify(JSON.stringify(categoryUrls))}):
    assert build_search_url('AI工具应用','广州',page=case['page'],criteria=case['criteria'])==case['url']
+  for case in json.loads(${JSON.stringify(JSON.stringify(autoCases))}):
+   for filters in ({},{'category':'auto'}):
+    assert category_option({'wubaSearchFilters':filters},case['keyword'],case['directionName'])['value']==case['value'],case
+   assert category_option({'wubaSearchFilters':{'category':'npythonkf'}},case['keyword'],case['directionName'])['value']=='npythonkf'
+  for case in json.loads(${JSON.stringify(JSON.stringify(autoQueue))}):
+   assert build_search_url(case['keyword'],'广州',criteria=case['criteria'])==case['url'],'resolved queue/native engine parity'
   for value in (2,1.5,-1,'bad'):
    try: filter_params({'wubaSearchFilters':{'publishedWithinDays':value}});raise AssertionError('invalid date accepted')
    except ValueError: pass
@@ -180,6 +261,7 @@ with tempfile.TemporaryDirectory(dir=${JSON.stringify(fixture)}) as home:
     assert not result['ok'] and result['code']==37 and not store.mark_combo_done.called
 print('PASS 58 Python native filters, URL parity, explicit end completion, mixed/zero results and unknown page failure; no network.')
 `;
-const python = spawnSync(process.env.BOSSCLAW_PYTHON || 'python', ['-c', pythonScript], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+const pythonPath = join(fixture, 'native-checks.py'); writeFileSync(pythonPath, pythonScript);
+const python = spawnSync(process.env.BOSSCLAW_PYTHON || 'python', [pythonPath], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
 assert.equal(python.status, 0, python.stderr || python.error?.message); process.stdout.write(python.stdout);
 console.log(`PASS 58 search: ${checks} native filter/URL checks and ${report.checks.length} actual DOM/Settings/persistence checks; zero platform requests.`);
