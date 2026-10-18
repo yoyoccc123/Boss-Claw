@@ -91,7 +91,7 @@ async function host(){
   let timerId=0, searchCount=0, deliveryCount=0;
   const c={...T,Promise,Date:Clock,Math,useCallback:fn=>fn,useDataStore:{getState:()=>data},useSettingsStore:{getState:()=>({config:cfg})},useAppStore:{getState:()=>app},
     webviewApi:{current:{sendInTab:(...args)=>sent.push(args),hasTab:()=>true}},visualTabRef:{current:'tab'},visualActiveRef:{current:true},cfxActiveRef:{current:false},
-    collectDoneResolve:{current:null},collectSequenceRef:{current:0},collectAwaitingSeqRef:{current:null},collectBottomTimerRef:{current:null},collectBatchGenerationRef:{current:0},collectTerminalRef:{current:''},collectPhaseRef:{current:'collecting'},
+    collectDoneResolve:{current:null},collectSequenceRef:{current:0},collectAwaitingSeqRef:{current:null},collectBottomTimerRef:{current:null},collectBatchGenerationRef:{current:0},collectTerminalRef:{current:''},collectPhaseRef:{current:'collecting'},collectTimeoutMsRef:{current:0},collectDeadlineRef:{current:0},
     collectingPlatformRef:{current:'boss'},goalLoggedRef:{current:new Set()},visualItemBufRef:{current:{}},visualsRafRef:{current:1},collectListReadyLoggedRef:{current:false},visualLoginBlockedRef:{current:''},
     analysisQueueRef:{current:null},setVisualCollecting:()=>{},setVisualPaused:()=>{},setCfxCollecting:()=>{},setVisualItem:()=>{},
     searchTriggered:{current:false},platformLabel:p=>p,searchPlatforms:['boss'],setRunning:()=>{},setAutoAssist:v=>{app.autoAssist=v;},
@@ -117,7 +117,8 @@ async function host(){
 }
 {
   const h=await host();let finished=false;const wait=h.c.visualCollectInTab('tab',{}).then(()=>{finished=true;});
-  h.c.visualActiveRef.current=false;[...h.timers.values()][0].fn();await wait;
+  const savedNow=now;now=h.c.collectDeadlineRef.current;
+  h.c.visualActiveRef.current=false;[...h.timers.values()][0].fn();await wait;now=savedNow;
   check(finished,'fallback timeout still settles when the active flag is already false');
 }
 {
