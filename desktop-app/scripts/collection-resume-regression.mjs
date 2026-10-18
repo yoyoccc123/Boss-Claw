@@ -182,7 +182,10 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
   events.length = 0; reordered = false;
   p.scrollJobListLoadMore = async () => ({ grew: false, atBottom: false });
   await p.visualCollect({ seq: 'scroll-limit', maxJobs: 5, autoScroll: true, scrollRounds: 1 });
-  check(events.some(e => e.channel === 'collect-done' && e.data.reason === 'limit'), `${platform}: scroll cap retains a partial combination`);
+  check(events.some(e => e.channel === 'collect-done' && e.data.reason === 'limit'), `${platform}: scroll cap reports a bounded group completion`);
+  events.length = 0; reordered = false;
+  await p.visualCollect({ seq: 'card-limit', maxJobs: 1, autoScroll: false });
+  check(events.filter(e => e.data.phase === 'done').length === 1 && events.some(e => e.channel === 'collect-done' && e.data.reason === 'limit' && e.data.processed === 1), `${platform}: the raw-card budget reports a normal group limit after exactly one card`);
   let tick = 0;
   class Clock extends Date { static now() { return tick; } }
   p.Date = Clock; p.sleep = async () => { tick += 2000; }; p.collectCards = () => [];

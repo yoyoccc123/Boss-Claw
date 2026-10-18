@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const compiled = await build({ stdin: { contents: `export * from './src/lib/bossclaw/collectionResume';export * from './src/lib/bossclaw/searchUrl';export * from './src/lib/bossclaw/platformUrls';export {DEFAULT_CONFIG} from './src/lib/bossclaw/defaults';`, resolveDir: root, loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+const compiled = await build({ stdin: { contents: `export * from './src/lib/bossclaw/collectionResume';export * from './src/lib/bossclaw/collectionGoal';export * from './src/lib/bossclaw/searchUrl';export * from './src/lib/bossclaw/platformUrls';export {DEFAULT_CONFIG} from './src/lib/bossclaw/defaults';`, resolveDir: root, loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
 const env = { module: { exports: {} }, console, Date, URL, URLSearchParams, localStorage: { getItem: () => null } };
 vm.createContext(env); vm.runInContext(compiled.outputFiles[0].text, env); const T = env.module.exports;
 let checks = 0;
@@ -62,17 +62,18 @@ async function harness(platform, engine, options = {}) {
   const cfg = options.config || structuredClone(config), directionPlan = options.plan || structuredClone(plan);
   const data = { collectionCheckpoints: { ...(options.saved ? { [platform]: structuredClone(options.saved) } : {}) }, pending: [], collectionCounts: {}, profile: {},
     setCollectionCheckpoint: (p, cp) => { data.collectionCheckpoints[p] = cp; } };
-  const urls = [], searches = [], logs = [], warnings = [], runs = []; let analyses = 0;
+  const urls = [], searches = [], logs = [], warnings = [], runs = [], commands = [], collectOptions = []; let analyses = 0;
   const repeatedJob = { platform, jobId: 'same-filtered-job', title: '合成重复岗位', url: 'https://example.test/same-filtered-job' };
   const h = { ...T, Promise, Date, Math, Set, Map, config: cfg, directionPlan, profile: {},
     useCallback: fn => fn, useSettingsStore: { getState: () => ({ config: cfg }) }, useDataStore: { getState: () => data },
     useAppStore: { getState: () => ({ autoAssist: false }) }, checkCollectionGoal: () => false,
-    collectionGoal: () => ({ remaining: 1000 }), isLockedOut: () => false, ensureBossLogin: async () => true,
+    collectionGoal: () => ({ remaining: options.remaining ?? 1000, count: 0, target: 50 }), isLockedOut: () => false, ensureBossLogin: async () => true,
     loadBossCityCodes: async () => {}, platformLabel: p => p, keywordLabel: k => k, COLLECT_RUN_PREFIX: 'cr_',
     collectBatchGenerationRef: { current: 1 }, visualActiveRef: { current: false }, cfxActiveRef: { current: false },
     ingestedSeenRef: { current: new Set() }, ingestAcknowledgmentsRef: { current: new Map() },
     checkpointContextRef: { current: null }, collectListReadyLoggedRef: { current: false }, visualLoginBlockedRef: { current: '' },
     visualTabRef: { current: '' }, collectPhaseRef: { current: '' }, collectingPlatformRef: { current: null }, collectTerminalRef: { current: '' },
+    goalLoggedRef: { current: new Set() }, collectDoneResolve: { current: null },
     analysisQueueRef: { current: null }, addLog: (level, msg) => logs.push({ level, msg }), message: { warning: msg => warnings.push(msg) },
     setVisualCollecting: () => {}, setVisualPaused: () => {}, setVisualItem: () => {}, setCfxCollecting: () => {},
     markCollectRun: (id, base, update) => runs.push({ id, ...base, ...update }), settleCollectRuns: () => {},
@@ -89,11 +90,15 @@ async function harness(platform, engine, options = {}) {
   };
   h.webviewApi = { current: { getFirstTabId: () => 'tab', getActiveTabId: () => 'tab', findTabByPlatform: () => 'tab',
     hasTab: () => true, loadURLInTab: (_tab, url) => urls.push(url), isPreloadReady: () => true, isLoading: () => false,
-    pageStatus: async () => ({ readyState: 'complete', cards: 0, bodyLen: 2000 }), sendInTab: () => {} } };
-  h.visualCollectInTab = async () => {
-    h.collectTerminalRef.current = 'completed';
+    pageStatus: async () => ({ readyState: 'complete', cards: 0, bodyLen: 2000 }), sendInTab: (...args) => commands.push(args) } };
+  h.visualCollectInTab = async (_tab, opts) => {
+    collectOptions.push(opts);
+    h.collectTerminalRef.current = options.terminal ?? 'completed';
     if (options.duplicates) await h.ingestJob(repeatedJob, h.collectBatchGenerationRef.current,
       h.checkpointJobAcknowledgment('card-' + urls.length, repeatedJob.title));
+    if (options.unresolved) h.checkpointContextRef.current.unresolved.add('unconfirmed-analysis');
+    if (options.staleGeneration) h.collectBatchGenerationRef.current++;
+    if (options.goalDuringAnalysis) h.analysisQueueRef.current = { getStats: () => ({ running: 1, queued: 0 }) };
     if (options.stopAfter && urls.length >= options.stopAfter) h.visualActiveRef.current = false;
   };
   h.camoufoxSearch = async (keyword, cityCode, _pages, _os, p, criteria) => {
@@ -105,8 +110,15 @@ async function harness(platform, engine, options = {}) {
   for (const name of ['collectRunId', 'filterQueueByRunIds', 'prepareCollectionCheckpoint', 'checkpointJobAcknowledgment', 'advanceCollectionCheckpoint', 'ingestJob', 'visualWait', 'runVisualCollect', 'runCamoufoxCollect']) {
     vm.runInContext((await transform(`globalThis.${name}=${vars.get(name)};`, { loader: 'tsx' })).code, h);
   }
+  if (options.goalDuringAnalysis) {
+    h.collectionGoal = T.collectionGoal;
+    vm.runInContext((await transform(`globalThis.checkCollectionGoal=${vars.get('checkCollectionGoal')};`, { loader: 'tsx' })).code, h);
+    h.sleep = async ms => {
+      if (ms === 200) data.collectionCounts[platform] = { date: T.collectionDay(Date.now()), count: T.collectionGoal(cfg, data.pending, data.collectionCounts, platform).target };
+    };
+  }
   const outcome = await h[engine === 'visual' ? 'runVisualCollect' : 'runCamoufoxCollect'](platform, undefined, options.mode || 'restart');
-  return { h, data, urls, searches, logs, warnings, runs, outcome, analyses };
+  return { h, data, urls, searches, logs, warnings, runs, outcome, analyses, commands, collectOptions };
 }
 for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) for (const engine of ['visual', 'camoufox']) {
   const expectedQueue = makeQueue(platform), result = await harness(platform, engine);
@@ -129,5 +141,26 @@ for (const engine of ['visual', 'camoufox']) {
   const expectedQueue = restored.queue.slice(saved.index);
   check(result.data.collectionCheckpoints.wuba.complete && !result.warnings.length, `${engine}: a real runner accepts the upgraded traversal and finishes without a restart`);
   check(engine === 'visual' ? result.urls.join() === expectedQueue.map(x => x.url).join() : result.searches.map(x => `${x.keyword}/${x.cityCode}`).join('|') === expectedQueue.map(x => `${x.keyword}/${x.location}`).join('|'), `${engine}: migrated actual search calls preserve the partial group and use the reordered remainder`);
+}
+for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
+  const limited = await harness(platform, 'visual', { terminal: 'limit', duplicates: true, remaining: 1 });
+  check(limited.data.collectionCheckpoints[platform].complete && limited.urls.join() === makeQueue(platform).map(x => x.url).join(), `${platform}: a normal group limit advances through all keywords, directions and cities`);
+  check(limited.analyses === 1 && T.collectionGoal(config, limited.data.pending, limited.data.collectionCounts, platform).count === 0, `${platform}: rejected/duplicate cards do not consume the qualified daily goal`);
+  check(limited.collectOptions.every(x => x.maxJobs === 1), `${platform}: the scan-budget limit stays bounded independently of advancing the queue`);
+  check(limited.logs.some(x => x.msg.includes('本组达到采集上限')) && !limited.logs.some(x => x.msg.includes('本组尚未完成')), `${platform}: a bounded normal completion is logged as moving on rather than an interruption`);
+  check(limited.runs.some(x => x.status === 'success' && x.stageLabel.includes('达到本组采集上限')), `${platform}: task progress records capped completion explicitly`);
+  for (const terminal of ['stopped', 'blocked', 'failed', '']) {
+    const interrupted = await harness(platform, 'visual', { terminal });
+    check(interrupted.urls.length === 1 && interrupted.data.collectionCheckpoints[platform].index === 0 && !interrupted.data.collectionCheckpoints[platform].complete, `${platform}: ${terminal || 'missing completion'} still stops without advancing`);
+  }
+  const unconfirmed = await harness(platform, 'visual', { terminal: 'limit', unresolved: true });
+  check(unconfirmed.urls.length === 1 && unconfirmed.data.collectionCheckpoints[platform].index === 0, `${platform}: a scan cap never acknowledges unresolved analysis`);
+  const goal = await harness(platform, 'visual', { terminal: 'limit', goalDuringAnalysis: true });
+  check(goal.urls.length === 1 && goal.logs.some(x => x.msg.includes('达到待确认目标')), `${platform}: reaching the qualified daily goal while draining analysis stops before the next group`);
+  check(goal.commands.some(x => x[1] === 'collect-control' && x[2]?.action === 'stop'), `${platform}: the real goal guard still sends stop to the collector`);
+  const manual = await harness(platform, 'visual', { terminal: 'limit', stopAfter: 1 });
+  check(manual.urls.length === 1 && manual.data.collectionCheckpoints[platform].index === 0, `${platform}: manual stop takes precedence over a simultaneous group limit`);
+  const stale = await harness(platform, 'visual', { terminal: 'limit', staleGeneration: true });
+  check(stale.outcome === 'abort' && stale.urls.length === 1 && stale.data.collectionCheckpoints[platform].index === 0, `${platform}: stale collection generations cannot advance after a group limit`);
 }
 console.log(`PASS collection traversal: ${checks} city-first queue, order-only migration and real visual/Camoufox runner checks across five platforms; zero platform requests.`);

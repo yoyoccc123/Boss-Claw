@@ -1791,6 +1791,7 @@ export default function Workbench() {
       // 接入设置约束：listAutoScroll（是否自动下拉加载更多，false=只采首屏可见卡）、
       //   listScrollRounds（每批下拉轮数上限，0=滚到物理底部/连续空轮停止）、
       //   maxJobsPerRun（单次采集兜底上限，0 或缺失沿用 webview 内置 1000 防失控）。
+      // 扫描预算只结束本组；每日合格入队目标仍由 checkCollectionGoal 负责停止整批采集。
       await visualCollectInTab(tabId, {
         expectedSearchUrl: platform === 'wuba' ? item.url : undefined,
         settleMs: collectSpeedMs,
@@ -1816,17 +1817,19 @@ export default function Workbench() {
       }
       const got = Math.max(0, ingestedSeenRef.current.size - before);
       if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
-      if (checkpointContext.unresolved.size || collectTerminalRef.current !== 'completed') {
+      const reachedGroupLimit = collectTerminalRef.current === 'limit';
+      if (checkpointContext.unresolved.size || (collectTerminalRef.current !== 'completed' && !reachedGroupLimit)) {
         const terminalLabels: Record<string, string> = { completed: '已采完', stopped: '已中止', limit: '达到本组采集上限', blocked: '页面要求登录或验证', failed: '采集异常' };
         addLog('warn', `本组尚未完成（页面：${terminalLabels[collectTerminalRef.current] || '未收到结束确认'}；未完成分析确认：${checkpointContext.unresolved.size} 个），已保存城市、关键词和已处理岗位；下次可继续采集`);
         visualActiveRef.current = false;
         break;
       }
+      if (reachedGroupLimit) addLog('info', `本组达到采集上限，已完成分析确认；${qi + 1 < queue.length ? '继续下一个搜索组合' : '本批搜索组合已处理完毕'}`);
       advanceCollectionCheckpoint();
       markCollectRun(runId, baseRun, {
         status: 'success',
         stage: 'success',
-        stageLabel: got > 0 ? `已完成，采集 ${got} 个岗位` : '已完成（无新增岗位）',
+        stageLabel: reachedGroupLimit ? `达到本组采集上限，新处理 ${got} 个岗位` : got > 0 ? `已完成，采集 ${got} 个岗位` : '已完成（无新增岗位）',
         processed: got,
         discovered: got,
         progress: Math.round(((qi + 1) / queue.length) * 100),
@@ -1847,11 +1850,12 @@ export default function Workbench() {
     setVisualPaused(false);
     setVisualItem((v) => ({ ...v, status: '', phase: '' }));
     recomputeStats();
+    const goalAtFinish = collectionGoal(useSettingsStore.getState().config, useDataStore.getState().pending, useDataStore.getState().collectionCounts, platform);
     addLog(
       wasStopped ? 'warn' : 'success',
       loginBlocked
         ? `可视化采集（${platformLabel(platform)}）未执行：${loginBlocked}`
-        : `可视化采集${wasStopped ? '已停止' : '完成'}：共处理 ${processed} 个岗位（已按条件过滤入库）`
+        : `可视化采集${wasStopped ? '已停止' : '完成'}：共处理 ${processed} 个岗位；今日合格入队 ${goalAtFinish.count}/${goalAtFinish.target}`
     );
     if (useAppStore.getState().autoAssist) requestRunNext();
     // 未登录属「平台级」故障：只跳过本平台，剩余平台继续（与 collectFaultScope 的平台级口径一致）
