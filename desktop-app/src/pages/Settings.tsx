@@ -1576,6 +1576,21 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                 <span className="field-label">断点续采</span>
                 <Text type="secondary">在工作台点击「搜索采集」，选择继续上次或从头采集；各平台分别保存进度。</Text>
               </div>
+              <div className="sg-item">
+                <span className="field-label">BOSS 浏览计数周期（分钟）</span>
+                <InputNumber min={1} max={1440} value={config.bossBrowseLimit?.windowMinutes ?? 30}
+                  onChange={v => setConfig({ bossBrowseLimit: { maxViews: config.bossBrowseLimit?.maxViews ?? 30, windowMinutes: v ?? 30 } })}
+                  style={{ width: '100%' }} />
+              </div>
+              <div className="sg-item">
+                <span className="field-label">周期内最多查看岗位数</span>
+                <InputNumber min={1} max={1000} value={config.bossBrowseLimit?.maxViews ?? 30}
+                  onChange={v => setConfig({ bossBrowseLimit: { windowMinutes: config.bossBrowseLimit?.windowMinutes ?? 30, maxViews: v ?? 30 } })}
+                  style={{ width: '100%' }} />
+              </div>
+              <div className="sg-item wide">
+                <Text type="secondary">BOSS 按尝试打开岗位详情计数，已过滤和重复查看也会计入；按周期均匀间隔查看，等待期间可停止。计数跨城市、方向和重启保留。这是本地浏览限额，不代表平台公布的安全阈值；遇到访问限制或验证时停止访问，保留进度。</Text>
+              </div>
             </div>
             <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 13 }}>
               开启后，每次「搜索采集」会自动将 BOSS 岗位列表向下滑动以加载无限列表。已入库岗位将自动根据 URL 去重跳过。

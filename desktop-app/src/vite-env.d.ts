@@ -4,6 +4,8 @@
 interface ElectronBridgeApi {
   versions?: { electron?: string; chrome?: string; node?: string };
   getAppInfo?: () => Promise<{ name: string; version: string }>;
+  bossBrowse?: (action: string, payload?: unknown) => Promise<unknown>;
+  onBossBrowseState?: (callback: (state: unknown) => void) => () => void;
   openExternal?: (url: string) => void;
   // 读取「使用前必读」文档（首页「阅读使用文档」入口）
   readDoc?: () => Promise<{ ok: boolean; text?: string; file?: string; error?: string }>;

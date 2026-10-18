@@ -167,8 +167,8 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
     collectCards: () => reordered ? [...cards].reverse() : cards, cardIdentity: card => ({ title: card.id, company: 'company' }),
     extractJobDetail: card => ({ jobId: card.id, title: card.id, welfare: ['五险一金'] }), extractJobFromCardOnly: card => ({ jobId: card.id, title: card.id }),
     smoothScrollIntoView: async () => {}, highlightElement: () => {}, openCardDetail: async () => {}, enrichJobDetail: async () => {},
-    waitWhilePaused: async () => {}, sleep: async () => {}, jitterDelay: async () => {}, all: () => [], $: () => null,
-    resetJdFillState: () => {}, reportJdFillSummary: () => {}, ensureCollectStyle: () => {}, loginWallDetected: () => false,
+    waitWhilePaused: async () => {}, waitForBossBrowse: async () => ({ ok: true }), bossBrowsePermission: async () => ({ ok: true }), sleep: async () => {}, jitterDelay: async () => {}, all: () => [], $: () => null,
+    resetJdFillState: () => {}, reportJdFillSummary: () => {}, reportBossRestriction: async () => null, ensureCollectStyle: () => {}, loginWallDetected: () => false,
     LINK_SELECTOR: 'a', textOf: card => card.id };
   vm.createContext(p);
   for (const name of ['collectionListExplicitlyEmpty', 'stableFallbackJobId', 'collectCardKey', 'visualCollectListOnly', 'visualCollect']) vm.runInContext(functions.get(name), p);

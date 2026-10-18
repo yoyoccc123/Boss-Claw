@@ -36,6 +36,7 @@ import { isJdKeywordExcluded } from '@/lib/bossclaw/jdKeywordFilter';
 import { checkJobExpiry, isExpiryFilterEnabled, PLATFORM_EXPIRY_DEFAULT } from '@/lib/bossclaw/jobExpiry';
 import { makePendingItem, jobUrlKey, sameJobSoft } from '@/store/useDataStore';
 import { checkBossLogin } from '@/lib/bossLogin';
+import { electronApi } from '@/lib/electronApi';
 import { stageToPhase, taskStageMetaFor } from '@/lib/bossclaw/taskState';
 import { jobCardStatus, scoreChip } from '@/lib/bossclaw/statusMeta';
 import { formatMetaLine, cleanTitle, decodeSalaryDigits } from '@/lib/bossclaw/jobDisplay';
@@ -346,7 +347,9 @@ export default function Workbench() {
   const collectDoneResolve = useRef<(() => void) | null>(null);
   const collectSequenceRef = useRef(0);
   const collectBatchGenerationRef = useRef(0);
-  const collectPhaseRef = useRef<'idle' | 'loading' | 'collecting' | 'analyzing'>('idle');
+  const collectPhaseRef = useRef<'idle' | 'loading' | 'collecting' | 'analyzing' | 'browse-wait'>('idle');
+  const collectDeadlineRef = useRef(0);
+  const collectTimeoutMsRef = useRef(0);
   const collectTerminalRef = useRef('');
   const checkpointContextRef = useRef<{ platform: JobPlatform; generation: number; checkpoint: CollectionCheckpoint;
     queue: CollectionCombination[]; persist: boolean; unresolved: Set<string> } | null>(null);
@@ -1010,6 +1013,27 @@ export default function Workbench() {
    * ⚠️ 安全语义不变：等的仍是两次投递动作之间的间隔，`lastDeliveryAt` 仍在**即将执行投递动作时**刷新，
    * 因此点击/发送的时序与串行版本一致。**禁止**把它改成「不等」或缩短间隔。
    */
+  const awaitBossBrowseForDelivery = async (epoch: number, action: 'status' | 'reserve' = 'reserve'): Promise<boolean> => {
+    while (canContinueDelivery(epoch)) {
+      const gate = await electronApi.bossBrowse.call(action);
+      if (!canContinueDelivery(epoch)) return false;
+      if (gate.ok) {
+        if (action === 'reserve') addLog('info', `BOSS 详情查看已计数：近 ${gate.windowMinutes} 分钟 ${gate.count}/${gate.maxViews} 次`);
+        return true;
+      }
+      if (gate.blocked || gate.error || !gate.retryAt || gate.retryAt <= Date.now()) {
+        pauseAssist(gate.error || gate.message || 'BOSS 自动浏览已停止'); return false;
+      }
+      setApplyStage('queued');
+      addLog('info', `${gate.message}；等待至 ${new Date(gate.retryAt).toLocaleTimeString()} 再打开岗位，可随时停止`);
+      while (Date.now() < gate.retryAt) {
+        if (!canContinueDelivery(epoch)) return false;
+        await sleep(Math.min(250, gate.retryAt - Date.now()));
+      }
+    }
+    return false;
+  };
+
   const awaitDeliveryGap = async (epoch: number): Promise<boolean> => {
     const waitWhileRunning = async (ms: number) => {
       const until = Date.now() + ms;
@@ -1313,6 +1337,16 @@ export default function Workbench() {
   // 采集进度回传（collect-progress）：更新实时状态面板；phase=done 时入库
   const handleCollectProgress = useCallback((data: any) => {
     if (data?.seq && data.seq !== collectAwaitingSeqRef.current) return;
+    if (data?.phase === 'browse-wait') {
+      collectPhaseRef.current = 'browse-wait';
+      if (Number.isFinite(data.retryAt)) collectDeadlineRef.current = Math.max(collectDeadlineRef.current, data.retryAt + collectTimeoutMsRef.current);
+      addLog('info', String(data.status || 'BOSS 浏览限额等待中'));
+    } else if (data?.phase === 'browse-view') {
+      collectPhaseRef.current = 'collecting';
+      addLog('info', String(data.status || 'BOSS 详情查看已计数'));
+    } else if (data?.phase === 'browse-blocked') {
+      addLog('warn', String(data.status || 'BOSS 自动浏览已停止'));
+    }
     if (data?.phase === 'list-bottom' && collectAwaitingSeqRef.current) {
       const seq = collectAwaitingSeqRef.current;
       if (collectBottomTimerRef.current) clearTimeout(collectBottomTimerRef.current);
@@ -1411,11 +1445,18 @@ export default function Workbench() {
       // 旧公式只按 settleMs 线性估算，列表页更长时会在页内仍在采集时切走标签（跨组合串台）；
       // 现在把列表首屏等待与逐卡片节奏一并计入，并放宽到 15min 上限（仅作最后兜底）。
       const timeoutMs = Math.min(900000, listWaitMs + 120000 + 240 * settleMs);
-      timer = setTimeout(() => {
+      collectTimeoutMsRef.current = timeoutMs;
+      collectDeadlineRef.current = Date.now() + timeoutMs;
+      const checkTimeout = () => {
+        if (done) return;
+        if (Date.now() < collectDeadlineRef.current) {
+          timer = setTimeout(checkTimeout, Math.max(1000, collectDeadlineRef.current - Date.now())); return;
+        }
         collectTerminalRef.current = 'failed';
         webviewApi.current?.sendInTab(tabId, 'collect-control', { action: 'stop' });
         finish();
-      }, timeoutMs);
+      };
+      timer = setTimeout(checkTimeout, timeoutMs);
     });
   }, []);
 
@@ -1697,6 +1738,22 @@ export default function Workbench() {
       if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current || checkCollectionGoal(platform)) break;
       // 该平台未登录：后续搜索组合必然同样失败 → 立即收口（登录墙判定在页内完成，不靠猜）
       if (visualLoginBlockedRef.current) break;
+      if (platform === 'boss') {
+        const guard = await electronApi.bossBrowse.call('configure', useSettingsStore.getState().config.bossBrowseLimit);
+        if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
+        if (guard.blocked || guard.error) {
+          addLog('warn', `${guard.error || guard.message}；已保留采集断点${guard.retryAt ? `，停止访问至 ${new Date(guard.retryAt).toLocaleString('zh-CN')}` : ''}`);
+          visualActiveRef.current = false; break;
+        }
+        if (!guard.ok && guard.retryAt > Date.now()) {
+          collectPhaseRef.current = 'browse-wait';
+          const status = `${guard.message}；等待至 ${new Date(guard.retryAt).toLocaleTimeString()} 后继续，可随时停止`;
+          setVisualItem(v => ({ ...v, phase: 'browse-wait', status })); addLog('info', status);
+          await visualWait(guard.retryAt - Date.now());
+          if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
+          qi -= 1; continue;
+        }
+      }
       addLog('info', `可视化采集「${item.keyword}」· ${item.location || '全国'} · 方向：${item.directionName || '随机推荐'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）`);
       let tabId = collectTabId;
       if (!webviewApi.current?.hasTab(tabId)) {
@@ -2404,6 +2461,7 @@ export default function Workbench() {
     if (!greeting) { pauseAssist('招呼语为空，无法通过 Camoufox 投递，请补充后再试'); return; }
     const jobId = extractEncryptJobId(candidate.job);
     if (!jobId) { pauseAssist('岗位缺少 jobId，无法通过 Camoufox 投递'); return; }
+    if (!await awaitBossBrowseForDelivery(epoch, 'status') || !canContinueDelivery(epoch)) return;
     try {
       setApplyStage('open_job');
       addLog('info', `通过 Camoufox 隐身通道投递：${candidate.job?.title || '岗位'}`);
@@ -2430,6 +2488,11 @@ export default function Workbench() {
         releaseDelivery(candidate.id, pf);
       }
       const result = cfxResult;
+      if (result.browseLimited) {
+        deliverySubmittedRef.current = false;
+        setApplyStage(null);
+        pauseAssist(result.message || 'BOSS 浏览限额等待中，岗位已保留待投递'); return;
+      }
       if (result.ok && result.sent) {
         handleDelivered(candidate.id);
         return;
@@ -2485,6 +2548,7 @@ export default function Workbench() {
       if (finalGreeting && liveCandidate) updatePending(liveCandidate.id, { deliveryGreeting: finalGreeting });
     }
     if (!finalGreeting) { pauseAssist('招呼语为空，无法投递，请补充后再试'); return; }
+    if (!await awaitBossBrowseForDelivery(epoch) || !canContinueDelivery(epoch)) return;
 
     // 共享占位锁：与后台「自动沟通」互斥，避免对同一岗位重复投递
     if (!claimDelivery(candidate.id, pf)) {

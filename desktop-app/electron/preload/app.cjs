@@ -26,6 +26,12 @@ const api = {
 
   // 应用信息（名称、版本号）— 标题栏使用
   getAppInfo: () => ipcRenderer.invoke('jc:app-info'),
+  bossBrowse: (action, payload) => ipcRenderer.invoke('jc:boss-browse', action, payload),
+  onBossBrowseState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('jc:boss-browse-state', listener);
+    return () => ipcRenderer.removeListener('jc:boss-browse-state', listener);
+  },
 
   // 窗口控制（frame:false 自绘标题栏按钮）
   winMinimize: () => ipcRenderer.send('jc:window-minimize'),

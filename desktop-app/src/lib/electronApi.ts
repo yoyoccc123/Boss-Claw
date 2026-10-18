@@ -19,6 +19,10 @@ export interface CamoufoxApiStatus {
 
 const noop = () => {};
 const noopUnsub = () => () => {};
+export interface BossBrowseState {
+  ok: boolean; blocked: boolean; error?: string; retryAt: number;
+  count: number; maxViews: number; windowMinutes: number; code?: number; message?: string;
+}
 
 function api(): NonNullable<Window['electron']> | Record<string, never> {
   if (typeof window === 'undefined') return {};
@@ -27,6 +31,16 @@ function api(): NonNullable<Window['electron']> | Record<string, never> {
 
 // 供业务代码统一调用的安全封装（按用途分组）
 export const electronApi = {
+  bossBrowse: {
+    call: async (action: 'status' | 'configure' | 'reserve', policy?: { maxViews: number; windowMinutes: number }): Promise<BossBrowseState> => {
+      try {
+        const state = await api().bossBrowse?.(action, policy);
+        if (state && typeof state === 'object' && typeof (state as BossBrowseState).ok === 'boolean') return state as BossBrowseState;
+      } catch {}
+      return { ok: false, blocked: false, error: 'BOSS 浏览限额未就绪，已停止自动访问，请重启程序', retryAt: 0, count: 0, maxViews: 30, windowMinutes: 30 };
+    },
+    onState: (cb: (state: BossBrowseState) => void) => (api().onBossBrowseState || noopUnsub)((state: unknown) => cb(state as BossBrowseState)),
+  },
   isReady: (): boolean => Boolean(api().getAppInfo),
   versions: () => ({
     electron: api().versions?.electron || 'unknown',

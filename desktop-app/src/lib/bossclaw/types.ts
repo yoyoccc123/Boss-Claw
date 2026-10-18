@@ -130,6 +130,8 @@ export interface AppConfig {
   listScrollRounds: number;
   /** 可视化采集滚动间隔（毫秒，每步 settleMs），越大越慢越像人工 */
   collectSpeedMs: number;
+  /** BOSS 岗位详情浏览的滚动时间窗口与次数；计数保存在主进程，跨城市和重启共用。 */
+  bossBrowseLimit: { maxViews: number; windowMinutes: number };
   /**
    * 搜索页加载等待上限（毫秒）：每次采集切换搜索组合后，等待「preload 就绪 + 加载遮罩消失」的最长时间，
    * 超时则重载重试一次、仍失败才跳过该组合。默认 30000（BOSS 搜索页较重，旧实现仅 8s 易整组跳过）。

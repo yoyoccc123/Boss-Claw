@@ -9,7 +9,9 @@ import { ensureSkillsLoaded } from './lib/bossclaw/skills';
 import { useInterval } from './lib/hooks';
 import { startScheduler } from './lib/scheduler';
 import { useScheduleStore } from './store/useScheduleStore';
-import { consumeLegacyBatchDelivery } from './store/useSettingsStore';
+import { consumeLegacyBatchDelivery, useSettingsStore } from './store/useSettingsStore';
+import { useRuntimeLogsStore } from './store/useRuntimeLogsStore';
+import { electronApi } from './lib/electronApi';
 import { restoreFromLocalBackup, startLocalBackup } from './lib/localBackup';
 import { syncTargetLocationsOnStart } from './lib/bossclaw/targetLocationSync';
 import Sidebar from './components/Sidebar';
@@ -59,6 +61,13 @@ const PRELOAD_PAGES: Array<() => Promise<unknown>> = [
 
 export default function App() {
   const activeRoute = useAppStore((s) => s.activeRoute);
+  const browseLimit = useSettingsStore(s => s.config.bossBrowseLimit);
+  useEffect(() => {
+    void electronApi.bossBrowse.call('configure', browseLimit || { maxViews: 30, windowMinutes: 30 });
+  }, [browseLimit]);
+  useEffect(() => electronApi.bossBrowse.onState(state => {
+    if (state.blocked) useRuntimeLogsStore.getState().addLog('warn', `${state.message}；停止访问至 ${new Date(state.retryAt).toLocaleString('zh-CN')}`);
+  }), []);
   // P28：从 ThemeProvider 上下文复用 Root 算好的 effective，避免 App 再各自持有一份 matchMedia 监听
   const { effective } = useTheme();
 

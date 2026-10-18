@@ -68,6 +68,10 @@ export function classifyRiskCode(code: number | null | undefined): RiskSignal | 
 /** 按页面 URL 分类风险信号（403?code=32 / verify-slider / security-check 等重定向页） */
 export function classifyRiskUrl(url: string): RiskSignal | null {
   const u = String(url || '');
+  try {
+    const parsed = new URL(u);
+    if (/(^|\.)zhipin\.com$/i.test(parsed.hostname) && /\/passport\/zp\/403\.html$/i.test(parsed.pathname)) return classifyRiskCode(32);
+  } catch {}
   const m = u.match(/[?&]code=(\d+)/);
   if (m) return classifyRiskCode(Number(m[1]));
   if (/verify-slider|zpsecureflow\/captcha|passport\/zp\/verify/i.test(u)) {
@@ -82,6 +86,7 @@ export function classifyRiskUrl(url: string): RiskSignal | null {
 /** 按页面文本分类风险信号（webview 回传的正文文本） */
 export function classifyRiskText(text: string): RiskSignal | null {
   const t = String(text || '');
+  if (/访问受限|您的账户存在异常行为|已暂时被限制访问/.test(t)) return classifyRiskCode(32);
   if (/访问过于频繁|操作过于频繁|操作频繁|请求过于频繁|稍后再试/.test(t)) return classifyRiskCode(1006);
   if (/账号异常|账户异常|账号冻结|账户冻结|账号封禁|账户封禁|账号受限|违规行为/.test(t)) return classifyRiskCode(32);
   if (/安全验证|滑动验证|滑块验证|点选验证|图形验证|行为验证/.test(t)) return classifyRiskCode(35);

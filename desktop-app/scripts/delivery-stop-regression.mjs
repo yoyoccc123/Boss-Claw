@@ -36,7 +36,7 @@ async function environment(platform='zhaopin') {
     updatePending:()=>{throw new Error('Cancelled work must not mutate queue state');},
     setActiveId:id=>{c.activeId=id;},activeId:'one',setApplyStage:stage=>{c.applyStage=stage;},applyStage:'queued',
     recomputeStats:()=>{},addLog:()=>{},pauseAssist:()=>{},claimDelivery:()=>true,releaseDelivery:id=>released.push(id),
-    platformLabel:p=>p,awaitDeliveryGap:()=>gap.promise,requestRunNext:()=>{throw new Error('Stopped work must not schedule another job');},
+    platformLabel:p=>p,awaitBossBrowseForDelivery:async()=>true,awaitDeliveryGap:()=>gap.promise,requestRunNext:()=>{throw new Error('Stopped work must not schedule another job');},
     handleDelivered:id=>delivered.push(id),extractEncryptJobId:()=> 'one',camoufoxStatus:async()=>({ready:true}),
     camoufoxSend:async()=>{sent.push('camoufox');return{ok:true,sent:true};},
     sleep:async()=>{await flush();},

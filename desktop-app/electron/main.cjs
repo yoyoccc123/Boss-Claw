@@ -24,6 +24,20 @@ const zhaopinNativeChats = createZhaopinNativeChatBindings();
 // 内置浏览器「主世界」反检测补丁 + 指纹自检（补丁本体与探针同一模块，见文件头说明）
 const stealth = require('./preload/stealth.cjs');
 const { dispatchBossChatInput } = require('./preload/boss-chat-context.cjs');
+const { createBossBrowseBudget } = require('./boss-browse-budget.cjs');
+const bossBrowseGuests = new Set();
+let bossBrowseBudget;
+const getBossBrowseBudget = () => bossBrowseBudget ||= createBossBrowseBudget(path.join(app.getPath('userData'), 'boss-browse-budget.json'));
+let lastBossBrowseBlock = '';
+function observeBossBrowseBlock(url, text = '') {
+  const state = getBossBrowseBudget().observe(url, text);
+  const signature = state.blocked ? `${state.code}:${state.retryAt}` : '';
+  if (signature && signature !== lastBossBrowseBlock) {
+    lastBossBrowseBlock = signature;
+    mainWindow?.webContents.send('jc:boss-browse-state', state);
+  }
+  return state;
+}
 
 // ===== 轻量日志：仅在 BOSSCLAW_DEBUG=1 或开发模式写文件；正常情况只走 console =====
 // 延迟访问 app（顶层 require 时 app 可能尚未就绪），且不影响其它调用方读取 dlog。
@@ -126,6 +140,21 @@ function safeOn(channel, handler) {
     }
   });
 }
+
+safeHandle('jc:boss-browse', (event, action, payload = {}) => {
+  const owner = event.sender === mainWindow?.webContents;
+  const frame = event.senderFrame;
+  let bossGuest = false;
+  try { bossGuest = bossBrowseGuests.has(event.sender.id) && !!frame && frame.parent === null
+    && frame.url === event.sender.getURL() && /(^|\.)zhipin\.com$/i.test(new URL(frame.url).hostname); } catch {}
+  if (!owner && !bossGuest) return { ok: false, error: '浏览限额仅供工作台及 BOSS 主页面使用' };
+  const budget = getBossBrowseBudget();
+  if (action === 'configure' && owner) return budget.configure(payload);
+  if (action === 'status') return budget.status();
+  if (action === 'reserve') return budget.reserve();
+  if (action === 'observe' && bossGuest) return observeBossBrowseBlock(frame.url, String(payload.text || '').slice(0, 6000));
+  return { ok: false, error: '不支持的浏览限额操作' };
+});
 
 // ===== AI Skills 层：skills/<id>/SKILL.md（标准技能格式） =====
 // 渲染层调用 AI 时按作用域启用技能：元数据（name/scope/defaultEnabled）经 jc:skills-list
@@ -773,6 +802,15 @@ safeHandle('jc:camoufox-restart', async (_event, platform) => {
 
 // 渲染层调用隐身引擎桥（search/send/login），统一转发 127.0.0.1 请求
 safeHandle('jc:camoufox-call', async (_event, action, payload) => {
+  if (_event.sender !== mainWindow?.webContents) return { ok: false, error: '仅工作台可调用浏览器引擎' };
+  if ((payload?.platform || 'boss') === 'boss' && ['search', 'send', 'chat'].includes(action)) {
+    const budget = getBossBrowseBudget();
+    const gate = ['send', 'chat'].includes(action) ? budget.reserve() : budget.status();
+    if (gate.blocked || gate.error || (action !== 'search' && !gate.ok)) return {
+      ok: false, sent: false, code: gate.code || 1006, browseLimited: true, retryAt: gate.retryAt,
+      message: gate.message || 'BOSS 浏览频率限制，稍后再试', jobs: [],
+    };
+  }
   const python = await detectPython();
   if (!python) return { ok: false, error: '未检测到 Python 环境' };
   const env = await ensureCamoufoxDeps(python);
@@ -794,7 +832,19 @@ safeHandle('jc:camoufox-call', async (_event, action, payload) => {
       body: JSON.stringify(payload || {}),
       signal: AbortSignal.timeout((action === 'login' ? 360 : 240) * 1000),
     });
-    return await res.json();
+    const result = await res.json();
+    if ((payload?.platform || 'boss') === 'boss' && [32, 35, 36, 403, 1006].includes(Number(result?.code))) {
+      const notice = Number(result.code) === 1006 ? '请求过于频繁' : Number(result.code) === 36 ? '账户异常'
+        : [32, 403].includes(Number(result.code)) ? '已暂时被限制访问' : '请完成安全验证';
+      const retryAt = Number(result.retryAt);
+      const recovery = Number.isFinite(retryAt) && retryAt > Date.now() && retryAt - Date.now() <= 31 * 86400_000
+        ? ` 将于 ${new Date(retryAt + 8 * 3600_000).toISOString().slice(0, 19).replace('T', ' ')} 恢复正常` : '';
+      const state = observeBossBrowseBlock('https://www.zhipin.com/web/geek/jobs',
+        `${notice} ${String(result.message || '').slice(0, 1000)}${recovery}`);
+      if (Number(result.code) === 403) result.code = 32;
+      result.retryAt = state.retryAt;
+    }
+    return result;
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -939,6 +989,9 @@ async function createMainWindow() {
   // 链接操作（新标签打开/复制链接）+ 查看网页源码（本页 Modal 展示，不跳新标签页）。
   // 后退/前进走 preload 的 SPA 历史栈（spa-back/spa-forward），整页导航与 SPA 内跳转都生效。
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
+    bossBrowseGuests.add(wc.id);
+    wc.once('destroyed', () => bossBrowseGuests.delete(wc.id));
+    wc.on('did-navigate', (_event, url) => { observeBossBrowseBlock(url); });
     wc.on('context-menu', (_ev, params) => {
       const template = [
         { label: '后退', click: () => { try { wc.send('spa-back'); } catch {} } },

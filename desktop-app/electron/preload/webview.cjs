@@ -32,6 +32,7 @@ const OFFICE = require('./office-address.cjs');
 const COMPANY = require('./company-size.cjs');
 const { readOfficeAddress } = require('./office-address-reader.cjs');
 const { readZhaopinPageBlock } = require('./zhaopin-page-block.cjs');
+const { readBossPageBlock } = require('./boss-page-block.cjs');
 // 人类化输入计划（纯函数，零 DOM 依赖 → 单测见 desktop-app/scripts/humanize-regression.mjs）。
 // 只负责「怎么动」，不发事件；真实点击/输入仍走 jc:webview-input 主进程通道。
 const humanize = require('./humanize.cjs');
@@ -48,6 +49,40 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function notify(channel, data) {
   try { ipcRenderer.sendToHost(channel, data); } catch {}
+}
+
+async function bossBrowsePermission(action = 'reserve', payload) {
+  try {
+    const state = await ipcRenderer.invoke('jc:boss-browse', action, payload);
+    if (state && typeof state.ok === 'boolean') return state;
+  } catch {}
+  return { ok: false, error: 'BOSS 浏览限额未就绪，已停止自动访问', retryAt: 0 };
+}
+let bossBlockSignature = '';
+async function reportBossRestriction(url = location.href, text = String(document.body?.innerText || '')) {
+  const block = readBossPageBlock(url, text);
+  if (!block) return null;
+  const signature = `${block.code}:${block.explicitUntil ? block.until : 'unknown'}`;
+  if (signature !== bossBlockSignature) {
+    const state = await bossBrowsePermission('observe', { text: String(text).slice(0, 6000) || (block.code === 32 ? '已暂时被限制访问' : '请完成安全验证') });
+    if (!state.error) bossBlockSignature = signature;
+    return state;
+  }
+  return block;
+}
+async function waitForBossBrowse(stopped, progress) {
+  for (;;) {
+    await waitWhilePaused();
+    if (stopped()) return { ok: false, stopped: true };
+    const pageBlock = await reportBossRestriction();
+    if (pageBlock) return { ok: false, blocked: true, message: pageBlock.message };
+    const permit = await bossBrowsePermission();
+    if (stopped()) return { ok: false, stopped: true };
+    if (permit.ok) { progress('browse-view', permit); return permit; }
+    if (permit.blocked || permit.error || !Number.isFinite(permit.retryAt) || permit.retryAt <= Date.now()) return permit;
+    progress('browse-wait', permit);
+    while (!stopped() && Date.now() < permit.retryAt) await sleep(Math.min(250, permit.retryAt - Date.now()));
+  }
 }
 
 // ===== preload 健康探针：脚本一旦注入即回传（诊断「preload 未加载/崩溃」）=====
@@ -351,6 +386,7 @@ ipcRenderer.on('force-resize', () => { try { window.dispatchEvent(new Event('res
 let lastNavSig = ''; // 导航状态变化去重：内容未变则不重复上报（BOSS 页 DOM 高频变动时防止每帧 IPC 风暴）
 function reportNav() {
   try {
+    void reportBossRestriction();
     const canGoBack = spaIndex > 0;
     const canGoForward = spaIndex >= 0 && spaIndex < spaHistory.length - 1;
     const sig = location.href + '\u0001' + document.title + '\u0001' + (canGoBack ? '1' : '0') + (canGoForward ? '1' : '0');
@@ -402,7 +438,14 @@ function riskCodeMessage(code) {
 // options.timeoutMs 可覆盖单次请求超时（默认 15s；「加入任务」提取链用 8s，确保 API 超时后
 // DOM 兜底仍在渲染层 10s 解析预算内完成，避免超时兜底空卡）。
 async function zpFetch(path, options = {}) {
-  const { timeoutMs = 15000, ...fetchOpts } = options;
+  const { timeoutMs = 15000, browseAdmitted = false, ...fetchOpts } = options;
+  if (/\/zpgeek\/job\/(?:card|detail)\.json/.test(path)) {
+    const permit = await bossBrowsePermission(browseAdmitted ? 'status' : 'reserve');
+    if ((!browseAdmitted && !permit.ok) || permit.blocked || permit.error) return {
+      error: permit.error || permit.message || 'BOSS 浏览频率限制', code: permit.code || 1006,
+      browseLimited: true, retryAt: permit.retryAt,
+    };
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -412,8 +455,20 @@ async function zpFetch(path, options = {}) {
       headers: { 'X-Requested-With': 'XMLHttpRequest', ...(fetchOpts.headers || {}) },
       ...fetchOpts,
     });
+    if (res.status === 403 || res.status === 429 || readBossPageBlock(res.url)) {
+      const text = await res.text();
+      const code = res.status === 429 ? 1006 : 32;
+      await reportBossRestriction(res.url || location.href, readBossPageBlock(res.url || location.href, text) ? text : code === 1006 ? '请求过于频繁' : '已暂时被限制访问');
+      return { error: `BOSS 访问受限（HTTP ${res.status}），已停止自动访问`, code };
+    }
     if (!res.ok) return { error: `HTTP ${res.status}` };
-    return await res.json();
+    const result = await res.json();
+    if ([32, 35, 36, 37, 38, 1006].includes(Number(result?.code))) {
+      const notice = Number(result.code) === 1006 ? '请求过于频繁' : Number(result.code) === 36 ? '账户异常'
+        : Number(result.code) === 32 ? '已暂时被限制访问' : '请完成安全验证';
+      await reportBossRestriction(location.href, `${notice} ${String(result.message || '').slice(0, 1000)}`);
+    }
+    return result;
   } catch (e) {
     return { error: String(e?.message || e) };
   } finally {
@@ -422,6 +477,8 @@ async function zpFetch(path, options = {}) {
 }
 
 async function handleBossApi(action, params = {}) {
+  const guard = await bossBrowsePermission('status');
+  if (guard.blocked || guard.error) return { error: guard.error || guard.message, code: guard.code || 32 };
   switch (action) {
     case 'joblist': {
       const query = String(params.query || '').trim();
@@ -579,11 +636,19 @@ function extractBenefitsFromMeta() {
 // 拿不到该岗位详情福利。直接抓岗位详情页 HTML（同源 fetch + 登录态），从源码 meta description
 // 提取「福利：…」段与正/负信号关键字并入 welfare，保证工作台五险一金等标签可显示。
 // 抓取失败（风控/网络/非详情链接）静默返回空，不阻塞采集主循环。
-async function fetchDetailSourceWelfare(jobUrl) {
+async function fetchDetailSourceWelfare(jobUrl, browseAdmitted = false) {
   try {
     const u = String(jobUrl || '');
     if (!/job_detail|jobdetail/i.test(u)) return [];
+    if (PLATFORM === 'boss') {
+      const permit = await bossBrowsePermission(browseAdmitted ? 'status' : 'reserve');
+      if ((!browseAdmitted && !permit.ok) || permit.blocked || permit.error) return [];
+    }
     const res = await fetch(u, { credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    if (PLATFORM === 'boss' && (res.status === 403 || res.status === 429 || readBossPageBlock(res.url))) {
+      const text = await res.text();
+      await reportBossRestriction(res.url || location.href, readBossPageBlock(res.url || location.href, text) ? text : res.status === 429 ? '请求过于频繁' : '已暂时被限制访问'); return [];
+    }
     if (!res.ok) return [];
     const html = await res.text();
     if (!html || html.length < 200) return [];
@@ -2461,12 +2526,27 @@ async function visualCollect(opts = {}) {
     await waitWhilePaused();
     if (processedCount >= maxJobs) break;
     // 2) 点击展开详情
+    const permit = await waitForBossBrowse(stopped, (phase, state) => notify('collect-progress', {
+      phase, index, total: cards.length, title: identity.title, company: identity.company,
+      retryAt: state.retryAt, count: state.count, maxViews: state.maxViews, windowMinutes: state.windowMinutes,
+      status: phase === 'browse-wait' ? `${state.message}；等待至 ${new Date(state.retryAt).toLocaleTimeString()} 后继续，可随时停止`
+        : `详情查看已计数：近 ${state.windowMinutes} 分钟 ${state.count}/${state.maxViews} 次`,
+    }));
+    if (stopped()) break;
+    await waitWhilePaused();
+    if (stopped()) break;
+    if (!permit.ok) {
+      terminalReason = 'blocked';
+      notify('collect-progress', { phase: 'browse-blocked', status: permit.error || permit.message || 'BOSS 浏览已停止' });
+      break;
+    }
     notify('collect-progress', { phase: 'click', index, total: cards.length, processed: processedCount, maxJobs, title: identity.title, company: identity.company, status: '点击中' });
     await openCardDetail(card);
     await sleep(Math.max(500, Math.round(settleMsNow() * 0.6)));
     if (stopped()) break;
     // 3) 提取岗位信息并回传
     const job = extractJobDetail(card);
+    if (await reportBossRestriction()) { terminalReason = 'blocked'; break; }
     // 采集路径福利兜底：列表页右侧面板/meta 是通用文案，往往拿不到该岗位详情福利；
     // 当福利缺「社保信号」（五险/六险/三险/公积金）时，走 card.json API（与「加入任务」同源）补全
     // welfareList（含 五险一金/年终奖 等），保证工作台绿标可显示；DOM 只命中双休/弹性这类非社保标签
@@ -2481,7 +2561,7 @@ async function visualCollect(opts = {}) {
       _jid = _jid.replace(/\.html$/i, '').trim();
       const _hasIns = (job.welfare || []).some((w) => /五险|六险|三险|公积金/.test(String(w)));
       if (_jid && !_hasIns) {
-        const c = await zpFetch(`/wapi/zpgeek/job/card.json?encryptJobId=${encodeURIComponent(_jid)}`, { timeoutMs: 8000 });
+        const c = await zpFetch(`/wapi/zpgeek/job/card.json?encryptJobId=${encodeURIComponent(_jid)}`, { timeoutMs: 8000, browseAdmitted: true });
         if (c && c.code === 0 && c.zpData) {
           const wl = Array.isArray(c.zpData.welfareList) ? c.zpData.welfareList.map(String) : [];
           const pos = scanPositiveKeywords(c.zpData.jobDesc || c.zpData.postDescription || '');
@@ -2492,12 +2572,18 @@ async function visualCollect(opts = {}) {
       // card.json 仍缺社保信号（API 风控/空壳/jobId 缺失）→ 直接从岗位详情页源码（meta description）补全，
       // 与「加入任务」解析详情页源码同口径，保证采集卡片也能显示五险一金等福利标签。
       if (!(job.welfare || []).some((w) => /五险|六险|三险|公积金/.test(String(w)))) {
-        const src = await fetchDetailSourceWelfare(job.url);
+        const src = await fetchDetailSourceWelfare(job.url, true);
         if (src.length) {
           job.welfare = [...new Set([...(job.welfare || []), ...src])].slice(0, 16);
         }
       }
     } catch (e) {}
+    const afterView = await bossBrowsePermission('status');
+    if (afterView.blocked || afterView.error) {
+      terminalReason = 'blocked';
+      notify('collect-progress', { phase: 'browse-blocked', status: afterView.error || afterView.message || 'BOSS 自动浏览已停止' });
+      break;
+    }
     processedCount += 1;
     notify('collect-progress', { phase: 'done', cardKey: key, index, total: cards.length, processed: processedCount, maxJobs, title: job.title, company: job.company, status: '完成', job });
     await sleep(settleMsNow());
@@ -2602,9 +2688,11 @@ function pageStatusData() {
   const visibleDialogs = all('[role="dialog"], [class*="captcha"], [class*="verify"]').filter(e => {
     const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden';
   });
-  const collectionBlocked = /\/verify\.|\/captcha(?:\/|\?|$)/i.test(location.href)
+  const bossBlock = readBossPageBlock(location.href, bodyText);
+  if (bossBlock) void reportBossRestriction(location.href, bodyText);
+  const collectionBlocked = bossBlock?.message || (/\/verify\.|\/captcha(?:\/|\?|$)/i.test(location.href)
     || visibleDialogs.some(e => /确认您是|安全验证|完成验证|请先验证|滑动验证|拖动滑块/.test(textOf(e)))
-    ? '招聘页面需要人工完成安全验证' : '';
+    ? '招聘页面需要人工完成安全验证' : '');
   const collectionLoading = all('[class*="skeleton"], [class*="loading"], [class*="mask"], [class*="overlay"]').some(largeVisible);
   return {
     url: location.href,

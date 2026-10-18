@@ -65,6 +65,7 @@ async function harness(platform, engine, options = {}) {
   const urls = [], searches = [], logs = [], warnings = [], runs = [], commands = [], collectOptions = []; let analyses = 0;
   const repeatedJob = { platform, jobId: 'same-filtered-job', title: '合成重复岗位', url: 'https://example.test/same-filtered-job' };
   const h = { ...T, Promise, Date, Math, Set, Map, config: cfg, directionPlan, profile: {},
+    electronApi: { bossBrowse: { call: async () => ({ ok: true }) } },
     useCallback: fn => fn, useSettingsStore: { getState: () => ({ config: cfg }) }, useDataStore: { getState: () => data },
     useAppStore: { getState: () => ({ autoAssist: false }) }, checkCollectionGoal: () => false,
     collectionGoal: () => ({ remaining: options.remaining ?? 1000, count: 0, target: 50 }), isLockedOut: () => false, ensureBossLogin: async () => true,
