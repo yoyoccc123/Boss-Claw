@@ -55,7 +55,7 @@ interface ElectronBridgeApi {
   skillsDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   // 保存定制简历 PDF（主进程 printToPDF；html 为 A4 打印友好 HTML）
   savePdf?: (defaultName: string, html: string) => Promise<{ ok: boolean; canceled?: boolean; filePath?: string; error?: string }>;
-  savePdfBatch?: (items: Array<{ fileName: string; html: string }>, requestId: string) => Promise<{
+  savePdfBatch?: (items: Array<{ fileName: string; folderName?: string; html: string }>, requestId: string) => Promise<{
     ok: boolean; canceled?: boolean; directory?: string; error?: string; total?: number;
     results: Array<{ fileName: string; ok: boolean; filePath?: string; error?: string }>;
   }>;

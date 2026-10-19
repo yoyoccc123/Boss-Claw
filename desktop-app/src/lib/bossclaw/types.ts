@@ -481,6 +481,8 @@ export interface PendingItem {
   greetingStatus?: 'pending' | 'sent' | 'skipped' | 'needs_review';
   /** False means stopped before issuing the text send; unknown receipts must not auto-resend. */
   greetingSendAttempted?: boolean;
+  /** 文字已确认发出后的附件问题，不应把已发送文字降级成失败或重发。 */
+  attachmentWarning?: string;
   /** 成功投递时间戳（用于单日投递上限统计） */
   sentAt?: number;
   /** HR 来消息后 AI 跟聊回复的成功时间戳（不计入单日投递上限统计；sentAt 仍为空表示仅回复未投递） */

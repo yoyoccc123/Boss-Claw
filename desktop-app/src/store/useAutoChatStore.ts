@@ -427,8 +427,12 @@ async function chatJob(item: PendingItem): Promise<ChatJobOutcome> {
       // 回复类发送不计入「今日投递」上限：仅置 status=sent 并记录 replySentAt，不改写投递用的 sentAt，
       // 从而不占用 dailySentCount（sentAt 为今天）统计出的投递岗位数；若此前已投递过（sentAt 已在），仍只算 1 条投递。
       updatePending(item.id, sentAsReply
-        ? { status: 'sent', error: '', replySentAt: Date.now() }
-        : { status: 'sent', error: '', sentAt: Date.now() });
+        ? { status: 'sent', error: '', deliveryNeedsReview: false, attachmentWarning: result.attachmentWarning || '', replySentAt: Date.now() }
+        : { status: 'sent', error: '', deliveryNeedsReview: false, attachmentWarning: result.attachmentWarning || '', sentAt: Date.now() });
+
+      if (result.attachmentWarning) {
+        addChatLog({ level: 'warn', stage: 'resume', jobId, jobTitle: title, company, msg: `文字已确认发送；附件问题：${result.attachmentWarning}` });
+      }
 
       addChatLog({
         level: 'success',
@@ -442,7 +446,7 @@ async function chatJob(item: PendingItem): Promise<ChatJobOutcome> {
         method: result.method,
       });
 
-      if (cfg.sendOnlineResume || cfg.sendResumeImage) {
+      if (!result.attachmentWarning && (cfg.sendOnlineResume || cfg.sendResumeImage)) {
         // 审查 #64：这条日志原先恒写「已触发在线简历/图片简历打包同步」——**未判 canAttach 就断言完成**，
         // 在平台不支持附件（canAttach=false，如非 BOSS 平台）或附件未真正附上时属虚假陈述，
         // 会误导用户以为简历已随招呼语发出。现按能力矩阵区分「已按设置请求」与「平台不支持」，
@@ -468,7 +472,7 @@ async function chatJob(item: PendingItem): Promise<ChatJobOutcome> {
 
     if (result.needsReview) {
       const msg = String(result.message || '发送结果未确认，请人工核对');
-      updatePending(item.id, { status: 'failed', error: msg, retryable: false });
+      updatePending(item.id, { status: 'failed', error: msg, deliveryNeedsReview: true, greetingStatus: 'needs_review', greetingSendAttempted: true, retryable: false });
       addChatLog({ level: 'error', stage: 'confirm', jobId, jobTitle: title, company, msg, errorDetail: '已停止自动沟通，核对实际消息后再处理，避免重复发送。' });
       addLog('error', `发送结果待人工核对：${title}`);
       return 'stop';

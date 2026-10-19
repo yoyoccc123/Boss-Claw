@@ -45,7 +45,7 @@ async function environment(platform='zhaopin') {
       platformApply:async(...args)=>{args[4]?.onStart();sent.push('platform');return{ok:true,stage:'success',tabId:'detail'};}}},
   };
   vm.createContext(c);
-  for(const name of ['canContinueDelivery','deliverNonBoss','deliverCamoufox','deliverBossDom','handleApplyStage','onRetryAllFailed'])vm.runInContext(await code(name),c);
+  for(const name of ['canContinueDelivery','deliverNonBoss','deliverCamoufox','deliverBossDom','handleApplyStage','onRetryAllFailed','onRetry','onConfirmDelivered'])vm.runInContext(await code(name),c);
   vm.runInContext((await transform(`(${subscription})();`,{loader:'tsx'})).code,c);
   const stop=()=>{const previous={...state};state.autoAssist=false;listener(state,previous);};
   const restart=()=>{const previous={...state};state.autoAssist=true;listener(state,previous);};
@@ -129,6 +129,26 @@ async function browserEnvironment({ready=false}={}) {
   check(queued[0].status==='failed'&&queued[1].status==='approved_queue','bulk retry retains unconfirmed applications for manual review');
 }
 // Evaluate the production card mapping and statistics, including 52 queued jobs from the report.
+for (const stage of ['failed', 'timeout']) {
+  const env = await environment('boss'), patches = [], pauses = [];
+  env.c.updatePending = (_id, patch) => { patches.push(patch); Object.assign(env.item, patch); };
+  env.c.pauseAssist = msg => pauses.push(msg);
+  env.c.requestRunNext = () => { throw Error('Unconfirmed sends must not advance or retry'); };
+  const run = env.c.deliverBossDom(env.item, env.item.job.url); env.gap.resolve(true); while (!env.sent.length) await flush();
+  env.c.handleApplyStage('send_attempted', { sendAttempted: true }, 'detail');
+  if (stage === 'failed') env.c.handleApplyStage('failed', { error: 'receipt delayed', needsReview: true, sendAttempted: true }, 'detail');
+  else env.c.domWaitRef.current('timeout', { error: 'receipt timeout' }, 'detail');
+  await run;
+  check(env.item.deliveryNeedsReview && env.item.retryable === false && env.item.greetingSendAttempted, stage + ': post-send uncertainty preserved as manual review');
+  check(env.closed.length === 0 && env.delivered.length === 0 && pauses.length === 1, stage + ': tab retained, paused once, never falsely claims sent');
+}
+{
+  const env = await environment('boss'), patches = [];
+  env.c.updatePending = (_id, patch) => patches.push(patch);
+  env.c.camoufoxSend = async () => ({ ok: true, sent: true, attachmentWarning: 'attachment panel changed' });
+  const run = env.c.deliverCamoufox(env.item); env.gap.resolve(true); await run;
+  check(env.delivered.length === 1 && patches[0].attachmentWarning && !patches.some(p => p.status === 'failed'), 'confirmed text with attachment warning stays delivered');
+}
 {
   const env=await environment('boss'), patches=[], advances=[];
   env.c.updatePending=(_id,patch)=>patches.push(patch);env.c.requestRunNext=()=>advances.push('next');
@@ -139,6 +159,17 @@ async function browserEnvironment({ready=false}={}) {
   check(patches.length===1&&patches[0].status==='skipped'&&patches[0].error.includes('HR 已回复'),'HR reply is stored as skipped, never opened in follow-up');
   check(env.delivered.length===0&&advances.length===1&&env.closed.length===1,'HR reply does not count as a delivery and advances the running queue once');
 }
+{
+  const env = await environment('boss'), dialogs = [];
+  Object.assign(env.item, { status: 'failed', deliveryNeedsReview: true });
+  env.c.pending = env.pending; env.c.activeId = null; env.c.Modal = { confirm: options => dialogs.push(options) };
+  env.c.updatePending = (_id, patch) => Object.assign(env.item, patch);
+  env.c.onRetry(env.item.id);
+  check(env.item.status === 'failed' && dialogs.length === 1, 'review retry requires explicit check of the platform record');
+  env.c.onConfirmDelivered(env.item.id); dialogs.at(-1).onOk();
+  check(env.item.status === 'sent' && !env.item.deliveryNeedsReview && env.sent.length === 0, 'manual confirmed success only records the outcome, never sends a message');
+  dialogs[0].onOk(); check(env.item.status === 'sent', 'stale retry dialog cannot overwrite a later confirmed success');
+}
 const st=wb.vars.get('st'),tag=wb.vars.get('STATUS_TAG');assert.ok(st&&tag);
 const statusCode=(await transform(`const STATUS_TAG=${tag};globalThis.tag=${st};`,{loader:'tsx'})).code;
 for(const [running,active,expected] of [[false,false,'待投递'],[true,false,'排队中'],[true,true,'投递中'],[false,true,'结果核对中']]) {
@@ -146,6 +177,14 @@ for(const [running,active,expected] of [[false,false,'待投递'],[true,false,'�
   check(c.tag.label===expected,`card label is ${expected}`);
 }
 const statsCode=(await transform(`globalThis.waiting=${wb.vars.get('statToDeliver')};globalThis.delivering=${wb.vars.get('statDelivering')};`,{loader:'tsx'})).code;
+{
+  const c = { p: { id: 'review', status: 'failed', deliveryNeedsReview: true }, autoAssist: false, activeId: null, applyStage: null };
+  vm.runInNewContext(statusCode,c); check(c.tag.label === '待核对', 'unconfirmed receipts display review instead of failed');
+  const c2 = { deliveryTasks: [{ p: c.p }, { p: { status: 'failed' } }, { p: { status: 'sent' } }] };
+  vm.runInNewContext((await transform(`globalThis.failed=${wb.vars.get('deliveryFailedCount')};globalThis.review=${wb.vars.get('deliveryReviewCount')};`,{loader:'tsx'})).code,c2);
+  check(c2.failed === 1 && c2.review === 1, 'review and genuine failure totals are separate');
+}
 const stats={deliveryApprovedCount:0,deliveryQueuedCount:52,activeItem:null,applyStage:null};vm.runInNewContext(statsCode,stats);
 check(stats.waiting===52&&stats.delivering===0,'52 stopped queue items count as waiting; active deliveries are zero');
 console.log(`PASS delivery stop: ${checks} production-function and presentation checks; all outbound boundaries are stubs.`);
+await import('./delivery-evidence-regression.mjs');

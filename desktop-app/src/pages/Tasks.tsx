@@ -57,12 +57,13 @@ const STATUS_COLOR: Record<string, { color: string; label: string }> = {
   queued: { color: 'cyan', label: '排队中' },
 };
 
-const FILTERS: { label: string; value: 'all' | PendingStatus }[] = [
+const FILTERS: { label: string; value: 'all' | PendingStatus | 'needs_review' }[] = [
   { label: '全部', value: 'all' },
   { label: '待确认', value: 'pending' },
   { label: '待投递', value: 'approved' },
   { label: '投递中', value: 'approved_queue' },
   { label: '已投递', value: 'sent' },
+  { label: '待核对', value: 'needs_review' },
   { label: '失败', value: 'failed' },
   { label: '已忽略', value: 'ignored' },
 ];
@@ -135,7 +136,7 @@ export default function Tasks() {
   const setAutoAssist = useAppStore((s) => s.setAutoAssist);
   // 平台配置（含优先级）订阅：平台顺序变化时任务列表随设置实时重排
   const config = useSettingsStore((s) => s.config);
-  const [filter, setFilter] = useState<'all' | PendingStatus>('all');
+  const [filter, setFilter] = useState<'all' | PendingStatus | 'needs_review'>('all');
   const [showIgnored, setShowIgnored] = useState(false);
   // 匹配点 / 缺口「查看全部」弹窗（展示完整内容 + 缺口匹配说明）
   const [detailModal, setDetailModal] = useState<{ kind: 'match' | 'gap'; item: PendingItem } | null>(null);
@@ -145,7 +146,8 @@ export default function Tasks() {
   const list = useMemo(
     () =>
       rerankPending(pending, config).filter((p) => {
-        if (filter !== 'all') return p.status === filter;
+        if (filter === 'needs_review') return p.status === 'failed' && p.deliveryNeedsReview;
+        if (filter !== 'all') return p.status === filter && (filter !== 'failed' || !p.deliveryNeedsReview);
         return showIgnored || !isHiddenStatus(p.status);
       }),
     [pending, config, filter, showIgnored]
@@ -158,7 +160,8 @@ export default function Tasks() {
       approved: pending.filter((p) => p.status === 'approved').length,
       approved_queue: pending.filter((p) => p.status === 'approved_queue').length,
       sent: pending.filter((p) => p.status === 'sent').length,
-      failed: pending.filter((p) => p.status === 'failed').length,
+      failed: pending.filter((p) => p.status === 'failed' && !p.deliveryNeedsReview).length,
+      needs_review: pending.filter((p) => p.status === 'failed' && p.deliveryNeedsReview).length,
       ignored: pending.filter((p) => ['skipped', 'ignored'].includes(p.status)).length,
     };
   }, [pending]);
@@ -169,6 +172,7 @@ export default function Tasks() {
 
   const onRetry = (id: string) => {
     const cur = pending.find((p) => p.id === id);
+    if (cur?.deliveryNeedsReview) { message.info('请在工作台“待核对”中核对实际消息，避免重复发送'); setRoute('workbench'); return; }
     if (cur && isTerminalForActions(cur.status)) {
       message.warning('该岗位已投递或正在投递，不能重置为「待确认」');
       return;
@@ -188,6 +192,7 @@ export default function Tasks() {
     updatePending(id, { status: 'skipped' }); recomputeStats();
   };
   const onApprove = (id: string) => {
+    if (pending.find(p => p.id === id)?.deliveryNeedsReview) { message.info('请先到工作台核对发送结果'); setRoute('workbench'); return; }
     const next = rerankPending(pending.map((p) => p.id === id ? { ...p, status: 'approved' as const, approvedAt: p.approvedAt || Date.now() } : p), useSettingsStore.getState().config);
     setPending(next); message.success('已确认岗位，等待「一键投递」'); recomputeStats();
   };
@@ -409,8 +414,8 @@ export default function Tasks() {
         </Card>
       ) : (
         list.map((p: PendingItem) => {
-          const meta = pendingStatusMeta(p.status, p.job?.platform);
-          const st = STATUS_COLOR[p.status] || { color: 'default', label: p.status };
+          const meta = p.deliveryNeedsReview ? { label: '待核对', progress: 95 } : pendingStatusMeta(p.status, p.job?.platform);
+          const st = p.deliveryNeedsReview ? { color: 'orange', label: '待核对' } : STATUS_COLOR[p.status] || { color: 'default', label: p.status };
           const chip = scoreChip(p.analysis?.score);
           // 评分来源口径（对齐 JobAssistant 的「AI 分 / 本地分」）：AI 计算优先，
           // 仅当分析明确标记 scoreSource='local'（AI 未参与）时才提示「本地确定性计算」。
@@ -689,7 +694,7 @@ export default function Tasks() {
                     </span>
                   ) : p.status === 'failed' ? (
                     <Button size="small" danger icon={<ReloadOutlined />} onClick={() => onRetry(p.id)}>
-                      重试投递
+                      {p.deliveryNeedsReview ? '去核对' : '重试投递'}
                     </Button>
                   ) : (
                     <Button size="small" type="primary" className="task-approve-btn" icon={<CheckCircleFilled />} onClick={() => onApprove(p.id)}>

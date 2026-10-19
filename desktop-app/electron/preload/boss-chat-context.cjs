@@ -60,14 +60,18 @@ function readBossChatContext(doc, href, expected = {}) {
   const hasUnconfirmedGreeting = ownGreeting.length > 0 && !hasExactGreeting;
   const hasHrReply = Boolean(string(target.uid)) && textMessages.some(m => string(m.fromId) === string(target.uid) && string(m.fromId) !== userId);
   const hasConversation = hasHrReply || textMessages.some(m => string(m.fromId) === userId);
+  const evidence = { hasExactGreeting, hasUnconfirmedGreeting, hasConversation, hasHrReply, jobId: string(conversation.encryptJobId), bossId: string(conversation.encryptBossId) };
+  // Receipts belong to the selected native conversation, not to the editor's lifecycle.
+  // Read-only confirmation may continue while the editor is temporarily unmounted.
+  if (expected.readOnly) return { ready: true, reason: '', ...evidence };
   const input = doc.querySelector('.chat-conversation #chat-input[contenteditable="true"]');
-  if (!input || !input.isConnected) return fail('目标聊天输入框尚未就绪', { hasHrReply });
-  return { ready: true, reason: '', hasExactGreeting, hasUnconfirmedGreeting, hasConversation, hasHrReply, jobId: string(conversation.encryptJobId), bossId: string(conversation.encryptBossId) };
+  if (!input || !input.isConnected) return fail('目标聊天输入框尚未就绪', evidence);
+  return { ready: true, reason: '', ...evidence };
 }
 
 function buildBossChatProbeScript(job = {}, options = {}) {
   const expected = { jobId: job.jobId, url: job.url, encryptUserId: job.encryptUserId,
-    marker: options.marker, mark: Boolean(options.mark), greeting: options.greeting || '' };
+    marker: options.marker, mark: Boolean(options.mark), greeting: options.greeting || '', readOnly: Boolean(options.readOnly) };
   return `(${readBossChatContext.toString()})(document, location.href, ${JSON.stringify(expected)})`;
 }
 

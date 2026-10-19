@@ -5,7 +5,7 @@ import { useDataStore } from '@/store/useDataStore';
 import { resolveResumeForJob, type ResumeVariant } from '@/lib/bossclaw/resumeVariants';
 import { tailorForJob } from '@/lib/bossclaw/jobAssistant';
 import { buildResumeDocData } from '@/lib/bossclaw/resumeContact';
-import { buildResumeHtml, FOCUS_MODULE_ORDER } from '@/lib/bossclaw/resumePdf';
+import { buildResumeHtml, defaultPdfFileName, FOCUS_MODULE_ORDER } from '@/lib/bossclaw/resumePdf';
 import type { AppConfig } from '@/lib/bossclaw/types';
 
 export default function ResumeVariantsPanel({ selectedId, onSelect }: { selectedId: string; onSelect: (id: string) => void }) {
@@ -20,7 +20,7 @@ export default function ResumeVariantsPanel({ selectedId, onSelect }: { selected
       const result = await tailorForJob({}, source.text, source.profile, {} as AppConfig['model'], undefined, undefined, { resumeSource: source });
       const doc = buildResumeDocData(source.text, source.profile, result, undefined, [...FOCUS_MODULE_ORDER]);
       const html = buildResumeHtml(doc, 'personal');
-      const name = `${doc.contact.name || '简历'}-${variant.name.replace(/[\\/:*?"<>|]/g, '')}.pdf`;
+      const name = defaultPdfFileName(doc.contact);
       if (window.electron?.savePdf) {
         const saved = await window.electron.savePdf(name, html);
         if (!saved.canceled && !saved.ok) throw new Error(saved.error || '保存失败');

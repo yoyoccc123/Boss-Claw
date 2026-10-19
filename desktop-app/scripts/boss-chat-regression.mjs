@@ -74,6 +74,10 @@ function fixture() {
   f.record.messages = [{ type: 1, text: greeting, fromId: 'self', received: false, mid: 0 }]; check(f.read().hasUnconfirmedGreeting && !f.read().hasExactGreeting, 'optimistic/pending own text does not count as sent');
   f.record.messages[0].received = true; check(!f.read().hasExactGreeting, 'receipt without a server message ID is insufficient');
   f.record.messages[0].mid = 42; check(f.read().hasExactGreeting, 'native own text plus acknowledgment/server ID confirms the exact greeting');
+  f.input.isConnected = false;
+  check(!f.read().ready && readBossChatContext(f.doc, href, { ...job, greeting, readOnly: true }).hasExactGreeting, 'receipt confirmation does not require an editor, but input dispatch still does');
+  f.select(1); check(!readBossChatContext(f.doc, href, { ...job, greeting, readOnly: true }).ready, 'read-only receipt cannot use the wrong target');
+  f.select(0); f.input.isConnected = true;
   f.record.messages[0].text = greeting.slice(0, 20); check(!f.read().hasExactGreeting, 'prefix overlap does not confirm a different message');
   const script = buildBossChatProbeScript(job, { greeting });
   check(vm.runInNewContext(script, { document: f.doc, location: { href }, URL }).ready, 'serialized production probe executes in the main world');
@@ -103,7 +107,8 @@ async function flow(mode) {
     if (mode === 'no-open' || (mode === 'retry' && counts.contacts === 1)) return;
     select();
   }; }
-  let clock = 0; class Clock extends Date { static now() { return clock; } }
+  let clock = 0, receiptAt = Infinity; class Clock extends Date { static now() { return clock; } }
+  const tick = async ms => { clock += ms; if (clock >= receiptAt) { receiptAt = Infinity; f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); } };
   const button = f.send;
   const c = { Date: Clock, URL, document: f.doc, location: { href, pathname: '/web/geek/chat' },
     pageStatusData: () => ({ collectionBlocked: mode === 'blocked' }), normalizeChatText: t => String(t).replace(/\s+/g, ' ').trim(),
@@ -111,8 +116,8 @@ async function flow(mode) {
     buildBossChatContactClickScript,
     webFrame: { executeJavaScript: async script => vm.runInNewContext(script, { document: f.doc, location: { href }, URL }) },
     chatInput: () => f.selected === null ? null : f.input,
-    notify: (_, data) => stages.push(data), sleep: async ms => { clock += ms; }, jitterDelay: async ms => { clock += ms; },
-    humanClickElement: async (element, options) => { if (element === button) { if(mode==='reply-during-click') throw Error('BOSS_HR_REPLIED'); counts.sends++; if (mode !== 'no-receipt') f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); return true; } throw Error('Contact selection must not depend on a foreground native-input acknowledgment'); },
+    notify: (_, data) => stages.push(data), sleep: tick, jitterDelay: tick,
+    humanClickElement: async (element, options) => { if (element === button) { if(mode==='reply-during-click') throw Error('BOSS_HR_REPLIED'); counts.sends++; if(mode==='click-timeout')throw Error('input timeout'); if(mode==='delayed')receiptAt=clock+12000; else if (mode !== 'no-receipt') f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); if(mode==='editor-gone')f.input.isConnected=false; if(mode==='wrong-after-send')f.select(1); return true; } throw Error('Contact selection must not depend on a foreground native-input acknowledgment'); },
     enterChat: async () => null, trustedHoverElement: async () => {}, focusEditableScoped: element => element,
     trustedInput: async (action, text) => { if (action === 'insertText') { counts.inputs++; if(mode==='reply-before-fill') return {ok:false,skipped:true}; f.input.innerText = text; if (mode === 'changed') f.select(1); if(mode==='reply-after-fill')f.record.messages.push({type:1,fromId:'hr-native-A',text:'你好',mid:44,received:true}); return { ok: true }; } return { ok: false }; },
     Event: class {}, InputEvent: class {}, setTimeout: () => 1, sendButton: () => button, isDisabledish: () => false,
@@ -120,14 +125,15 @@ async function flow(mode) {
   vm.createContext(c); for (const name of ['waitFor', 'bossChatContactClick', 'selectBossChatContact', 'domApplyOnce']) vm.runInContext(functions.get(name), c);
   await c.domApplyOnce({ job, greeting }); return { f, stages, counts };
 }
-for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open']) {
+for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open', 'delayed', 'editor-gone', 'wrong-after-send', 'click-timeout']) {
   const r = await flow(mode), last = r.stages.at(-1);
   if (mode === 'new') { check(r.counts.contacts === 1 && r.counts.sends === 1 && last.stage === 'verify_result', 'actual preload selects the contact then sends workbench text once'); check(r.f.input.innerText === greeting, 'workbench text is preserved'); }
   if (mode === 'prior') check(r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'verify_result', 'verified identical greeting is not sent twice');
-  if (mode === 'pending') check(r.counts.sends === 0 && last.stage === 'failed', 'unknown previous receipt is retained for review');
+  if (mode === 'pending') check(r.counts.sends === 0 && last.stage === 'failed' && last.needsReview, 'unknown previous receipt is retained for review');
   if (mode === 'conversation' || mode.startsWith('reply-')) check(r.counts.sends === 0 && last.stage === 'skipped', 'HR reply skips application and greeting rather than handing it to follow-up: '+mode);
   if (mode === 'changed') check(r.counts.sends === 0 && last.stage === 'failed', 'switching contacts after fill cancels the send');
-  if (mode === 'no-receipt') check(last.stage === 'failed', 'a click without an acknowledged target message cannot count as delivered');
+  if (['no-receipt','wrong-after-send','click-timeout'].includes(mode)) check(last.stage === 'failed' && last.needsReview && last.sendAttempted, 'post-send uncertainty cannot count as failure eligible for resend: '+mode);
+  if (['delayed','editor-gone'].includes(mode)) check(last.stage === 'verify_result' && r.counts.sends === 1, 'late receipt/editor lifecycle cannot cause false failure or resend: '+mode);
   if (mode === 'blocked') check(r.counts.contacts === 0 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'risk', 'security verification blocks all interaction');
   if (mode === 'retry') check(r.counts.contacts === 2 && r.counts.sends === 1 && last.stage === 'verify_result', 'an unhandled contact click is retried only after observing the conversation still unselected');
   if (mode === 'no-open') check(r.counts.contacts === 3 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'failed' && /点击后会话未打开/.test(last.error), 'three unhandled clicks stop with a specific failure; click acknowledgment alone never starts message editing');

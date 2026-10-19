@@ -1426,6 +1426,7 @@ async function domApply(arg) {
 
 async function domApplyOnce({ job = {}, greeting = '' } = {}) {
   const safeGreeting = String(greeting || '').replace(/\s+/g, ' ').trim();
+  let sendAttempted = false;
   try {
     if (safeGreeting.length < 8) {
       notify('apply-stage', { stage: 'failed', error: '求职招呼语为空或过短，已停止发送' });
@@ -1460,7 +1461,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       input = chatInput();
       if (context.hasHrReply) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
       if (context.hasExactGreeting) { notify('apply-stage', { stage: 'verify_result', label: '目标会话已有工作台招呼语', ok: true }); return; }
-      if (context.hasUnconfirmedGreeting) { notify('apply-stage', { stage: 'failed', error: '目标会话已有相同招呼语，但发送回执未确认，请人工核对' }); return; }
+      if (context.hasUnconfirmedGreeting) { notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted: true, error: '目标会话已有相同招呼语，但发送回执未确认，请人工核对' }); return; }
       if (context.hasConversation) { notify('apply-stage', { stage: 'continue_chat', label: '目标会话已有实际沟通，移入自动沟通队列' }); return; }
     }
 
@@ -1519,9 +1520,11 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       btn.setAttribute('data-bossclaw-text-send', marker);
       let clicked;
       try {
+        sendAttempted = true;
+        notify('apply-stage', { stage: 'send_attempted', sendAttempted: true });
         clicked = await humanClickElement(btn, { dedupeMs: 1200, ...(fullChat ? { bossTarget: job, bossInput: { marker, greeting: safeGreeting } } : {}) });
       } finally { btn.removeAttribute('data-bossclaw-text-send'); }
-      if (fullChat && !clicked) { notify('apply-stage', { stage: 'failed', error: 'BOSS 当前会话未确认，已取消发送并保留草稿' }); return; }
+      if (fullChat && !clicked) { notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: 'BOSS 当前会话未确认，请核对聊天记录与草稿' }); return; }
     } else {
       // 未找到按钮：弹窗 textarea 内回车是换行、不会发送，直接交人工；
       // 其余输入（contenteditable 聊天页等）仍退回回车发送兜底。
@@ -1532,10 +1535,12 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
         if (fullChat && !current?.ready) {
           notify('apply-stage', { stage: 'failed', error: 'BOSS 当前会话已改变，招呼语保留为草稿，请人工核对' }); return;
         }
+        sendAttempted = true;
+        notify('apply-stage', { stage: 'send_attempted', sendAttempted: true });
         const enter = await trustedInput('pressEnter', '', fullChat ? { bossTarget: job, bossInput: { greeting: safeGreeting } } : undefined);
         if (enter?.skipped) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
         if (!enter.ok) {
-          notify('apply-stage', { stage: 'failed', error: '未找到发送按钮且回车发送失败，已暂停' });
+          notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: '回车发送结果未确认，请核对聊天记录' });
           return;
         }
       } else {
@@ -1545,12 +1550,12 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     }
 
     // 文字气泡确认（安全不变量）
-    notify('apply-stage', { stage: 'verify_message', label: '确认文字已发送' });
+    notify('apply-stage', { stage: 'verify_message', label: '确认文字已发送', sendAttempted });
     const confirmed = fullChat
-      ? await waitFor(async () => { const c = await bossChatContext(job, { greeting: safeGreeting }); return c.ready && c.hasExactGreeting; }, 8000, '目标会话文字气泡确认')
-      : await waitFor(() => confirmOwnMessage(safeGreeting), 8000, '文字气泡确认');
+      ? await waitFor(async () => { const c = await bossChatContext(job, { greeting: safeGreeting, readOnly: true }); return c.ready && c.hasExactGreeting; }, 20000, '目标会话文字气泡确认')
+      : await waitFor(() => confirmOwnMessage(safeGreeting), 20000, '文字气泡确认');
     if (!confirmed) {
-      notify('apply-stage', { stage: 'failed', error: '未能确认文字气泡已发送，请人工核对后重试' });
+      notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: '已尝试发送，但未能确认文字回执；请核对聊天记录，避免重复发送' });
       return;
     }
     notify('apply-stage', { stage: 'verify_result', label: '确认投递结果', ok: true });
@@ -1558,9 +1563,9 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     const errorText = String(error?.message || error);
     if (errorText === 'BOSS_HR_REPLIED') { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
     if (/安全验证|验证码|频繁|限速|登录|封禁|异常/.test(errorText)) {
-      notify('apply-stage', { stage: 'risk', code: null, message: errorText });
+      notify('apply-stage', { stage: 'risk', code: null, message: errorText, sendAttempted, needsReview: sendAttempted });
     } else {
-      notify('apply-stage', { stage: 'failed', error: errorText });
+      notify('apply-stage', { stage: 'failed', error: errorText, sendAttempted, needsReview: sendAttempted });
     }
   }
 }

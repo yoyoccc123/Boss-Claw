@@ -8,7 +8,7 @@
  * 右栏子模块：内置浏览器（BrowserView 多平台标签 webview，含 BOSS 等平台登录态与岗位详情页）
  */
 import { useEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
-import { Button, Card, Checkbox, Dropdown, Empty, Progress, Tag, Typography, message, Segmented, Tooltip, Space, Select, Alert, InputNumber } from 'antd';
+import { Button, Card, Checkbox, Dropdown, Empty, Progress, Tag, Typography, message, Segmented, Tooltip, Space, Select, Alert, InputNumber, Modal } from 'antd';
 import {
   CheckOutlined, ReloadOutlined, EyeOutlined, SearchOutlined,
   StopOutlined, UndoOutlined, ThunderboltOutlined,
@@ -824,8 +824,26 @@ export default function Workbench() {
   const onRetry = (id: string) => {
     const item = pending.find((p) => p.id === id);
     if (item?.riskBlocked) { message.warning('该岗位曾触发平台风控拦截（验证/封禁），禁止重试，请人工核对'); return; }
-    updatePending(id, { status: 'pending', retryCount: (item?.retryCount || 0) + 1, error: '', riskBlocked: false, deliveryNeedsReview: false, retryable: true });
-    addLog('info', '已重置该岗位，可重新分析/投递');
+    const retry = () => {
+      const latest = useDataStore.getState().pending.find(p => p.id === id);
+      if (!latest || latest.status === 'sent' || latest.status === 'approved_queue') return;
+      updatePending(id, { status: 'pending', retryCount: (item?.retryCount || 0) + 1, error: '', riskBlocked: false, deliveryNeedsReview: false, greetingSendAttempted: false, greetingStatus: 'pending', retryable: true });
+      addLog('info', '已重置该岗位，可重新分析/投递');
+    };
+    if (item?.deliveryNeedsReview) {
+      Modal.confirm({ title: '先核对平台聊天记录', content: '发送回执尚未确认，消息可能已发出。请打开对应岗位聊天核对；已发出可点“已发出”记为已投递。仅确认没有发出时重试。', okText: '确认未发出，重试', cancelText: '保留待核对', onOk: retry });
+      return;
+    }
+    retry();
+  };
+
+  const onConfirmDelivered = (id: string) => {
+    const item = useDataStore.getState().pending.find(p => p.id === id);
+    if (!item?.deliveryNeedsReview || item.id === activeId) return;
+    Modal.confirm({ title: '确认这条招呼语已发出？', content: `请确认在“${item.job.title || '该岗位'}”的目标聊天中已看到工作台招呼语。此操作仅更新记录，不会发送消息。`, okText: '已核对，记为已投递', onOk: () => {
+      updatePending(id, { status: 'sent', error: '', deliveryNeedsReview: false, greetingStatus: 'sent', greetingSendAttempted: true, retryable: false, sentAt: item.sentAt || Date.now() });
+      recomputeStats(); addLog('success', `人工核对已发出：${item.job.title || '岗位'}`);
+    } });
   };
 
   const onSupplementGreeting = (id: string) => {
@@ -1305,7 +1323,7 @@ export default function Workbench() {
 
   // ===== 投递成功处理（API / DOM 兜底共用）=====
   const handleDelivered = useCallback((candidateId: string, tabId?: string) => {
-    updatePending(candidateId, { status: 'sent', error: '', sentAt: useDataStore.getState().pending.find(p => p.id === candidateId)?.sentAt || Date.now() });
+    updatePending(candidateId, { status: 'sent', error: '', deliveryNeedsReview: false, retryable: false, sentAt: useDataStore.getState().pending.find(p => p.id === candidateId)?.sentAt || Date.now() });
     const c = useDataStore.getState().pending.find((p) => p.id === candidateId);
     addLog('success', `投递成功：${c?.job?.title || ''}（${c?.job?.company || ''}）`);
     setApplyStage(null);
@@ -2494,8 +2512,18 @@ export default function Workbench() {
         pauseAssist(result.message || 'BOSS 浏览限额等待中，岗位已保留待投递'); return;
       }
       if (result.ok && result.sent) {
+        if (result.attachmentWarning) {
+          updatePending(candidate.id, { attachmentWarning: result.attachmentWarning });
+          addLog('warn', `${candidate.job?.title || '岗位'}：文字已确认发送；附件问题：${result.attachmentWarning}`);
+        }
         handleDelivered(candidate.id);
         return;
+      }
+      if (result.needsReview) {
+        const msg = String(result.message || '文字发送回执未确认，请核对聊天记录');
+        updatePending(candidate.id, { status: 'failed', error: msg, deliveryNeedsReview: true, greetingStatus: 'needs_review', greetingSendAttempted: true, retryable: false });
+        addLog('warn', `发送结果待核对：${candidate.job?.title || '岗位'}（${msg}）`);
+        setApplyStage(null); recomputeStats(); pauseAssist(msg); return;
       }
       const code = result.code ?? null;
       const msg = result.message || result.error || '投递失败';
@@ -2525,8 +2553,9 @@ export default function Workbench() {
       pauseAssist('投递已暂停：Camoufox 投递失败，请人工核对后重试');
       return;
     } catch (e: any) {
-      updatePending(candidate.id, { status: 'failed', error: String(e?.message || e) });
-      addLog('error', `Camoufox 投递异常：${e?.message || e}`);
+      const needsReview = deliverySubmittedRef.current;
+      updatePending(candidate.id, { status: 'failed', error: String(e?.message || e), ...(needsReview ? { deliveryNeedsReview: true, greetingStatus: 'needs_review', greetingSendAttempted: true, retryable: false } : {}) });
+      addLog(needsReview ? 'warn' : 'error', `Camoufox ${needsReview ? '发送结果待核对' : '投递异常'}：${e?.message || e}`);
       setApplyStage(null);
       recomputeStats();
       pauseAssist('投递已暂停：Camoufox 投递异常，请人工核对后重试');
@@ -2592,12 +2621,13 @@ export default function Workbench() {
         };
         // 兜底超时：先于看门狗（commStuckTimeoutSec，默认 60s）收敛，避免与超时看门狗双重处理
         const stuckSec = Math.max(30, Number(useSettingsStore.getState().config.commStuckTimeoutSec) || 60);
-        timerRef = setTimeout(() => settle('timeout', { error: `DOM 沟通投递超时（${stuckSec - 5}s），已跳过该岗位` }), (stuckSec - 5) * 1000);
         domWaitRef.current = settle;
         // 页面加载（waitDomReady）与投递节奏（awaitDeliveryGap）并行，随后才下发 start-apply（domApply）。
         const payload = { job: candidate.job, greeting: finalGreeting };
         const sendOnce = () => {
           if (settled || !canContinueDelivery(epoch)) return;
+          // The rate-limit wait is not time spent awaiting a send receipt.
+          if (!timerRef) timerRef = setTimeout(() => settle('timeout', { error: `DOM 沟通投递超时（${stuckSec - 5}s）` }), (stuckSec - 5) * 1000);
           deliverySubmittedRef.current = true;
           webviewApi.current?.sendInTab?.(domTab, 'start-apply', payload);
         };
@@ -2673,6 +2703,7 @@ export default function Workbench() {
     }
     if (domResult.mode === 'risk') {
       // 保留标签供人工完成安全验证
+      if (domResult.payload?.sendAttempted) updatePending(candidate.id, { deliveryNeedsReview: true, greetingSendAttempted: true, greetingStatus: 'needs_review', retryable: false });
       handleRisk(domResult.payload?.code, domResult.payload?.message || '', candidate.id);
       return;
     }
@@ -2698,9 +2729,10 @@ export default function Workbench() {
       if (useAppStore.getState().autoAssist) requestRunNext();
       return;
     }
-    if (domResult.mode === 'timeout' && deliverySubmittedRef.current) {
-      const error = '投递请求已下发，但结果未确认；请核对平台聊天或投递记录后再重试';
-      updatePending(candidate.id, { status: 'failed', error, deliveryNeedsReview: true, retryable: false });
+    if ((domResult.mode === 'timeout' && deliverySubmittedRef.current) || domResult.payload?.needsReview || domResult.payload?.sendAttempted) {
+      const error = String(domResult.payload?.error || '投递请求已下发，但结果未确认；请核对平台聊天或投递记录，避免重复发送');
+      updatePending(candidate.id, { status: 'failed', error, deliveryNeedsReview: true, greetingStatus: 'needs_review', greetingSendAttempted: true, retryable: false });
+      addLog('warn', `发送结果待核对：${domTitle}（${error}）`);
       setApplyStage(null); recomputeStats();
       pauseAssist(error);
       return;
@@ -2867,9 +2899,13 @@ export default function Workbench() {
     if (tabId && activeTabRef.current && tabId !== activeTabRef.current) return;
 
     if (stage === 'risk') {
-      if (domWaitRef.current) { domWaitRef.current('risk', { code: data?.code, message: data?.message || '' }, tabId); return; }
+      if (domWaitRef.current) { domWaitRef.current('risk', { ...data, code: data?.code, message: data?.message || '' }, tabId); return; }
       handleRisk(data?.code, data?.message || '');
       return;
+    }
+    if (stage === 'send_attempted' || stage === 'verify_message') {
+      updatePending(activeId, { greetingSendAttempted: true });
+      if (stage === 'send_attempted') return;
     }
     if (stage === 'skipped') {
       const error = String(data?.reason || '已跳过重复沟通');
@@ -2915,7 +2951,13 @@ export default function Workbench() {
         return;
       }
       // 有 DOM 等待槽在途（工作台 BOSS 直投）→ 只回写终态，状态/日志由 runNext 统一处理（去重）
-      if (domWaitRef.current) { domWaitRef.current('failed', { error }, tabId); return; }
+      const needsReview = data.needsReview === true || data.sendAttempted === true || active.greetingSendAttempted === true;
+      if (domWaitRef.current) { domWaitRef.current('failed', { error, needsReview, sendAttempted: data.sendAttempted }, tabId); return; }
+      if (needsReview) {
+        updatePending(activeId, { status: 'failed', error, deliveryNeedsReview: true, greetingStatus: 'needs_review', greetingSendAttempted: true, retryable: false });
+        addLog('warn', `发送结果待核对：${active.job?.title || '岗位'}（${error}）`);
+        setApplyStage(null); recomputeStats(); pauseAssist(error); return;
+      }
       updatePending(activeId, { status: 'failed', error });
       addLog('error', `投递失败：${active?.job?.title || ''}（${error}）`);
       setApplyStage(null);
@@ -2932,7 +2974,7 @@ export default function Workbench() {
       }
       return;
     }
-    if (stage === 'verify_result') {
+    if (stage === 'verify_result' && data.ok !== false) {
       if (domWaitRef.current) { domWaitRef.current('success', {}, tabId); return; }
       handleDelivered(activeId, tabId);
       return;
@@ -2988,7 +3030,7 @@ export default function Workbench() {
         list.push({ p, stage: 'success', label: meta.label, progress: meta.progress });
       } else if (p.status === 'failed') {
         const meta = taskStageMetaFor(pf, 'failed');
-        list.push({ p, stage: 'failed', label: meta.label, progress: meta.progress });
+        list.push({ p, stage: 'failed', label: p.deliveryNeedsReview ? '待核对' : meta.label, progress: meta.progress });
       }
     }
     const rank = (t: { p: PendingItem; stage: TaskStage }) => {
@@ -3005,7 +3047,8 @@ export default function Workbench() {
   const deliveryQueuedCount = deliveryTasks.filter((t) => t.p.status === 'approved_queue' && t.p.id !== activeId).length;
   const deliveryPendingCount = deliveryTasks.filter((t) => t.p.status === 'pending').length;
   const deliverySentCount = deliveryTasks.filter((t) => t.p.status === 'sent').length;
-  const deliveryFailedCount = deliveryTasks.filter((t) => t.p.status === 'failed').length;
+  const deliveryFailedCount = deliveryTasks.filter((t) => t.p.status === 'failed' && !t.p.deliveryNeedsReview).length;
+  const deliveryReviewCount = deliveryTasks.filter((t) => t.p.status === 'failed' && t.p.deliveryNeedsReview).length;
   const deliveryApprovedCount = pending.filter((p) => p.status === 'approved').length;
   // 「一键投递」可点条件 = 队列里还有可投递的岗位（「待投递」或已入队的「投递中」）。
   // 与右侧「开始投递」口径统一，避免批准即入队后本按钮长期置灰（详见 onOneClickDeliver 注释）。
@@ -3035,7 +3078,7 @@ export default function Workbench() {
   const activeAll = useMemo(() => eligibleRanked.filter((p) => p.status !== 'sent'), [eligibleRanked]);
   // 「全部」走 activeAll（排除 sent）；选具体标签时走全量 rankedAll，保证「已投递」标签能正常筛出内容。
   const ranked = useMemo(() => {
-    const base = filter === 'all' ? activeAll : eligibleRanked.filter((p) => p.status === filter);
+    const base = filter === 'all' ? activeAll : eligibleRanked.filter((p) => filter === 'needs_review' ? p.status === 'failed' && p.deliveryNeedsReview : p.status === filter && (filter !== 'failed' || !p.deliveryNeedsReview));
     return showIgnored ? base : base.filter((p) => !isHiddenStatus(p.status));
   }, [activeAll, eligibleRanked, filter, showIgnored]);
 
@@ -3095,7 +3138,8 @@ export default function Workbench() {
     { key: 'approved', label: `待投递 ${eligibleRanked.filter((p) => p.status === 'approved').length}` },
     { key: 'approved_queue', label: `投递队列 ${eligibleRanked.filter((p) => p.status === 'approved_queue').length}` },
     { key: 'sent', label: `已投递 ${eligibleRanked.filter((p) => p.status === 'sent').length}` },
-    { key: 'failed', label: `失败 ${eligibleRanked.filter((p) => p.status === 'failed').length}` },
+    { key: 'needs_review', label: `待核对 ${eligibleRanked.filter((p) => p.status === 'failed' && p.deliveryNeedsReview).length}` },
+    { key: 'failed', label: `失败 ${eligibleRanked.filter((p) => p.status === 'failed' && !p.deliveryNeedsReview).length}` },
   ];
 
   // ===== 岗位福利标签（welfareTag）=====
@@ -3281,6 +3325,7 @@ export default function Workbench() {
 
           {/* 无关键字采集（随机岗位推荐）前置提醒：岗位完全由平台按账号内的求职意向推荐，
               资料未完善会采到不相关岗位，故在卡片内常驻提醒并提供直达在线简历入口 */}
+          {deliveryReviewCount > 0 && <Button type="link" onClick={() => setFilter('needs_review')}>发送结果待核对 {deliveryReviewCount} 个（不计入失败）</Button>}
           {config.collectWithoutKeyword && (
             <Alert
               type="info"
@@ -3642,6 +3687,7 @@ export default function Workbench() {
                       </Tag></div>
                     )}
                     {p.error && <div className="job-error">⚠ {p.error}</div>}
+                    {p.attachmentWarning && <div style={{ color: 'var(--warning)', marginTop: 6 }}>附件提示：{p.attachmentWarning}</div>}
                     <div className="job-actions">
                       {isPending ? (
                         // ===== 待确认：唯一可「确认沟通」的态（无招呼语会被 onApprove 拒绝）=====
@@ -3680,7 +3726,10 @@ export default function Workbench() {
                               // 失败等非终态：允许重新投递（回到投递队列）。
                               // 不再叫「批准」——该岗位已确认过，此时只是重跑投递，叫「重试」才不会
                               // 与待确认卡的「确认沟通」混淆（用户反馈：已确认的岗位还显示「批准」很怪）。
-                              <Button size="small" type="primary" icon={<ReloadOutlined />} onClick={() => onRetry(p.id)}>{p.deliveryNeedsReview ? '核对后重试' : '重试'}</Button>
+                              <>
+                                {p.deliveryNeedsReview && <Button size="small" type="primary" disabled={p.id === activeId} onClick={() => onConfirmDelivered(p.id)}>已发出</Button>}
+                                <Button size="small" type={p.deliveryNeedsReview ? 'default' : 'primary'} icon={<ReloadOutlined />} onClick={() => onRetry(p.id)}>{p.deliveryNeedsReview ? '核对后重试' : '重试'}</Button>
+                              </>
                             )}
                           </div>
                           <div className="job-actions-right">

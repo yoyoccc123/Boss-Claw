@@ -77,6 +77,7 @@ const runUi = async function () {
   check(!window.data.getState().resumeVariants.find(v => v.id === 'py').text.includes('AI版独立编辑。'), 'bases never mix');
   [...document.querySelectorAll('button')].filter(b => b.textContent === '导出 PDF')[1].click();
   await wait(() => window.pdfs.length === 1, 'base PDF');
+  check(window.pdfs[0].name === '示例姓名.pdf' && window.pdfs[0].html.includes('<title>示例姓名</title>'), 'base PDF filename and internal title contain only the name');
   check(window.pdfs[0].html.indexOf('文档检索示例') < window.pdfs[0].html.indexOf('服务巡检实验'), 'base PDF uses AI project order');
   const p = window.data.getState();
   window.data.setState({ pending: [{ id: 'p', status: 'pending', createdAt: 1, deliveryGreeting: 'old', job: { title: 'Python开发', description: '维护Python脚本' } }, { id: 'a', status: 'pending', createdAt: 1, deliveryGreeting: 'old', job: { title: 'AI应用开发', description: '开发AI应用原型' } }] });

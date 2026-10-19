@@ -73,9 +73,7 @@ export function upsertTailorHistory(history: TailorHistoryItem[], item: TailorHi
   })].slice(0, TAILOR_HISTORY_MAX);
 }
 
-export function batchPdfFileName(name: string, jobTitle: string, company: string, index: number, now = new Date()): string {
-  const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-  const stem = [String(index + 1).padStart(3, '0'), jobTitle, company, name, '定制简历', date]
+export function batchPdfFolderName(jobTitle: string, company: string, index: number): string {
+  return [String(index + 1).padStart(3, '0'), jobTitle, company]
     .filter(Boolean).join('-').replace(/[^\w\u4e00-\u9fa5()（）\-· ]/g, '-').replace(/-+/g, '-').slice(0, 110);
-  return `${stem}.pdf`;
 }

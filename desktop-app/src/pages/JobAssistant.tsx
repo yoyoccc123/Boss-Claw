@@ -34,7 +34,7 @@ import { TailorResultView } from '@/components/TailorResultView';
 import { buildTailorJobInput, listTailorJobs, tailorJobLabel } from '@/lib/bossclaw/tailorJob';
 import { filterWorkbenchJobs, isWorkbenchJobIncluded } from '@/lib/bossclaw/workbenchFilters';
 import type { JobMeta, PendingItem } from '@/lib/bossclaw/types';
-import { batchPdfFileName, createTailorBatch, runTailorBatch, TAILOR_HISTORY_MAX, upsertTailorHistory, type TailorBatchItem, type TailorHistoryItem } from '@/lib/bossclaw/tailorBatch';
+import { batchPdfFolderName, createTailorBatch, runTailorBatch, TAILOR_HISTORY_MAX, upsertTailorHistory, type TailorBatchItem, type TailorHistoryItem } from '@/lib/bossclaw/tailorBatch';
 
 const { Text } = Typography;
 
@@ -416,14 +416,14 @@ export default function JobAssistant() {
       if (exportBatch.length) {
         if (!api?.savePdfBatch) { message.warning('批量 PDF 导出需要在桌面版中使用'); return; }
         if (!orderedIds.length) { message.warning('请至少勾选一个有内容的模块'); return; }
-        const files: Array<{ fileName: string; html: string }> = [];
+        const files: Array<{ fileName: string; folderName: string; html: string }> = [];
         const empty: string[] = [];
         exportBatch.forEach((item, index) => {
           if (!batchJobIncluded(item)) return;
           const data = buildResumeDocData(resumeData.resumeText, resumeData.profile, item.result!, { ...values, targetTitle: item.jobTitle }, orderedIds, item.result!.writingPreferences || resumeData.resumeWritingPreferences);
           if (!data.modules.length) { empty.push(item.jobTitle); return; }
           if (photo) data.photo = photo;
-          files.push({ fileName: batchPdfFileName(values.name, item.jobTitle, item.job.company || '', index), html: buildResumeHtml(data, templateId) });
+          files.push({ fileName: defaultPdfFileName(data.contact), folderName: batchPdfFolderName(item.jobTitle, item.job.company || '', index), html: buildResumeHtml(data, templateId) });
         });
         if (!files.length) { message.warning('所选模块没有可导出的内容'); return; }
         if (empty.length) message.warning(`已跳过 ${empty.length} 份没有所选模块内容的结果`);
@@ -1009,7 +1009,7 @@ export default function JobAssistant() {
           showIcon
           style={{ marginBottom: 12 }}
           message="所有内容均来自你的简历与定制结果，不会编造任何能力与数据。"
-          description={exportBatch.length ? '请核对共用的联系信息和模板；每份简历使用对应岗位名称，选择一次目录后逐份保存，同名文件自动加序号。' : '请核对下方联系信息（已从简历自动提取，可修改）；选择模板后生成 A4 PDF，可直接投递。'}
+          description={exportBatch.length ? '请核对共用的联系信息和模板；选择一次目录，每个岗位单独保存到子文件夹，简历文件名和文档标题均为姓名。重复导出会新建文件夹，保留原文件。' : '请核对下方联系信息（已从简历自动提取，可修改）；文件名和文档标题均为姓名，可直接投递。'}
         />
         {exporting && exportBatch.length > 0 && <div style={{ marginBottom: 12 }}>
           <Progress percent={exportProgress.total ? Math.round(exportProgress.completed / exportProgress.total * 100) : 0} status="active" />

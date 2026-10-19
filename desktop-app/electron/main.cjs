@@ -1568,7 +1568,7 @@ safeHandle('jc:save-pdf-batch', async (event, input, requestId) => {
       if (batch.stopped || event.sender.isDestroyed()) break;
       try {
         const pdf = await renderResumePdf(item.html);
-        const filePath = await writeUniquePdf(directory, item.fileName, pdf);
+        const filePath = await writeUniquePdf(directory, item.fileName, pdf, item.folderName);
         results.push({ fileName: item.fileName, ok: true, filePath });
       } catch (error) {
         results.push({ fileName: item.fileName, ok: false, error: String(error?.message || error) });

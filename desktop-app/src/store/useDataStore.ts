@@ -19,6 +19,7 @@ import { cleanCompanyName } from '@/lib/bossclaw/jobDisplay';
 import type { ResumeWritingPreferences } from '@/lib/bossclaw/resumeWriting';
 import type { ResumeVariant } from '@/lib/bossclaw/resumeVariants';
 import { normalizeJobDetailMetadata, repairZhaopinPending, ZHAOPIN_LINK_ERROR } from '@/lib/bossclaw/jobDetailLink';
+import { repairUnconfirmedDeliveries } from '@/lib/bossclaw/deliveryEvidence';
 import { collectionGoal, collectionCountFor, collectionDay, collectionIdentity, isQualifiedPending, seedCollectionCounts, type DailyCollectionCounts } from '@/lib/bossclaw/collectionGoal';
 import type { CollectionCheckpoints, CollectionCheckpoint } from '@/lib/bossclaw/collectionResume';
 import type { JobPlatform } from '@/lib/bossclaw/platforms';
@@ -265,7 +266,7 @@ export const useDataStore = create<DataState>()(
         for (const p of pending) {
           if (p.status === 'sent') sent += 1;
           else if (p.status === 'skipped') skipped += 1;
-          else if (p.status === 'failed') failed += 1;
+          else if (p.status === 'failed' && !p.deliveryNeedsReview) failed += 1;
           if (p.status === 'approved' || p.status === 'approved_queue' || p.status === 'pending') pendingCount += 1;
           if (p.analysis) analyzed += 1;
         }
@@ -306,7 +307,7 @@ export const useDataStore = create<DataState>()(
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted as Partial<DataState> : {};
         return { ...current, ...saved,
-          pending: Array.isArray(saved.pending) ? repairZhaopinPending(saved.pending) : current.pending,
+          pending: Array.isArray(saved.pending) ? repairUnconfirmedDeliveries(repairZhaopinPending(saved.pending)) : current.pending,
           resumeVariants: (Array.isArray(saved.resumeVariants) ? saved.resumeVariants : []).filter(v => v && typeof v.id === 'string' && typeof v.name === 'string' && typeof v.text === 'string'),
           defaultResumeVariantId: typeof saved.defaultResumeVariantId === 'string' ? saved.defaultResumeVariantId : '',
           autoResumeRouting: saved.autoResumeRouting !== false,

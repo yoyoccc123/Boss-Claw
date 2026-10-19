@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-import { dirname, join } from 'node:path';
+import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
@@ -13,7 +13,7 @@ try {
   await build({ stdin: { contents: "export * from './src/lib/bossclaw/tailorBatch'; export * from './src/store/useAppStore'; export * from './src/lib/persistSafe'; export * from './src/lib/localBackup';", resolveDir: root, loader: 'ts' },
     tsconfig: join(root, 'tsconfig.json'), bundle: true, format: 'cjs', platform: 'node', outfile, logLevel: 'silent' });
   const require = createRequire(import.meta.url);
-  const { createTailorBatch, runTailorBatch, upsertTailorHistory, batchPdfFileName, useAppStore, markPersistDirty, writeLocalBackup } = require(outfile);
+  const { createTailorBatch, runTailorBatch, upsertTailorHistory, batchPdfFolderName, useAppStore, markPersistDirty, writeLocalBackup } = require(outfile);
   const pending = ['a', 'b', 'c'].map((id) => ({ id, status: 'pending', job: { title: 'Agent 开发 10-15K', company: id, description: `${id}：Python RAG 工具调用` } }));
   const batch = createTailorBatch(pending, ['b', 'missing', 'a', 'b', 'c']);
   assert.deepEqual(batch.map((item) => item.id), ['b', 'a', 'c']);
@@ -53,9 +53,10 @@ try {
   history = upsertTailorHistory(history, { ...history[0], id: 'latest' });
   assert.equal(history.length, 40);
   assert.equal(history[0].id, 'latest');
-  const filename = batchPdfFileName('张三', '../Agent/开发', '甲公司 & 乙', 0, new Date(2026, 9, 9));
-  assert.ok(!filename.includes('/'));
-  assert.ok(filename.startsWith('001-'));
+  const folderName = batchPdfFolderName('../Agent/开发', '甲公司 & 乙', 0);
+  const filename = '张三.pdf';
+  assert.ok(!folderName.includes('/'));
+  assert.ok(folderName.startsWith('001-'));
   useAppStore.getState().openJobAssistant('single');
   useAppStore.getState().openJobAssistantBatch(['a', 'b', 'a']);
   assert.deepEqual(useAppStore.getState().tailorBatchRequest, ['a', 'b']);
@@ -76,6 +77,13 @@ try {
   assert.deepEqual(new Set(writes.map((p) => readFileSync(p, 'utf8'))), new Set(['甲', '乙', '丙']));
   await assert.rejects(writeUniquePdf(temporary, '../escape.pdf', Buffer.from('x')));
   assert.equal(readdirSync(temporary).filter((name) => name.endsWith('.pdf')).length, 4);
+  assert.throws(() => validatePdfItem({ fileName: filename, folderName: '../escape', html: '<!DOCTYPE html>' + 'x'.repeat(250) }));
+  assert.throws(() => validatePdfItem({ fileName: 'CON.pdf', html: '<!DOCTYPE html>' + 'x'.repeat(250) }));
+  const separated = await Promise.all(['甲', '乙', '丙'].map(body => writeUniquePdf(temporary, filename, Buffer.from(body), folderName)));
+  assert.equal(new Set(separated.map(dirname)).size, 3, '重复及并发导出创建不同岗位目录');
+  assert.ok(separated.every(file => basename(file) === filename), '附件文件名始终只用姓名');
+  assert.deepEqual(new Set(separated.map(file => readFileSync(file, 'utf8'))), new Set(['甲', '乙', '丙']));
+  await assert.rejects(writeUniquePdf(temporary, filename, Buffer.from('x'), '../escape'));
   const stored = new Map([['bossclaw-tailor-history-v1', '旧历史']]);
   const backups = [];
   globalThis.localStorage = { getItem: (key) => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: (key) => stored.delete(key) };

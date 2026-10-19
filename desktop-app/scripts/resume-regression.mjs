@@ -18,7 +18,11 @@ try {
     },
     tsconfig: join(root, 'tsconfig.json'), bundle: true, format: 'cjs', platform: 'node', outfile, logLevel: 'silent',
   });
-  const { normalizeTailorDoc, buildResumeDocData, buildResumeHtml, RESUME_TEMPLATES, FOCUS_MODULE_ORDER } = createRequire(import.meta.url)(outfile);
+  const { normalizeTailorDoc, buildResumeDocData, buildResumeHtml, defaultPdfFileName, RESUME_TEMPLATES, FOCUS_MODULE_ORDER } = createRequire(import.meta.url)(outfile);
+  assert.equal(defaultPdfFileName({ name: '测试求职者', targetTitle: 'Python开发' }), '测试求职者.pdf');
+  assert.equal(defaultPdfFileName({ name: '测试求职者', targetTitle: 'AI应用开发' }), '测试求职者.pdf');
+  assert.equal(defaultPdfFileName({ name: '../张三/:*?' }), '张三.pdf');
+  assert.equal(defaultPdfFileName({ name: '' }), '简历.pdf');
   const line = (text) => ({ text, source: `原文摘录：${text}` });
   const raw = {
     projects: Array.from({ length: 5 }, (_, i) => ({
@@ -45,6 +49,7 @@ try {
   assert.equal(data.modules.find((m) => m.id === 'projects').blocks[0].bullets.length, 6);
   for (const template of RESUME_TEMPLATES) {
     const html = buildResumeHtml(data, template.id);
+    assert.equal(html.match(/<title>(.*?)<\/title>/s)?.[1], '张三 &lt;script&gt;', `${template.id} 文档标题只用姓名且正确转义`);
     assert.ok(html.includes('张三 &lt;script&gt;'));
     assert.equal((html.match(/联系电话/g) || []).length, 1, `${template.id} 显示联系电话标签`);
     assert.equal((html.match(/邮箱/g) || []).length, 1, `${template.id} 显示邮箱标签`);
@@ -85,7 +90,10 @@ try {
   assert.deepEqual(protectedExport.modules[0].blocks, originals.map(p => ({ ...p, meta: '2026.05｜Python' })), '历史导出也能恢复全部原始项目及完整要点');
   assert.equal(historical.projects.length, 5, '恢复导出不能修改旧生成记录');
   assert.ok(buildResumeHtml(data, 'unknown').includes('class="tpl-personal"'));
+  const { verifyPdfMetadata } = await import('./resume-pdf-metadata-regression.mjs');
+  await verifyPdfMetadata(RESUME_TEMPLATES.map(template => buildResumeHtml({ ...data, contact: { ...data.contact, name: '测试求职者' } }, template.id)), temporary);
   console.log('PASS resume: 精简上限/来源、技能去重、历史兼容、个人模板与六套可选模板顺序与转义。');
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
+await import('./tailor-batch-regression.mjs');

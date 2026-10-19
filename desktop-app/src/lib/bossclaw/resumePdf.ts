@@ -368,16 +368,14 @@ export function buildResumeHtml(data: ResumeDocData, templateId = 'personal'): s
   else body = renderStandard(data, false);
   return (
     `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>` +
-    `${htmlEscape(data.contact.name || '定制简历')} - ${htmlEscape(data.contact.targetTitle || '求职')}</title>` +
+    `${htmlEscape(data.contact.name?.trim() || '简历')}</title>` +
     `<style>${BASE_CSS}${tplCss}</style></head>` +
     `<body class="tpl-${tplId}">${body}</body></html>`
   );
 }
 
-/** 生成默认导出文件名：{意向岗位}-{姓名}-定制简历-{yyyyMMdd}.pdf */
-export function defaultPdfFileName(contact: Pick<ResumeDocData['contact'], 'name' | 'targetTitle'>, now = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-  const base = [contact.targetTitle, contact.name, '定制简历', date].filter(Boolean).join('-');
-  return `${base.replace(/[\\/:*?"<>|\n\r]/g, '').slice(0, 80) || '定制简历'}.pdf`;
+/** 对外附件仅用姓名命名；岗位、版本等信息由所在目录区分。 */
+export function defaultPdfFileName(contact: Pick<ResumeDocData['contact'], 'name'>): string {
+  const name = String(contact.name || '').replace(/[^\w\u4e00-\u9fa5()（）\-· ]/g, '').trim().slice(0, 100);
+  return `${name && !/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(name) ? name : '简历'}.pdf`;
 }

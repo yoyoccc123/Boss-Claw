@@ -1399,16 +1399,9 @@ def _send_chat_text(target_page, text: str, expected: dict | None = None) -> dic
             sent_via = send_kind or 'button'
             log('🖱️', f'已点击发送按钮（{sent_via}）')
         except Exception:
-            error = before_send_error()
-            if error:
-                return error
-            try:
-                input_el.click()
-                target_page.keyboard.press('Enter')
-                sent_via = 'enter'
-                log('⌨️', '发送按钮点击失败，已回车发送')
-            except Exception:
-                pass
+            # A click timeout does not prove rejection. Only read receipts from here;
+            # pressing Enter again could duplicate a message that was already sent.
+            sent_via = send_kind or 'button'
     else:
         error = before_send_error()
         if error:
@@ -1422,12 +1415,16 @@ def _send_chat_text(target_page, text: str, expected: dict | None = None) -> dic
     # 发送后随机停留，等气泡出现主体再确认（对齐 waitForStableOutgoingGreeting 的稳定期）
     human_sleep(1.8, 0.4, 0.8)
 
-    confirmed = _confirm_message(target_page, text, before_fps)
-    if not confirmed:
-        human_sleep(2.6, 0.3, 1.5)
+    try:
         confirmed = _confirm_message(target_page, text, before_fps)
+        if not confirmed:
+            human_sleep(2.6, 0.3, 1.5)
+            confirmed = _confirm_message(target_page, text, before_fps)
+    except Exception:
+        confirmed = False
     if not confirmed:
-        return {"ok": False, "code": 501, "message": "未能确认文字气泡已发送，请人工核对"}
+        return {"ok": False, "code": 501, "needsReview": True, "sendAttempted": True,
+                "message": "已尝试发送，但未能确认文字回执；请核对聊天记录，避免重复发送"}
     log('✅', f'文字气泡确认（发送方式：{sent_via}）')
     return {"ok": True, "sentVia": sent_via}
 
@@ -1583,8 +1580,7 @@ def chat_greeting(job_id: str, greeting: str, os_name: str | None = None,
         send_res = _send_chat_text(target_page, send_text, expected)
         if not send_res.get('ok'):
             save_cookies(page.context)
-            return {"ok": False, "code": send_res.get('code', 500),
-                    "message": send_res.get('message', '发送失败'), "sent": False}
+            return {**send_res, "sent": False}
         sent_via = send_res.get('sentVia') or 'enter'
 
         # Step 10: 可选 —— 在线简历 / 图片简历（对齐 chat-new v5543 流程：
@@ -1602,7 +1598,9 @@ def chat_greeting(job_id: str, greeting: str, os_name: str | None = None,
                 attachment_error = _chat_target_error(expected, _chat_header_identity(target_page, require_marked=True))
             if attachment_error:
                 save_cookies(page.context)
-                return {**attachment_error, "sent": True}
+                return {"ok": True, "code": 0, "sent": True, "textConfirmed": True,
+                        "method": "browser-chat", "sentVia": sent_via,
+                        "attachmentWarning": attachment_error.get('message') or '文字已发送，附件未发送'}
         if send_online_resume:
             try:
                 online_sent = False
@@ -1636,7 +1634,7 @@ def chat_greeting(job_id: str, greeting: str, os_name: str | None = None,
             _upload_resume_images(target_page, resume_images, expected)
 
         save_cookies(page.context)
-        return {"ok": True, "code": 0, "sent": True, "method": "browser-chat", "sentVia": sent_via}
+        return {"ok": True, "code": 0, "sent": True, "textConfirmed": True, "method": "browser-chat", "sentVia": sent_via}
 
 
 # ============================================================
@@ -1930,8 +1928,7 @@ def _send_to_conversation(page, name: str, company: str = '', text: str = '') ->
         return target_error
     res = _send_chat_text(page, text, expected)
     if not res.get('ok'):
-        return {"ok": False, "code": res.get('code', 500), "sent": False,
-                "message": res.get('message', '发送失败')}
+        return {**res, "sent": False}
     return {"ok": True, "sent": True, "method": "browser-chat-watch", "sentVia": res.get('sentVia')}
 
 
