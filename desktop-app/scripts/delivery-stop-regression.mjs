@@ -188,3 +188,4 @@ const stats={deliveryApprovedCount:0,deliveryQueuedCount:52,activeItem:null,appl
 check(stats.waiting===52&&stats.delivering===0,'52 stopped queue items count as waiting; active deliveries are zero');
 console.log(`PASS delivery stop: ${checks} production-function and presentation checks; all outbound boundaries are stubs.`);
 await import('./delivery-evidence-regression.mjs');
+await import('./workbench-view-regression.mjs');

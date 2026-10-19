@@ -685,6 +685,13 @@ html[data-theme='dark'],
   background: var(--accent-soft);
 }
 
+button.wb-stat { cursor: pointer; font: inherit; }
+button.wb-stat:hover { border-color: var(--brand); }
+button.wb-stat:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.wb-list-context { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px; margin: 8px 0; font-size: 12px; }
+.wb-status-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.wb-status-filters .ant-btn { height: auto; padding: 3px 7px; font-size: 12px; line-height: 1.4; }
+
 .wb-stat-num {
   font-size: 15px;
   font-weight: 700;

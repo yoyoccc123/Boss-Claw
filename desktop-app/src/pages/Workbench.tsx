@@ -3,12 +3,12 @@
  * 布局：左（侧栏 Sidebar）｜中（投递任务控制台）｜右（内置浏览器 <BrowserView>）
  * 中栏子模块：
  * - 岗位进度卡（wb-progress-card：搜索中/待确认/待投递/投递中/已完成/失败 统计 + 搜索采集/隐身采集/加入任务 + 可视化采集进度 + 当前投递任务详情）
- * - 岗位筛选区（wb-filter-section：Segmented 过滤器 + 显示已忽略/跳过）
+ * - 岗位筛选区（wb-filter-section：状态筛选 + 显示已忽略/跳过）
  * - 岗位卡片列表（wb-jobs：待确认岗位卡，批准/跳过/修正优先级等操作）
  * 右栏子模块：内置浏览器（BrowserView 多平台标签 webview，含 BOSS 等平台登录态与岗位详情页）
  */
 import { useEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
-import { Button, Card, Checkbox, Dropdown, Empty, Progress, Tag, Typography, message, Segmented, Tooltip, Space, Select, Alert, InputNumber, Modal } from 'antd';
+import { Button, Card, Checkbox, Dropdown, Empty, Progress, Tag, Typography, message, Tooltip, Space, Select, Alert, InputNumber, Modal } from 'antd';
 import {
   CheckOutlined, ReloadOutlined, EyeOutlined, SearchOutlined,
   StopOutlined, UndoOutlined, ThunderboltOutlined,
@@ -63,6 +63,7 @@ import { createAnalysisQueue, type AnalysisQueueStats } from '@/lib/bossclaw/ana
 import { assessJobAddress } from '@/lib/bossclaw/addressRisk';
 import { companySizeOfJob } from '@/lib/bossclaw/companySize';
 import { DEFAULT_WORKBENCH_FILTERS, normalizeWorkbenchFilters, filterWorkbenchJobs, invalidSalaryFilter } from '@/lib/bossclaw/workbenchFilters';
+import { matchesWorkbenchStatus, visibleWorkbenchJobs, WORKBENCH_STATUS_LABELS } from '@/lib/bossclaw/workbenchView';
 import { canSupplementZhaopinGreeting } from '@/lib/bossclaw/zhaopinGreetingRetry';
 import { collectionGoal } from '@/lib/bossclaw/collectionGoal';
 import { autoConfirmPending, autoConfirmationReason } from '@/lib/bossclaw/autoConfirmation';
@@ -289,6 +290,7 @@ export default function Workbench() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [applyStage, setApplyStage] = useState<TaskStage | null>(null);
   const [filter, setFilter] = useState('all');
+  const jobsListRef = useRef<HTMLDivElement>(null);
   const [showIgnored, setShowIgnored] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [jobsExpanded, setJobsExpanded] = useState(false);
@@ -3018,7 +3020,7 @@ export default function Workbench() {
     const list: { p: PendingItem; stage: TaskStage; label: string; progress: number }[] = [];
     for (const p of pending) {
       const pf = p.job?.platform;
-      if (p.status === 'approved_queue') {
+      if (p.status === 'approved_queue' || p.status === 'approved') {
         const stage: TaskStage = p.id === activeId && applyStage ? applyStage : 'queued';
         const meta = taskStageMetaFor(pf, stage);
         list.push({ p, stage, label: p.id === activeId && applyStage ? (autoAssist ? meta.label : '正在核对本次结果') : (autoAssist ? '排队中' : '待投递'), progress: meta.progress });
@@ -3044,7 +3046,7 @@ export default function Workbench() {
     return list;
   }, [pending, activeId, applyStage, autoAssist]);
 
-  const deliveryQueuedCount = deliveryTasks.filter((t) => t.p.status === 'approved_queue' && t.p.id !== activeId).length;
+  const deliveryQueuedCount = deliveryTasks.filter((t) => t.p.status === 'approved_queue' && !(t.p.id === activeId && applyStage)).length;
   const deliveryPendingCount = deliveryTasks.filter((t) => t.p.status === 'pending').length;
   const deliverySentCount = deliveryTasks.filter((t) => t.p.status === 'sent').length;
   const deliveryFailedCount = deliveryTasks.filter((t) => t.p.status === 'failed' && !t.p.deliveryNeedsReview).length;
@@ -3061,7 +3063,7 @@ export default function Workbench() {
   const collectRunDone = collectRuns.filter((t) => t.status === 'success').length;
   const collectRunFailed = collectRuns.filter((t) => t.status === 'failed').length;
 
-  // 分区统计（去重口径，互不重叠，合计=下方岗位列表总数）：
+  // 全部平台统计，不受下方列表筛选影响；点击统计后清除条件并定位对应状态。
   //   搜索中 = 正在采集；待确认 = 待人工确认岗位；待投递 = 已确认等待投递；投递中 = 投递流程进行中；已完成 = 投递成功；失败 = 投递失败
   const statSearching = collecting ? 1 : 0;
   const statToConfirm = deliveryPendingCount;
@@ -3073,14 +3075,16 @@ export default function Workbench() {
   const isHiddenStatus = (status: string) => status === 'ignored' || status === 'skipped';
   const rankedAll = useMemo(() => rerankPending(pending, config), [pending, config]);
   const eligibleRanked = useMemo(() => filterWorkbenchJobs(rankedAll, workbenchFilters), [rankedAll, workbenchFilters]);
-  // 「全部」只展示**尚未投递**的岗位：已投递（sent）不混入总览，避免队列越用越长。
-  // 已投递数据完整保留在 pending 中，仍可通过「已投递」标签单独查看（见下方 ranked 分支）。
-  const activeAll = useMemo(() => eligibleRanked.filter((p) => p.status !== 'sent'), [eligibleRanked]);
-  // 「全部」走 activeAll（排除 sent）；选具体标签时走全量 rankedAll，保证「已投递」标签能正常筛出内容。
-  const ranked = useMemo(() => {
-    const base = filter === 'all' ? activeAll : eligibleRanked.filter((p) => filter === 'needs_review' ? p.status === 'failed' && p.deliveryNeedsReview : p.status === filter && (filter !== 'failed' || !p.deliveryNeedsReview));
-    return showIgnored ? base : base.filter((p) => !isHiddenStatus(p.status));
-  }, [activeAll, eligibleRanked, filter, showIgnored]);
+  // 列表标签共用同一状态分组；「全部」保留所有尚未投递的记录。
+  const ranked = useMemo(() => visibleWorkbenchJobs(eligibleRanked, filter, showIgnored, applyStage ? activeId : null),
+    [eligibleRanked, filter, showIgnored, activeId, applyStage]);
+  const currentListLabel = WORKBENCH_STATUS_LABELS[filter] || '全部未投递';
+  const totalUnsentCount = visibleWorkbenchJobs(pending, 'all').length;
+  const showJobs = (nextFilter: string, clearCriteria = false) => {
+    if (clearCriteria) setWorkbenchFilters(DEFAULT_WORKBENCH_FILTERS);
+    setFilter(nextFilter); setShowIgnored(false); setJobsExpanded(true);
+    requestAnimationFrame(() => jobsListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
 
   const selectedTailorJobs = useMemo(() => {
     const selected = new Set(tailorSelection);
@@ -3094,11 +3098,9 @@ export default function Workbench() {
       : previous.filter((id) => !current.has(id)));
   };
 
-  // 标签数字与各自列表同源：全部 = 未投递总数；其余 = 对应状态总数（含已投递）
-  const visibleAllCount = showIgnored ? activeAll.length : activeAll.filter((p) => !isHiddenStatus(p.status)).length;
   const suspiciousAddressCount = rankedAll.filter((p) => assessJobAddress(p.job).suspicious).length;
   // 隐藏未知人数后仍可补齐，让新读到的公司重新参与筛选。
-  const missingAddressJobs = rankedAll.filter((p) => (filter === 'all' ? p.status !== 'sent' : p.status === filter) &&
+  const missingAddressJobs = rankedAll.filter((p) => matchesWorkbenchStatus(p, filter, applyStage ? activeId : null) &&
     (showIgnored || !isHiddenStatus(p.status)) && (!assessJobAddress(p.job).address || !companySizeOfJob(p.job)));
   const fillOfficeAddresses = async () => {
     if (addressLock.current || tailorBusy || running) return;
@@ -3132,15 +3134,8 @@ export default function Workbench() {
     } catch (error) { note = String(error); }
     finally { addressLock.current = false; setAddressScan({ running: false, checked, found, total: ids.length, note }); }
   };
-  const WB_FILTERS = [
-    { key: 'all', label: `全部 ${visibleAllCount}` },
-    { key: 'pending', label: `待确认 ${eligibleRanked.filter((p) => p.status === 'pending').length}` },
-    { key: 'approved', label: `待投递 ${eligibleRanked.filter((p) => p.status === 'approved').length}` },
-    { key: 'approved_queue', label: `投递队列 ${eligibleRanked.filter((p) => p.status === 'approved_queue').length}` },
-    { key: 'sent', label: `已投递 ${eligibleRanked.filter((p) => p.status === 'sent').length}` },
-    { key: 'needs_review', label: `待核对 ${eligibleRanked.filter((p) => p.status === 'failed' && p.deliveryNeedsReview).length}` },
-    { key: 'failed', label: `失败 ${eligibleRanked.filter((p) => p.status === 'failed' && !p.deliveryNeedsReview).length}` },
-  ];
+  const WB_FILTERS = ['all', 'pending', 'approved', 'active', 'sent', 'needs_review', 'failed'].map(key => ({ key,
+    label: `${key === 'all' ? '全部' : WORKBENCH_STATUS_LABELS[key]} ${visibleWorkbenchJobs(eligibleRanked, key, showIgnored, applyStage ? activeId : null).length}` }));
 
   // ===== 岗位福利标签（welfareTag）=====
   // P5-03：原实现是渲染期逐卡执行的纯函数（含 51 条正则），Workbench 任何 state 变化
@@ -3296,36 +3291,37 @@ export default function Workbench() {
             </Space>
           }
           styles={{ body: { padding: 12 } }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>全部平台统计 · 点击数字查看对应岗位（清除列表筛选）</Text>
           <div className="wb-progress-stats">
             <div className={'wb-stat' + (statSearching ? ' is-on' : '')}>
               <span className="wb-stat-num">{collecting ? '●' : '0'}</span>
               <span className="wb-stat-label">搜索中</span>
             </div>
-            <div className={'wb-stat' + (statToConfirm ? ' is-on' : '')}>
+            <button type="button" className={'wb-stat' + (statToConfirm ? ' is-on' : '')} onClick={() => showJobs('pending', true)} aria-label={`查看全部待确认岗位 ${statToConfirm}`}>
               <span className="wb-stat-num">{statToConfirm}</span>
               <span className="wb-stat-label">待确认</span>
-            </div>
-            <div className={'wb-stat' + (statToDeliver ? ' is-on' : '')}>
+            </button>
+            <button type="button" className={'wb-stat' + (statToDeliver ? ' is-on' : '')} onClick={() => showJobs('approved', true)} aria-label={`查看全部待投递岗位 ${statToDeliver}`}>
               <span className="wb-stat-num">{statToDeliver}</span>
               <span className="wb-stat-label">待投递</span>
-            </div>
-            <div className={'wb-stat' + (statDelivering ? ' is-on' : '')}>
+            </button>
+            <button type="button" className={'wb-stat' + (statDelivering ? ' is-on' : '')} onClick={() => showJobs('active', true)} aria-label={`查看当前任务 ${statDelivering}`}>
               <span className="wb-stat-num">{statDelivering}</span>
               <span className="wb-stat-label">{autoAssist ? '投递中' : '结果核对中'}</span>
-            </div>
-            <div className={'wb-stat' + (statDone ? ' is-on' : '')}>
+            </button>
+            <button type="button" className={'wb-stat' + (statDone ? ' is-on' : '')} onClick={() => showJobs('sent', true)} aria-label={`查看全部已完成岗位 ${statDone}`}>
               <span className="wb-stat-num">{statDone}</span>
               <span className="wb-stat-label">已完成</span>
-            </div>
-            <div className={'wb-stat' + (statFailed ? ' is-on' : '')}>
+            </button>
+            <button type="button" className={'wb-stat' + (statFailed ? ' is-on' : '')} onClick={() => showJobs('failed', true)} aria-label={`查看全部失败岗位 ${statFailed}`}>
               <span className="wb-stat-num">{statFailed}</span>
               <span className="wb-stat-label">失败</span>
-            </div>
+            </button>
           </div>
 
           {/* 无关键字采集（随机岗位推荐）前置提醒：岗位完全由平台按账号内的求职意向推荐，
               资料未完善会采到不相关岗位，故在卡片内常驻提醒并提供直达在线简历入口 */}
-          {deliveryReviewCount > 0 && <Button type="link" onClick={() => setFilter('needs_review')}>发送结果待核对 {deliveryReviewCount} 个（不计入失败）</Button>}
+          {deliveryReviewCount > 0 && <Button type="link" onClick={() => showJobs('needs_review', true)}>发送结果待核对 {deliveryReviewCount} 个（不计入失败）</Button>}
           {config.collectWithoutKeyword && (
             <Alert
               type="info"
@@ -3448,10 +3444,10 @@ export default function Workbench() {
             </div>
           )}
 
-          {!visualCollecting && !cfxCollecting && !activeItem && (
+          {!visualCollecting && !cfxCollecting && !activeItem && deliveryTasks.length === 0 && (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={deliveryTasks.length > 0 ? '没有正在投递的岗位' : '还没有岗位，先「搜索采集」或「加入任务」'}
+              description="还没有岗位，先「搜索采集」或「加入任务」"
               style={{ marginTop: 8 }}
             />
           )}          {activeItem && (
@@ -3485,7 +3481,7 @@ export default function Workbench() {
           )}
         </Card>
 
-        {/* 子模块：岗位筛选区（Segmented 过滤器 + 显示已忽略/跳过） */}
+        {/* 子模块：岗位筛选区（状态筛选 + 显示已忽略/跳过） */}
         <div className="wb-filter-section">
           <div className="wb-job-criteria">
             <Checkbox checked={workbenchFilters.hideResidential} disabled={tailorBusy || addressScan.running}
@@ -3520,17 +3516,14 @@ export default function Workbench() {
               <Button size="small" disabled={tailorBusy || running || !missingAddressJobs.length || addressScan.running}
                 onClick={fillOfficeAddresses}>补齐地址 / 人数（{missingAddressJobs.length}）</Button>
               {addressScan.running && <Button size="small" onClick={() => { addressStop.current = true; }}>当前完成后停止</Button>}
-              <Button size="small" type="text" disabled={tailorBusy || addressScan.running} onClick={() => setWorkbenchFilters(DEFAULT_WORKBENCH_FILTERS)}>重置筛选</Button>
+              <Button size="small" type="text" disabled={tailorBusy || addressScan.running} onClick={() => showJobs('all', true)}>重置筛选</Button>
             </Space>
             {(addressScan.running || addressScan.note) && <Text type="secondary" style={{ fontSize: 12 }}>{addressScan.running ? `补齐中 ${addressScan.checked}/${addressScan.total}，已找到 ${addressScan.found} 个` : addressScan.note}</Text>}
           </div>
-          <Segmented
-            block
-            size="small"
-            value={filter}
-            onChange={(val) => setFilter(val as string)}
-            options={WB_FILTERS.map((f) => ({ value: f.key, label: f.label }))}
-          />
+          <div className="wb-status-filters" role="group" aria-label="岗位状态筛选">
+            {WB_FILTERS.map(f => <Button key={f.key} size="small" type={filter === f.key ? 'primary' : 'default'}
+              aria-pressed={filter === f.key} onClick={() => showJobs(f.key)}>{f.label}</Button>)}
+          </div>
           <div className="wb-filter-toolbar">
             <button
               type="button"
@@ -3570,10 +3563,15 @@ export default function Workbench() {
             点「确认」加入投递队列，按 AI 匹配分从高到低处理；停止后保留未投递岗位，再次开始可继续。确认前可修改招呼语（为空则无法确认）。
           </Text>
         </div>
-        <div className="wb-jobs">
+        <div className="wb-jobs" ref={jobsListRef}>
+          <div className="wb-list-context" role="status">
+            <Text>当前列表：{currentListLabel} · {ranked.length} 个</Text>
+            <Button size="small" type="link" onClick={() => showJobs('all', true)}>查看全部未投递（{totalUnsentCount}）</Button>
+          </div>
           {ranked.length === 0 ? (
             <div className="soft-block" style={{ padding: '40px 20px', textAlign: 'center' }}>
-              <Empty description="暂无任务。在右侧浏览器打开岗位后点「加入任务」" />
+              <Empty description={pending.length ? `当前筛选“${currentListLabel}”下没有岗位` : '暂无任务。在右侧浏览器打开岗位后点「加入任务」'} />
+              {pending.length > 0 && <Text type="secondary">岗位记录仍保留，可点击上方统计切换状态，或点“查看全部未投递”清除筛选。</Text>}
             </div>
           ) : (
             <>
