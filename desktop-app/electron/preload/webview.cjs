@@ -1551,11 +1551,21 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
 
     // 文字气泡确认（安全不变量）
     notify('apply-stage', { stage: 'verify_message', label: '确认文字已发送', sendAttempted });
+    let lastReceiptContext = null;
     const confirmed = fullChat
-      ? await waitFor(async () => { const c = await bossChatContext(job, { greeting: safeGreeting, readOnly: true }); return c.ready && c.hasExactGreeting; }, 20000, '目标会话文字气泡确认')
+      ? await waitFor(async () => {
+        try {
+          const c = await bossChatContext(job, { greeting: safeGreeting, readOnly: true });
+          lastReceiptContext = c; return c.ready && c.hasExactGreeting;
+        } catch (error) {
+          lastReceiptContext = { ready: false, reason: `读取目标会话回执失败：${String(error?.message || error)}` }; return false;
+        }
+      }, 20000, '目标会话文字气泡确认')
       : await waitFor(() => confirmOwnMessage(safeGreeting), 20000, '文字气泡确认');
     if (!confirmed) {
-      notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: '已尝试发送，但未能确认文字回执；请核对聊天记录，避免重复发送' });
+      const reason = lastReceiptContext?.reason || (lastReceiptContext?.hasUnconfirmedGreeting
+        ? `消息状态尚未确认送达/已读：${lastReceiptContext.greetingStatuses?.join(',') || '未知'}` : '尚未读取到目标会话中的完整招呼语');
+      notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: `已尝试发送，但未能确认文字回执（${reason}）；请核对聊天记录，避免重复发送` });
       return;
     }
     notify('apply-stage', { stage: 'verify_result', label: '确认投递结果', ok: true });

@@ -1,0 +1,20 @@
+{
+  "source": "Live BOSS web ChatMessage -> MessageText -> MessageStatus, read-only component inspection",
+  "capturedOn": "2026-10-19",
+  "receiptProp": "message.status",
+  "messageStatus": {
+    "0": "status-loading",
+    "1": "status-delivery",
+    "2": "status-read",
+    "3": "",
+    "4": "status-error"
+  },
+  "observedOwnText": {
+    "type": 1,
+    "bodyType": 1,
+    "status": 1,
+    "isSelf": true,
+    "receiptClass": "message-status status-delivery",
+    "receiptLabel": "送达"
+  }
+}

@@ -47,23 +47,45 @@ function readBossChatContext(doc, href, expected = {}) {
   const record = doc.querySelector('.chat-conversation .chat-record'), component = record?.__vue__;
   const conversation = component?.$data?.boss;
   if (!sameIdentity(conversation, target)) return fail('聊天区尚未切换到目标岗位', { canClick: false });
-  if (component.$data.loading !== false) return fail('目标聊天记录仍在加载');
+  const historyLoading = component.$data.loading !== false;
+  if (historyLoading && !expected.readOnly) return fail('目标聊天记录仍在加载');
   const userId = string(component.$store?.state?.userInfo?.userId);
   if (!userId) return fail('当前用户编号尚未就绪');
   const messages = [...record.querySelectorAll('.message-item')].map(e => e.__vue__?.$props?.message);
-  if (messages.some(m => !m)) return fail('聊天消息信息尚未就绪');
-  // The v2 UI normalizes historyMsg's {from, body} into {fromId, text, received}.
-  const textMessages = messages.filter(m => Number(m.type) === 1 && typeof m.text === 'string' && normalize(m.text));
+  const incompleteMessages = messages.some(m => !m);
+  if (incompleteMessages && !expected.readOnly) return fail('聊天消息信息尚未就绪');
+  const textMessages = messages.filter(m => m && Number(m.type) === 1 && Number(m.templateId) !== 3
+    && Number(m.status) !== 3 && typeof m.text === 'string' && normalize(m.text));
   const exactGreeting = normalize(expected.greeting);
   const ownGreeting = textMessages.filter(m => exactGreeting && string(m.fromId) === userId && normalize(m.text) === exactGreeting);
-  const hasExactGreeting = ownGreeting.some(m => m.received === true && string(m.mid) && string(m.mid) !== '0');
+  // Live BOSS MessageText passes message.status to MessageStatus:
+  // 0=loading, 1=delivered, 2=read, 3=recalled/system, 4=error (captured 2026-10-19).
+  // History snapshots can carry received=true; the live UI uses status as its receipt.
+  const receiptFor = m => {
+    if (!/^\d+$/.test(string(m.mid)) || !/[1-9]/.test(string(m.mid))) return '';
+    if (m.status != null && string(m.status)) {
+      if (Number(m.status) === 1) return 'delivered';
+      if (Number(m.status) === 2) return 'read';
+      return ''; // Never override explicit loading/error/unknown status with received=true.
+    }
+    return m.received === true ? 'legacy_ack' : '';
+  };
+  const greetingReceipt = ownGreeting.map(receiptFor).find(Boolean) || '';
+  const hasExactGreeting = Boolean(greetingReceipt);
   const hasUnconfirmedGreeting = ownGreeting.length > 0 && !hasExactGreeting;
   const hasHrReply = Boolean(string(target.uid)) && textMessages.some(m => string(m.fromId) === string(target.uid) && string(m.fromId) !== userId);
   const hasConversation = hasHrReply || textMessages.some(m => string(m.fromId) === userId);
-  const evidence = { hasExactGreeting, hasUnconfirmedGreeting, hasConversation, hasHrReply, jobId: string(conversation.encryptJobId), bossId: string(conversation.encryptBossId) };
+  const evidence = { hasExactGreeting, hasUnconfirmedGreeting, hasConversation, hasHrReply, greetingReceipt,
+    greetingStatuses: ownGreeting.map(m => m.status == null ? 'absent' : string(m.status)),
+    jobId: string(conversation.encryptJobId), bossId: string(conversation.encryptBossId) };
   // Receipts belong to the selected native conversation, not to the editor's lifecycle.
   // Read-only confirmation may continue while the editor is temporarily unmounted.
-  if (expected.readOnly) return { ready: true, reason: '', ...evidence };
+  if (expected.readOnly) {
+    // An unrelated history placeholder must not hide a proven outgoing receipt.
+    // Partial history remains insufficient for typing, sending, or detecting no prior conversation.
+    if (!hasExactGreeting && (historyLoading || incompleteMessages)) return fail(historyLoading ? '目标聊天记录仍在加载' : '聊天消息信息尚未就绪', evidence);
+    return { ready: true, reason: '', ...evidence };
+  }
   const input = doc.querySelector('.chat-conversation #chat-input[contenteditable="true"]');
   if (!input || !input.isConnected) return fail('目标聊天输入框尚未就绪', evidence);
   return { ready: true, reason: '', ...evidence };

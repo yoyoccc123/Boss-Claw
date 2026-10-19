@@ -14,6 +14,7 @@ const check = (value, label) => { assert.ok(value, label); checks++; };
 const href = 'https://www.zhipin.com/web/geek/chat';
 const job = { jobId: 'job-A', encryptUserId: 'hr-A', url: 'https://www.zhipin.com/job_detail/job-A.html' };
 const greeting = '有 Python 自动化开发实践，希望进一步沟通这个岗位。';
+const statusContract = JSON.parse(readFileSync(join(root, 'scripts/fixtures/boss-message-status-contract.json'), 'utf8'));
 function fixture() {
   const sources = ['A', 'B'].map(id => ({ encryptJobId: `job-${id}`, encryptBossId: `hr-${id}`, jobId: `100${id}`, uid: `hr-native-${id}`, uniqueId: `hr-native-${id}_0`, name: '同名招聘者', brandName: '同一公司' }));
   const element = () => { const attrs = new Map(), classes = new Set(); return { isConnected: true, attrs,
@@ -83,6 +84,32 @@ function fixture() {
   check(vm.runInNewContext(script, { document: f.doc, location: { href }, URL }).ready, 'serialized production probe executes in the main world');
 }
 const source = ts.createSourceFile('webview.cjs', readFileSync(join(root, 'electron/preload/webview.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+{
+  const f = fixture();
+  for (const [status, className] of Object.entries(statusContract.messageStatus)) {
+    f.record.messages = [{ type: 1, bodyType: 1, text: greeting, fromId: 'self', received: true, mid: 43, status: Number(status) }];
+    const delivered = ['status-delivery', 'status-read'].includes(className);
+    check(f.read().hasExactGreeting === delivered, 'receipt agrees with captured frontend status, never received=true alone: ' + status);
+    f.record.messages[0].received = false;
+    check(f.read().hasExactGreeting === delivered, 'live delivered/read receipt does not depend on the separate received flag: ' + status);
+    delete f.record.messages[0].received;
+    check(f.read().hasExactGreeting === delivered, 'missing received flag does not hide a native receipt: ' + status);
+  }
+  f.record.messages = [{ type: 1, text: greeting, fromId: 'self', status: 1, mid: 43 }];
+  check(f.read().greetingReceipt === 'delivered', 'native delivered state is recorded');
+  f.record.__vue__.$data.loading = true;
+  check(!f.read().ready && readBossChatContext(f.doc, href, { ...job, greeting, readOnly: true }).hasExactGreeting, 'history loading cannot hide a proven receipt, and still blocks writing');
+  f.record.__vue__.$data.loading = false; f.record.messages.push(undefined);
+  check(!f.read().ready && readBossChatContext(f.doc, href, { ...job, greeting, readOnly: true }).hasExactGreeting, 'unrelated incomplete history cannot hide a proven receipt, and still blocks writing');
+  for (const mid of [0, -43, '', undefined, 'temporary-id']) {
+    f.record.messages = [{ type: 1, text: greeting, fromId: 'self', status: 1, mid }];
+    check(!f.read().hasExactGreeting, 'temporary/missing message IDs are never accepted: ' + mid);
+  }
+  f.record.messages = [{ type: 1, text: greeting, fromId: 'hr-native-A', status: 1, mid: 43 }];
+  check(!f.read().hasExactGreeting, 'HR echo of the complete greeting is not our outgoing receipt');
+  f.record.messages = [{ type: 1, text: greeting, fromId: 'self', status: 99, received: true, mid: 43 }];
+  check(!f.read().hasExactGreeting, 'unknown future status cannot be guessed successful');
+}
 const functions = new Map(); const visit = n => { if (ts.isFunctionDeclaration(n) && n.name) functions.set(n.name.text, n.getText(source)); ts.forEachChild(n, visit); }; visit(source);
 {
   const f = fixture(); f.select(null);
@@ -112,12 +139,14 @@ async function flow(mode) {
   const button = f.send;
   const c = { Date: Clock, URL, document: f.doc, location: { href, pathname: '/web/geek/chat' },
     pageStatusData: () => ({ collectionBlocked: mode === 'blocked' }), normalizeChatText: t => String(t).replace(/\s+/g, ' ').trim(),
-    bossChatContext: async (j, options) => readBossChatContext(f.doc, href, { ...j, ...options }),
+    bossChatContext: async (j, options) => { if(mode==='receipt-probe-error' && counts.sends)throw Error('fixture receipt bridge unavailable'); return readBossChatContext(f.doc, href, { ...j, ...options }); },
     buildBossChatContactClickScript,
     webFrame: { executeJavaScript: async script => vm.runInNewContext(script, { document: f.doc, location: { href }, URL }) },
     chatInput: () => f.selected === null ? null : f.input,
     notify: (_, data) => stages.push(data), sleep: tick, jitterDelay: tick,
-    humanClickElement: async (element, options) => { if (element === button) { if(mode==='reply-during-click') throw Error('BOSS_HR_REPLIED'); counts.sends++; if(mode==='click-timeout')throw Error('input timeout'); if(mode==='delayed')receiptAt=clock+12000; else if (mode !== 'no-receipt') f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); if(mode==='editor-gone')f.input.isConnected=false; if(mode==='wrong-after-send')f.select(1); return true; } throw Error('Contact selection must not depend on a foreground native-input acknowledgment'); },
+    humanClickElement: async (element, options) => { if (element === button) { if(mode==='reply-during-click') throw Error('BOSS_HR_REPLIED'); counts.sends++; if(mode==='click-timeout')throw Error('input timeout'); if(mode==='delayed')receiptAt=clock+12000; else if (mode !== 'no-receipt') f.record.messages.push(['live-status','read-status','loading-history','partial-history','failed-status'].includes(mode)
+      ? {type:1,bodyType:1,fromId:'self',text:greeting,status:mode==='read-status'?2:mode==='failed-status'?4:1,received:false,mid:43}
+      : { type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); if(mode==='loading-history')f.record.__vue__.$data.loading=true; if(mode==='partial-history')f.record.messages.push(undefined); if(mode==='editor-gone')f.input.isConnected=false; if(mode==='wrong-after-send')f.select(1); return true; } throw Error('Contact selection must not depend on a foreground native-input acknowledgment'); },
     enterChat: async () => null, trustedHoverElement: async () => {}, focusEditableScoped: element => element,
     trustedInput: async (action, text) => { if (action === 'insertText') { counts.inputs++; if(mode==='reply-before-fill') return {ok:false,skipped:true}; f.input.innerText = text; if (mode === 'changed') f.select(1); if(mode==='reply-after-fill')f.record.messages.push({type:1,fromId:'hr-native-A',text:'你好',mid:44,received:true}); return { ok: true }; } return { ok: false }; },
     Event: class {}, InputEvent: class {}, setTimeout: () => 1, sendButton: () => button, isDisabledish: () => false,
@@ -125,7 +154,7 @@ async function flow(mode) {
   vm.createContext(c); for (const name of ['waitFor', 'bossChatContactClick', 'selectBossChatContact', 'domApplyOnce']) vm.runInContext(functions.get(name), c);
   await c.domApplyOnce({ job, greeting }); return { f, stages, counts };
 }
-for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open', 'delayed', 'editor-gone', 'wrong-after-send', 'click-timeout']) {
+for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open', 'delayed', 'editor-gone', 'wrong-after-send', 'click-timeout', 'live-status', 'read-status', 'loading-history', 'partial-history', 'failed-status', 'receipt-probe-error']) {
   const r = await flow(mode), last = r.stages.at(-1);
   if (mode === 'new') { check(r.counts.contacts === 1 && r.counts.sends === 1 && last.stage === 'verify_result', 'actual preload selects the contact then sends workbench text once'); check(r.f.input.innerText === greeting, 'workbench text is preserved'); }
   if (mode === 'prior') check(r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'verify_result', 'verified identical greeting is not sent twice');
@@ -134,6 +163,9 @@ for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prio
   if (mode === 'changed') check(r.counts.sends === 0 && last.stage === 'failed', 'switching contacts after fill cancels the send');
   if (['no-receipt','wrong-after-send','click-timeout'].includes(mode)) check(last.stage === 'failed' && last.needsReview && last.sendAttempted, 'post-send uncertainty cannot count as failure eligible for resend: '+mode);
   if (['delayed','editor-gone'].includes(mode)) check(last.stage === 'verify_result' && r.counts.sends === 1, 'late receipt/editor lifecycle cannot cause false failure or resend: '+mode);
+  if (['live-status','read-status','loading-history','partial-history'].includes(mode)) check(last.stage === 'verify_result' && r.counts.sends === 1, 'actual send flow confirms native delivered/read status without hydration dependencies: '+mode);
+  if (mode === 'failed-status') check(last.stage === 'failed' && last.needsReview && r.counts.sends === 1 && /消息状态/.test(last.error), 'explicit send error is not counted as delivered and reports the native status');
+  if (mode === 'receipt-probe-error') check(last.stage === 'failed' && last.needsReview && /fixture receipt bridge unavailable/.test(last.error), 'bridge errors retain their cause instead of silently becoming a generic receipt timeout');
   if (mode === 'blocked') check(r.counts.contacts === 0 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'risk', 'security verification blocks all interaction');
   if (mode === 'retry') check(r.counts.contacts === 2 && r.counts.sends === 1 && last.stage === 'verify_result', 'an unhandled contact click is retried only after observing the conversation still unselected');
   if (mode === 'no-open') check(r.counts.contacts === 3 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'failed' && /点击后会话未打开/.test(last.error), 'three unhandled clicks stop with a specific failure; click acknowledgment alone never starts message editing');
