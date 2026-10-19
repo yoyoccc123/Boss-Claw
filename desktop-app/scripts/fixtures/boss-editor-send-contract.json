@@ -1,0 +1,8 @@
+{
+  "capturedAt": "2026-10-19",
+  "source": "Read-only inspection of the loaded BOSS web Editor component; no messages sent",
+  "component": "Editor",
+  "buttonBinding": "on:{click:e.handleSubmit}",
+  "handleSubmit": "function(e){this.sendText();try{Security.join(\"message\",e)}catch(e){}}",
+  "sendText": "function(){var e=this.getInputText();if(!this.enableSubmit)return!1;if(!(e.length<1)){var t=this.conversation$,n=t.uniqueId,s=t.uid,i=t.jobId;I.A.sendMessage(e),this.isEditNlpText$&&this.sendAction({action:\"c_message_messagedetail-ai_assisted_chat_bubble-click\",p:2,p2:1,p3:e,p4:s,p5:i,p6:this.isEditNlpText$||\"\"}),this.$refs.editbox.innerHTML=\"\",_.removeDraft(n),__conversion(\"chatview_send_chat_\"+s)}}"
+}

@@ -23,7 +23,7 @@ export const TASK_STAGE_META: Record<TaskStage, [string, number]> = Object.freez
   verify_chat_target: ['核对 HR 与岗位', 82],
   fill_message: ['填写求职招呼语', 86],
   send_message: ['发送求职招呼语', 90],
-  verify_message: ['确认文字已发送', 94],
+  verify_message: ['核对文字发送回执', 94],
   send_resume: ['发送简历附件', 97],
   verify_result: ['确认投递结果', 98],
   success: ['投递成功', 100],

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url), root = dirname(dirname(fileURLToPath(import.meta.url)));
-const { readBossChatContext, buildBossChatProbeScript, clickBossChatContact, buildBossChatContactClickScript, dispatchBossChatInput } = require(join(root, 'electron/preload/boss-chat-context.cjs'));
+const { readBossChatContext, buildBossChatProbeScript, clickBossChatContact, buildBossChatContactClickScript, buildBossTextSendClickScript, dispatchBossChatInput } = require(join(root, 'electron/preload/boss-chat-context.cjs'));
 const { isTextSendControl, findTextSendButton, readTextSendTarget } = require(join(root, 'electron/preload/text-send-control.cjs'));
 let checks = 0;
 const check = (value, label) => { assert.ok(value, label); checks++; };
@@ -140,7 +140,7 @@ async function flow(mode) {
   const c = { Date: Clock, URL, document: f.doc, location: { href, pathname: '/web/geek/chat' },
     pageStatusData: () => ({ collectionBlocked: mode === 'blocked' }), normalizeChatText: t => String(t).replace(/\s+/g, ' ').trim(),
     bossChatContext: async (j, options) => { if(mode==='receipt-probe-error' && counts.sends)throw Error('fixture receipt bridge unavailable'); return readBossChatContext(f.doc, href, { ...j, ...options }); },
-    buildBossChatContactClickScript,
+    buildBossChatContactClickScript, buildBossTextSendClickScript,
     webFrame: { executeJavaScript: async script => vm.runInNewContext(script, { document: f.doc, location: { href }, URL }) },
     chatInput: () => f.selected === null ? null : f.input,
     notify: (_, data) => stages.push(data), sleep: tick, jitterDelay: tick,
@@ -151,10 +151,19 @@ async function flow(mode) {
     trustedInput: async (action, text) => { if (action === 'insertText') { counts.inputs++; if(mode==='reply-before-fill') return {ok:false,skipped:true}; f.input.innerText = text; if (mode === 'changed') f.select(1); if(mode==='reply-after-fill')f.record.messages.push({type:1,fromId:'hr-native-A',text:'你好',mid:44,received:true}); return { ok: true }; } return { ok: false }; },
     Event: class {}, InputEvent: class {}, setTimeout: () => 1, sendButton: () => button, isDisabledish: () => false,
     confirmOwnMessage: () => { throw Error('Whole-page confirmation is forbidden for full chat'); } };
+  c.bossTextSendClick = async () => {
+    if (mode === 'reply-during-click') return { ok: false, skipped: true };
+    if (mode === 'lost-click') { counts.sends++; return { ok: false, sendAttempted: true, clickObserved: false, draftRetained: true, reason: '未观察到文字发送按钮的点击事件' }; }
+    if (mode === 'noop-handler') { counts.sends++; return { ok: true, sendAttempted: true, clickObserved: true, draftRetained: true }; }
+    // Reuse the receipt/target changes above, but the full-chat path must never
+    // route through the physical mouse acknowledgment or an Enter fallback.
+    const clicked = await c.humanClickElement(button);
+    return { ok: clicked, sendAttempted: true, clickObserved: true };
+  };
   vm.createContext(c); for (const name of ['waitFor', 'bossChatContactClick', 'selectBossChatContact', 'domApplyOnce']) vm.runInContext(functions.get(name), c);
   await c.domApplyOnce({ job, greeting }); return { f, stages, counts };
 }
-for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open', 'delayed', 'editor-gone', 'wrong-after-send', 'click-timeout', 'live-status', 'read-status', 'loading-history', 'partial-history', 'failed-status', 'receipt-probe-error']) {
+for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open', 'delayed', 'editor-gone', 'wrong-after-send', 'click-timeout', 'live-status', 'read-status', 'loading-history', 'partial-history', 'failed-status', 'receipt-probe-error', 'lost-click', 'noop-handler']) {
   const r = await flow(mode), last = r.stages.at(-1);
   if (mode === 'new') { check(r.counts.contacts === 1 && r.counts.sends === 1 && last.stage === 'verify_result', 'actual preload selects the contact then sends workbench text once'); check(r.f.input.innerText === greeting, 'workbench text is preserved'); }
   if (mode === 'prior') check(r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'verify_result', 'verified identical greeting is not sent twice');
@@ -166,6 +175,10 @@ for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prio
   if (['live-status','read-status','loading-history','partial-history'].includes(mode)) check(last.stage === 'verify_result' && r.counts.sends === 1, 'actual send flow confirms native delivered/read status without hydration dependencies: '+mode);
   if (mode === 'failed-status') check(last.stage === 'failed' && last.needsReview && r.counts.sends === 1 && /消息状态/.test(last.error), 'explicit send error is not counted as delivered and reports the native status');
   if (mode === 'receipt-probe-error') check(last.stage === 'failed' && last.needsReview && /fixture receipt bridge unavailable/.test(last.error), 'bridge errors retain their cause instead of silently becoming a generic receipt timeout');
+  if (['lost-click', 'noop-handler'].includes(mode)) {
+    check(last.stage === 'failed' && last.needsReview && r.counts.sends === 1 && r.f.input.innerText === greeting, 'lost/no-op button click preserves draft and never blindly retries: ' + mode);
+    check(/点击事件|仍在输入框/.test(last.error), 'retained-draft timeout distinguishes click/handler failure: ' + mode);
+  }
   if (mode === 'blocked') check(r.counts.contacts === 0 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'risk', 'security verification blocks all interaction');
   if (mode === 'retry') check(r.counts.contacts === 2 && r.counts.sends === 1 && last.stage === 'verify_result', 'an unhandled contact click is retried only after observing the conversation still unselected');
   if (mode === 'no-open') check(r.counts.contacts === 3 && r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'failed' && /点击后会话未打开/.test(last.error), 'three unhandled clicks stop with a specific failure; click acknowledgment alone never starts message editing');

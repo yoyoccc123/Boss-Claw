@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import ts from 'typescript';
 const require = createRequire(import.meta.url), root = dirname(dirname(fileURLToPath(import.meta.url)));
+const editorContract = JSON.parse(readFileSync(join(root,'scripts/fixtures/boss-editor-send-contract.json'),'utf8'));
 const tempRoot = process.env.BOSSCLAW_BUILD_ROOT ? (process.env.TEMP || join(process.env.BOSSCLAW_BUILD_ROOT,'test-tmp/send-ui')) : 'E:/BossClaw-build/test-tmp/send-ui';
 mkdirSync(tempRoot,{recursive:true});
 const fixture = mkdtempSync(join(tempRoot, 'boss-send-ui-')), reportPath = join(fixture, 'report.json');
@@ -19,14 +20,23 @@ const markup = `<meta charset="utf-8"><style>body{margin:0}.chat-conversation{wi
 <div class="chat-conversation"><div class="chat-record"></div><div class="message-controls"><div class="chat-im chat-editor"><div class="editor-container"><div id="chat-input" class="chat-input" contenteditable="true"></div></div></div>
 <div class="toolbar-btn-content icon btn-sendimg tooltip" aria-label="发送图片"><input id="file" type="file" accept="image/*"></div><button class="btn-v2 btn-sure-v2 btn-send">发送<span></span></button><label id="overlay" for="file">发送图片</label><div id="phone" class="side-bar-item" style="position:absolute;left:600px;top:160px;width:50px;height:35px;z-index:10;display:none"><i class="iboss-dianhuaicon"></i></div></div></div>`;
 const initialize = function() {
- window.events={text:0,image:0,file:0,phone:0};
+ window.events={text:0,image:0,file:0,phone:0,ui:0,requests:0};
  const native={encryptJobId:'job-A',encryptBossId:'hr-A',uid:'hr-native-A',uniqueId:'hr-native-A_0'};
  document.querySelector('.user-list-content').__vue__={$props:{dataSources:[native]}};
  document.querySelector('.friend-content-warp').__vue__={$props:{source:native,selected:native.uniqueId}};
  document.querySelector('.chat-record').__vue__={$data:{boss:native,loading:false},$store:{state:{userInfo:{userId:'self'}}}};
- window.reset=()=>{window.events={text:0,image:0,file:0,phone:0};document.querySelector('.chat-record').innerHTML='';document.querySelector('#overlay').style.display='none';document.querySelector('#phone').style.display='none';document.querySelector('.btn-send').classList.remove('disabled');document.querySelector('.btn-send').setAttribute('data-bossclaw-text-send','fixture-send');document.querySelector('#chat-input').innerText='有 Python 自动化开发实践，希望进一步沟通这个岗位。';document.querySelector('#chat-input').focus();};
+ window.reset=()=>{window.sendMode='observe';window.events={text:0,image:0,file:0,phone:0,ui:0,requests:0};document.querySelector('.chat-record').innerHTML='';document.querySelector('#overlay').style.display='none';document.querySelector('#phone').style.display='none';document.querySelector('.btn-send').classList.remove('disabled');document.querySelector('.btn-send').removeAttribute('data-bossclaw-text-send-attempt');document.querySelector('.btn-send').setAttribute('data-bossclaw-text-send','fixture-send');document.querySelector('#chat-input').innerText='有 Python 自动化开发实践，希望进一步沟通这个岗位。';document.querySelector('#chat-input').focus();};
  window.reply=()=>{const e=document.createElement('div');e.className='message-item item-friend';e.__vue__={$props:{message:{type:1,fromId:native.uid,mid:42,received:true,text:'方便介绍一下项目吗？'}}};document.querySelector('.chat-record').append(e);};
  document.querySelector('.btn-send').addEventListener('click',e=>{if(e.isTrusted)window.events.text++;});
+ // Execute the captured Editor methods. The fake SDK only appends local DTOs;
+ // it has no network implementation. This models clearing the draft as well as
+ // the important distinction between a click and a delivered message.
+ window.Security={join:()=>{}};window.__conversion=()=>{};window._={removeDraft:()=>{}};
+ window.I={A:{sendMessage:text=>{window.events.requests++;const e=document.createElement('div');e.className='message-item item-myself';e.__vue__={$props:{message:{type:1,bodyType:1,fromId:'self',mid:window.sendMode==='pending'?0:43,status:window.sendMode==='pending'?0:1,text}}};document.querySelector('.chat-record').append(e);}}};
+ const editor={$refs:{editbox:document.querySelector('#chat-input')},enableSubmit:true,conversation$:native,
+  getInputText(){return this.$refs.editbox.textContent.trim();},isEditNlpText$:false};
+ editor.sendText=window.capturedSendText;
+ document.querySelector('.btn-send').addEventListener('click',e=>{window.events.ui++;if(window.sendMode==='observe'||window.sendMode==='noop')return;window.capturedHandleSubmit.call(editor,e);});
  document.querySelector('.btn-sendimg').addEventListener('click',e=>{window.events.image++;e.preventDefault();});
  document.querySelector('#file').addEventListener('click',e=>{window.events.file++;e.preventDefault();});
  document.querySelector('#phone').addEventListener('click',()=>window.events.phone++);
@@ -34,7 +44,7 @@ const initialize = function() {
 };
 const run = async function() {
  const { app, BrowserWindow, session }=require('electron'), fs=require('node:fs'), vm=require('node:vm');
- const { dispatchBossChatInput }=require(ROOT+'/electron/preload/boss-chat-context.cjs');
+ const { dispatchBossChatInput,buildBossTextSendClickScript,buildBossChatProbeScript }=require(ROOT+'/electron/preload/boss-chat-context.cjs');
  const { findTextSendButton,isTextSendControl }=require(ROOT+'/electron/preload/text-send-control.cjs');
  app.setPath('userData',FIXTURE+'/profile');
  const deadline=setTimeout(()=>{fs.writeFileSync(REPORT,JSON.stringify({error:'Offline send UI timed out'}));app.exit(1);},45000);
@@ -64,7 +74,7 @@ const run = async function() {
   return {result,events:await evaluate('window.events')};
  };
  try {
-  await wc.loadURL('https://www.zhipin.com/web/geek/chat');wc.focus();await evaluate('('+INITIALIZE+')()');await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+  await wc.loadURL('https://www.zhipin.com/web/geek/chat');wc.focus();await evaluate('window.capturedHandleSubmit=('+CONTRACT.handleSubmit+');window.capturedSendText=('+CONTRACT.sendText+');('+INITIALIZE+')()');await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
   const pick=`(()=>{const isTextSendControl=${isTextSendControl.toString()};const findTextSendButton=${findTextSendButton.toString()};return findTextSendButton(document,document.querySelector('#chat-input'))?.className;})()`;
   check(await evaluate(pick)==='btn-v2 btn-sure-v2 btn-send','actual DOM excludes the captured btn-sendimg image toolbar');
   let r=await invoke('live-point');check(r.result.ok && r.events.text===1 && r.events.image===0 && r.events.file===0,'real trusted click uses live text-send coordinates, never the supplied image coordinates: '+JSON.stringify(r));
@@ -82,12 +92,36 @@ const run = async function() {
   check(!r.result.ok && r.events.text===0 && r.events.file===0,'changed draft cannot send to the selected contact');
   await evaluate('window.reset();document.querySelector("#chat-input").blur()');r=await invoke('wrong-focus','pressEnter');
   check(!r.result.ok && r.events.text===0 && r.events.file===0,'Enter fallback is rejected when focus leaves the editor');
+  const click=()=>evaluate(buildBossTextSendClickScript(job,{marker:'fixture-send',greeting}));
+  const receipt=()=>evaluate(buildBossChatProbeScript(job,{greeting,readOnly:true}));
+  await evaluate('window.reset();window.sendMode="deliver";document.querySelector("#chat-input").blur()');
+  win.blurWebView();
+  check(await evaluate('!document.hasFocus()'),'offline guest is genuinely unfocused before the send');
+  r=await click();let events=await evaluate('window.events');
+  check(r.ok && r.clickObserved && !r.draftRetained && events.requests===1 && events.ui===1 && events.text===0 && events.image===0 && events.file===0,'guarded main-world UI click executes captured Editor handler once even without guest focus');
+  check((await receipt()).hasExactGreeting,'success still requires exact native outgoing delivered receipt');
+  await click();check((await evaluate('window.events.requests'))===1,'existing own receipt prevents a second send');
+  await evaluate('window.reset();window.sendMode="noop"');r=await click();
+  check(r.ok && r.draftRetained && !(await receipt()).hasExactGreeting && (await evaluate('window.events.requests'))===0,'a real click without a business send is not a receipt');
+  r=await click();check(!r.ok && r.needsReview && (await evaluate('window.events.ui'))===1,'same send marker never re-clicks a no-op handler');
+  await evaluate('window.reset();window.sendMode="pending"');r=await click();
+  check(r.ok && !(await receipt()).hasExactGreeting && (await receipt()).hasUnconfirmedGreeting,'optimistic outgoing DTO without delivery is not accepted');
+  await click();check((await evaluate('window.events.requests'))===1,'pending own message prevents duplicate dispatch');
+  for(const [mode,setup] of [
+   ['overlay','document.querySelector("#overlay").style.display="block"'],
+   ['disabled','document.querySelector(".btn-send").classList.add("disabled")'],
+   ['changed-draft','document.querySelector("#chat-input").innerText="另一个岗位的草稿"'],
+   ['hr-reply','window.reply()'],
+   ['wrong-target','document.querySelector(".chat-record").__vue__.$data.boss={...document.querySelector(".chat-record").__vue__.$data.boss,encryptJobId:"different-job"}']]) {
+   await evaluate('window.reset();window.sendMode="deliver";'+setup);r=await click();events=await evaluate('window.events');
+   check(!r.ok && events.requests===0 && events.ui===0 && events.image===0 && events.file===0,'main-world send retains target/draft/overlay/reply guard: '+mode);
+  }
   check(external===0,'zero external platform requests');
   fs.writeFileSync(REPORT,JSON.stringify({checks,platformRequests:0}));
  }catch(e){fs.writeFileSync(REPORT,JSON.stringify({error:e.stack,checks}));process.exitCode=1;}
  finally{clearTimeout(deadline);win.destroy();app.quit();}
 };
-writeFileSync(join(fixture,'main.cjs'),`const ROOT=${JSON.stringify(root)},FIXTURE=${JSON.stringify(fixture)},REPORT=${JSON.stringify(reportPath)},HANDLER=${JSON.stringify(handler)},MARKUP=${JSON.stringify(markup)},INITIALIZE=${JSON.stringify(initialize.toString())};(${run.toString()})().catch(e=>{require('node:fs').writeFileSync(REPORT,JSON.stringify({error:e.stack}));require('electron').app.exit(1);});`);
+writeFileSync(join(fixture,'main.cjs'),`const ROOT=${JSON.stringify(root)},FIXTURE=${JSON.stringify(fixture)},REPORT=${JSON.stringify(reportPath)},HANDLER=${JSON.stringify(handler)},MARKUP=${JSON.stringify(markup)},INITIALIZE=${JSON.stringify(initialize.toString())},CONTRACT=${JSON.stringify(editorContract)};(${run.toString()})().catch(e=>{require('node:fs').writeFileSync(REPORT,JSON.stringify({error:e.stack}));require('electron').app.exit(1);});`);
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 await new Promise((resolve,reject)=>{
  const child=spawn(process.env.BOSSCLAW_ELECTRON||require('electron'),[join(fixture,'main.cjs')],{env,windowsHide:true,stdio:'ignore'});

@@ -1,5 +1,5 @@
 'use strict';
-const { buildTextSendTargetScript } = require('./text-send-control.cjs');
+const { buildTextSendTargetScript, isTextSendControl, findTextSendButton, readTextSendTarget } = require('./text-send-control.cjs');
 // Captured BOSS v2: getGeekFriendList.json -> boss-item.source;
 // geek/getBossData + historyMsg -> message-list.boss. Read identities only; never invoke SDK methods.
 function readBossChatContext(doc, href, expected = {}) {
@@ -117,6 +117,45 @@ function buildBossChatContactClickScript(job = {}, options = {}) {
   return `(()=>{const readBossChatContext=${readBossChatContext.toString()};return (${clickBossChatContact.toString()})(document,location.href,${JSON.stringify(expected)});})()`;
 }
 
+function clickBossTextSend(doc, href, expected = {}, readContext = readBossChatContext, readTarget = readTextSendTarget) {
+  const context = readContext(doc, href, expected);
+  const fail = (reason, extra = {}) => ({ ok: false, sendAttempted: false, reason, ...extra });
+  if (context.hasHrReply) return fail('HR 已回复，已跳过投递和招呼语发送', { skipped: true });
+  if (!context.ready) return fail(context.reason || 'BOSS 当前会话未确认，已保留草稿');
+  if (context.hasExactGreeting) return { ok: true, alreadySent: true, sendAttempted: false };
+  if (context.hasConversation) return fail('目标会话已有文字消息，请核对聊天记录，避免重复发送', { needsReview: true });
+  const point = readTarget(doc, { ...expected, action: 'clickAt' });
+  if (!point.ready) return fail(point.reason);
+  const button = [...doc.querySelectorAll('[data-bossclaw-text-send]')]
+    .find(e => e.getAttribute('data-bossclaw-text-send') === expected.marker);
+  if (!button?.isConnected || typeof button.click !== 'function') return fail('文字发送按钮已改变，已保留草稿');
+  if (button.getAttribute('data-bossclaw-text-send-attempt') === expected.marker) {
+    return fail('同一次文字发送已执行，正在等待回执，不重复点击', { sendAttempted: true, needsReview: true });
+  }
+  // Captured BOSS Editor.handleSubmit calls sendText synchronously; it does not
+  // require isTrusted. Click this exact UI control in its main world, once. A
+  // native mouse dispatch acknowledgment cannot prove that an unfocused guest
+  // received the click. Never fall back to a second click or an Enter key.
+  button.setAttribute('data-bossclaw-text-send-attempt', expected.marker);
+  let clickObserved = false;
+  const observed = () => { clickObserved = true; };
+  button.addEventListener('click', observed, { capture: true, once: true });
+  let error = '';
+  try { button.click(); } catch (e) { error = String(e?.message || e); }
+  finally { button.removeEventListener('click', observed, true); }
+  const input = doc.querySelector('.chat-conversation #chat-input[contenteditable="true"]');
+  const normalize = v => String(v || '').replace(/[\u200b\u200c\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+  return { ok: clickObserved && !error, sendAttempted: true, clickObserved,
+    draftRetained: Boolean(input?.isConnected && normalize(input.innerText || input.textContent) === normalize(expected.greeting)),
+    reason: error || (clickObserved ? '' : '未观察到文字发送按钮的点击事件') };
+}
+
+function buildBossTextSendClickScript(job = {}, options = {}) {
+  const expected = { jobId: job.jobId, url: job.url, encryptUserId: job.encryptUserId,
+    marker: options.marker, greeting: options.greeting || '' };
+  return `(()=>{const readBossChatContext=${readBossChatContext.toString()};const isTextSendControl=${isTextSendControl.toString()};const findTextSendButton=${findTextSendButton.toString()};const readTextSendTarget=${readTextSendTarget.toString()};return (${clickBossTextSend.toString()})(document,location.href,${JSON.stringify(expected)});})()`;
+}
+
 function dispatchBossChatInput(wc, target, action, rejected, inputIntent) {
   if (!target) { action(); return; }
   // This check runs after the mouse path, immediately before the physical input is issued.
@@ -130,4 +169,4 @@ function dispatchBossChatInput(wc, target, action, rejected, inputIntent) {
   }).catch(() => rejected('BOSS 会话核对失败，已取消输入或发送'));
 }
 
-module.exports = { readBossChatContext, buildBossChatProbeScript, clickBossChatContact, buildBossChatContactClickScript, dispatchBossChatInput };
+module.exports = { readBossChatContext, buildBossChatProbeScript, clickBossChatContact, buildBossChatContactClickScript, clickBossTextSend, buildBossTextSendClickScript, dispatchBossChatInput };

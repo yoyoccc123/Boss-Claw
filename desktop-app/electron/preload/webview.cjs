@@ -8,6 +8,7 @@
 //      - 投递  : POST /wapi/zpgeek/friend/add.json { encryptJobId, encryptBossId, greeting }
 //   2. 页面信息回传（nav / login-state）供地址栏、标签页、登录态显示。
 //   3. 真实输入通道（jc:webview-input）——BOSS 受控 contenteditable 只认真实输入（isTrusted:true）。
+//      · 当前完整聊天页的文字按钮使用已核对的 main-world UI click；仍保留完整会话/草稿/回执校验。
 //      · 2026-10-03 收口第一期：**BOSS 聊天链路**（立即沟通 / 发送按钮 / 弹窗确认 / 输入前悬停）
 //        已改为真实事件优先（humanClickElement：真实优先、合成兜底，带重复点击去重）。
 //      · 采集用的卡片点击**必须保持合成**（依赖 cancelable 事件阻止默认导航），见 clickElement 注释。
@@ -20,7 +21,7 @@
 'use strict';
 
 const { ipcRenderer, webFrame } = require('electron');
-const { buildBossChatProbeScript, buildBossChatContactClickScript } = require('./boss-chat-context.cjs');
+const { buildBossChatProbeScript, buildBossChatContactClickScript, buildBossTextSendClickScript } = require('./boss-chat-context.cjs');
 const { findTextSendButton } = require('./text-send-control.cjs');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
@@ -1385,6 +1386,10 @@ async function bossChatContactClick(job, options = {}) {
   return webFrame.executeJavaScript(buildBossChatContactClickScript(job, options));
 }
 
+async function bossTextSendClick(job, options = {}) {
+  return webFrame.executeJavaScript(buildBossTextSendClickScript(job, options));
+}
+
 async function selectBossChatContact(job, greeting = '') {
   const marker = `boss-${Date.now().toString(36)}`;
   const deadline = Date.now() + 18000;
@@ -1427,6 +1432,7 @@ async function domApply(arg) {
 async function domApplyOnce({ job = {}, greeting = '' } = {}) {
   const safeGreeting = String(greeting || '').replace(/\s+/g, ' ').trim();
   let sendAttempted = false;
+  let sendClick = null;
   try {
     if (safeGreeting.length < 8) {
       notify('apply-stage', { stage: 'failed', error: '求职招呼语为空或过短，已停止发送' });
@@ -1515,16 +1521,23 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       if (!enabled || (fullChat && !current?.ready)) {
         notify('apply-stage', { stage: 'failed', error: 'BOSS 发送按钮未就绪或当前会话已改变，招呼语保留为草稿，请人工核对' }); return;
       }
-      // 「发送」是 BOSS 受控组件按钮，与「立即沟通」同属只认 isTrusted 的那一类 → 真实点击优先
+      // The current full-chat Editor accepts its normal UI click handler. Run
+      // the guarded click in the main world; background mouse delivery can be lost.
       const marker = 'text-send-' + Date.now() + '-' + Math.random().toString(36).slice(2);
       btn.setAttribute('data-bossclaw-text-send', marker);
       let clicked;
       try {
         sendAttempted = true;
         notify('apply-stage', { stage: 'send_attempted', sendAttempted: true });
-        clicked = await humanClickElement(btn, { dedupeMs: 1200, ...(fullChat ? { bossTarget: job, bossInput: { marker, greeting: safeGreeting } } : {}) });
+        if (fullChat) {
+          sendClick = await bossTextSendClick(job, { marker, greeting: safeGreeting });
+          if (sendClick?.skipped) { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
+          // Once a click may have run, even a handler exception is resolved by
+          // receipt observation, never by a second send action.
+          clicked = sendClick?.ok || sendClick?.sendAttempted;
+        } else clicked = await humanClickElement(btn, { dedupeMs: 1200 });
       } finally { btn.removeAttribute('data-bossclaw-text-send'); }
-      if (fullChat && !clicked) { notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: 'BOSS 当前会话未确认，请核对聊天记录与草稿' }); return; }
+      if (fullChat && !clicked) { notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: `BOSS 文字发送已取消（${sendClick?.reason || '当前会话未确认'}）；请核对聊天记录与草稿` }); return; }
     } else {
       // 未找到按钮：弹窗 textarea 内回车是换行、不会发送，直接交人工；
       // 其余输入（contenteditable 聊天页等）仍退回回车发送兜底。
@@ -1550,7 +1563,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     }
 
     // 文字气泡确认（安全不变量）
-    notify('apply-stage', { stage: 'verify_message', label: '确认文字已发送', sendAttempted });
+    notify('apply-stage', { stage: 'verify_message', label: '核对文字发送回执', sendAttempted });
     let lastReceiptContext = null;
     const confirmed = fullChat
       ? await waitFor(async () => {
@@ -1563,8 +1576,11 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       }, 20000, '目标会话文字气泡确认')
       : await waitFor(() => confirmOwnMessage(safeGreeting), 20000, '文字气泡确认');
     if (!confirmed) {
+      const remainingDraft = fullChat ? document.querySelector('.chat-conversation #chat-input[contenteditable="true"]') : null;
+      const draftRetained = remainingDraft?.isConnected && normalizeChatText(remainingDraft.innerText || remainingDraft.textContent || '') === normalizeChatText(safeGreeting);
       const reason = lastReceiptContext?.reason || (lastReceiptContext?.hasUnconfirmedGreeting
-        ? `消息状态尚未确认送达/已读：${lastReceiptContext.greetingStatuses?.join(',') || '未知'}` : '尚未读取到目标会话中的完整招呼语');
+        ? `消息状态尚未确认送达/已读：${lastReceiptContext.greetingStatuses?.join(',') || '未知'}`
+        : sendClick?.reason || (draftRetained ? '招呼语仍在输入框，未观察到对应消息；发送按钮可能未生效，已保留草稿' : '尚未读取到目标会话中的完整招呼语'));
       notify('apply-stage', { stage: 'failed', needsReview: true, sendAttempted, error: `已尝试发送，但未能确认文字回执（${reason}）；请核对聊天记录，避免重复发送` });
       return;
     }
