@@ -1589,7 +1589,7 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
                   style={{ width: '100%' }} />
               </div>
               <div className="sg-item wide">
-                <Text type="secondary">BOSS 按尝试打开岗位详情计数，已过滤和重复查看也会计入；按周期均匀间隔查看，等待期间可停止。计数跨城市、方向和重启保留。这是本地浏览限额，不代表平台公布的安全阈值；遇到访问限制或验证时停止访问，保留进度。</Text>
+                <Text type="secondary">BOSS 按最近一个计数周期内尝试打开的岗位详情累计，已过滤和重复查看也会计入。额度未用完时按原采集节奏继续，达到上限才等待旧记录超出周期后继续；等待期间可停止。计数跨城市、方向和重启保留。这是本地浏览限额，不代表平台公布的安全阈值；遇到访问限制或验证时停止访问，保留进度。</Text>
               </div>
             </div>
             <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 13 }}>

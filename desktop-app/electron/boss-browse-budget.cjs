@@ -36,10 +36,8 @@ function createBossBrowseBudget(file, { clock = Date.now, write = null } = {}) {
     const now = clock(), policy = state.policy, windowMs = policy.windowMinutes * 60_000;
     const times = state.attempts.filter(t => t > now - windowMs);
     const blocked = !!state.restriction && state.restriction.until > now;
-    // Spacing avoids spending the whole window allowance in an initial burst.
-    const paceUntil = times.length ? times[times.length - 1] + Math.ceil(windowMs / policy.maxViews) : 0;
     const capUntil = times.length >= policy.maxViews ? times[times.length - policy.maxViews] + windowMs : 0;
-    const retryAt = Math.max(paceUntil, capUntil, blocked ? state.restriction.until : 0);
+    const retryAt = Math.max(capUntil, blocked ? state.restriction.until : 0);
     const error = storageError || (now < state.lastNow ? '系统时间早于已保存的浏览记录，已停止自动访问，请校准时间' : '');
     return { ok: !error && !blocked && retryAt <= now, blocked, error, retryAt,
       count: times.length, ...policy, code: blocked ? state.restriction.code : undefined,

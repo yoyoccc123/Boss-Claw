@@ -17,16 +17,19 @@ let now = Date.parse('2026-10-18T22:08:00+08:00');
 const file = path.join(temp, 'budget.json'), budget = createBossBrowseBudget(file, { clock: () => now });
 check(budget.status().ok && budget.status().maxViews === 30, 'new installs receive an enabled 30/30 budget');
 check(budget.reserve().ok, 'first actual view is admitted');
-check(!budget.reserve().ok && budget.status().count === 1, 'simultaneous/cross-tab attempts cannot pass the pacing gate');
-check(budget.status().retryAt === now + 60_000, 'views are spread over the window rather than burst at its start');
-for (let i = 1; i < 30; i++) { now += 60_000; check(budget.reserve().ok, 'spaced view ' + i + ' is admitted'); }
+check(budget.status().ok && budget.status().retryAt === 0, 'unused window quota adds no per-job interval');
+for (let i = 1; i < 30; i++) check(budget.reserve().ok, 'view ' + (i + 1) + ' can use available quota without advancing time');
 check(budget.status().count === 30 && !budget.reserve().ok, 'the rolling window never admits more than its quota');
+check(budget.status().retryAt === now + 30 * 60000, 'the full quota waits for window expiry, not a derived per-job interval');
 let restored = createBossBrowseBudget(file, { clock: () => now });
 check(restored.status().count === 30 && !restored.reserve().ok, 'restart preserves all attempts and wait time');
 restored.configure({ maxViews: 1, windowMinutes: 60 });
 check(restored.status().count === 30 && !restored.reserve().ok, 'changing settings does not erase existing history');
-now += 60_000;
-check(budget.reserve().ok && budget.status().count === 30, 'expiry is a sliding window, including its exact boundary');
+restored.configure({ maxViews: 30, windowMinutes: 30 });
+now += 30 * 60000 - 1;
+check(!restored.reserve().ok, 'a filled window cannot admit early');
+now += 1;
+check(restored.reserve().ok && restored.status().count === 1, 'the exact window boundary releases expired attempts');
 check(normalizePolicy({ maxViews: 0, windowMinutes: -1 }).maxViews === 30, 'invalid/zero values cannot disable limits');
 check(normalizePolicy({ maxViews: Infinity, windowMinutes: 99999 }).windowMinutes === 1440, 'bounds reject nonfinite and unbounded settings');
 const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -37,6 +40,22 @@ const brokenFile = path.join(temp, 'broken.json'); fs.writeFileSync(brokenFile, 
 check(!!createBossBrowseBudget(brokenFile).status().error, 'corrupt data does not silently reset quota');
 const writeFailure = createBossBrowseBudget(path.join(temp, 'write-error.json'), { clock: () => now, write: () => { throw Error('full'); } });
 check(!writeFailure.reserve().ok && !!writeFailure.status().error, 'failed persistence prevents the side effect');
+const legacyFile = path.join(temp, 'previous-version.json');
+fs.writeFileSync(legacyFile, JSON.stringify({ version: 1, policy: { maxViews: 30, windowMinutes: 30 }, attempts: [now - 1000], restriction: null, lastNow: now - 1000 }));
+const legacy = createBossBrowseBudget(legacyFile, { clock: () => now });
+check(legacy.status().ok && legacy.status().retryAt === 0 && legacy.reserve().ok && legacy.status().count === 2,
+  'previous-version history is retained while its derived per-job delay disappears');
+const staggered = createBossBrowseBudget(path.join(temp, 'staggered.json'), { clock: () => now });
+staggered.configure({ maxViews: 2, windowMinutes: 1 });
+const windowStart = now;
+check(staggered.reserve().ok, 'first staggered quota item is admitted');
+now += 20000;
+check(staggered.reserve().ok, 'a second view need not wait for half the configured period');
+now = windowStart + 59999;
+check(!staggered.reserve().ok && staggered.status().retryAt === windowStart + 60000, 'full quota waits for the oldest relevant record');
+now += 1;
+check(staggered.reserve().ok && staggered.status().count === 2 && staggered.status().retryAt === windowStart + 80000,
+  'each expired record releases one slot without resetting the whole window');
 
 now = Date.parse('2026-10-18T22:08:39+08:00');
 const restrictedUrl = 'https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=%2Fweb%2Fgeek%2Fjobs';
@@ -105,17 +124,21 @@ await n.c.visualCollect({ seq: 'view', maxJobs: 1, autoScroll: false });
 check(n.clicks() === 1 && n.b.status().count === 1, 'actual collector reserves exactly one attempt before opening its card');
 check(n.events.some(e => e.data.phase === 'browse-view'), 'actual collector emits counted detail-view metadata');
 n = await nativeCase(); n.b.reserve();
+await n.c.visualCollect({ seq: 'quota-available', maxJobs: 1, autoScroll: false });
+check(!n.events.some(e => e.data.phase === 'browse-wait') && n.clicks() === 1 && n.b.status().count === 2,
+  'actual collector adds no per-job delay while window quota remains');
+n = await nativeCase(); n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.reserve();
 await n.c.visualCollect({ seq: 'auto-resume', maxJobs: 1, autoScroll: false });
-check(n.events.some(e => e.data.phase === 'browse-wait') && n.clicks() === 1 && n.b.status().count === 2,
+check(n.events.some(e => e.data.phase === 'browse-wait') && n.clicks() === 1 && n.b.status().count === 1 && n.c.Date.now() >= 100000 + 30 * 60000,
   'actual collector waits locally then resumes the same card once, without extra navigation');
-n = await nativeCase({ stopInWait: true }); n.b.reserve();
+n = await nativeCase({ stopInWait: true }); n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.reserve();
 await n.c.visualCollect({ seq: 'stop-budget-wait', maxJobs: 1, autoScroll: false });
 check(n.clicks() === 0 && n.b.status().count === 1 && n.events.some(e => e.data.reason === 'stopped'),
   'actual collector Stop during a quota wait preserves the unviewed card');
-n = await nativeCase({ restartInWait: true }); n.b.reserve();
+n = await nativeCase({ restartInWait: true }); n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.reserve();
 await n.c.visualCollect({ seq: 'stale-budget-wait', maxJobs: 1, autoScroll: false });
 check(n.clicks() === 0 && n.b.status().count === 1, 'a replaced collector generation cannot reserve or click after its old wait');
-n = await nativeCase({ stopInWait: true }); n.b.reserve();
+n = await nativeCase({ stopInWait: true }); n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.reserve();
 const denied = await n.c.waitForBossBrowse(n.stopped, (phase, state) => n.events.push({ data: { phase, ...state } }));
 check(denied.stopped && n.network() === 0 && n.b.status().count === 1, 'Stop during a budget wait performs no later request or extra reservation');
 n = await nativeCase();
@@ -134,6 +157,7 @@ function scan(node) { if (ts.isCallExpression(node) && node.expression.getText(m
 const sender = { id: 1, getURL: () => 'file:///app/index.html' }, guest = { id: 2, getURL: () => 'https://www.zhipin.com/web/geek/jobs' };
 now = Date.parse('2026-10-18T22:08:39+08:00');
 const shared = createBossBrowseBudget(path.join(temp, 'ipc.json'), { clock: () => now });
+shared.configure({ maxViews: 1, windowMinutes: 30 });
 const h = { mainWindow: { webContents: sender }, bossBrowseGuests: new Set([2]), URL,
   getBossBrowseBudget: () => shared, observeBossBrowseBlock: (...args) => shared.observe(...args),
   detectPython: async () => { throw Error('must not launch Python'); } };
@@ -142,7 +166,7 @@ vm.runInContext('globalThis.gate = ' + handlers.get('jc:boss-browse') + ';global
 check(!h.gate({ sender: guest, senderFrame: { parent: {}, url: guest.getURL() } }, 'reserve').ok, 'iframe cannot debit or reconfigure shared state');
 check(!h.gate({ sender: { id: 999 } }, 'configure', { maxViews: 999 }).ok, 'untrusted IPC cannot alter policy');
 check(h.gate({ sender }, 'reserve').ok, 'trusted host shares the authoritative budget');
-check(!h.gate({ sender: guest, senderFrame: { parent: null, url: guest.getURL() } }, 'reserve').ok, 'different tabs share the same pacing history');
+check(!h.gate({ sender: guest, senderFrame: { parent: null, url: guest.getURL() } }, 'reserve').ok, 'different tabs share the same full-window quota');
 const cfx = await h.cfx({ sender }, 'chat', { platform: 'boss' });
 check(cfx.browseLimited && !cfx.sent && shared.status().count === 1, 'Camoufox cannot open another job around an exhausted Electron budget');
 check(!(await h.cfx({ sender: guest }, 'chat', { platform: 'boss' })).ok, 'browser-engine invocation requires the host caller');
@@ -215,4 +239,4 @@ check(!calls.some(x => x[2]?.action === 'stop') && timers.length === 2, 'long qu
 wh.controlCollect('stop'); await collected;
 const stoppedCalls = calls.length; timers[1].fn();
 check(!wh.visualActiveRef.current && calls.length === stoppedCalls, 'Stop settles the real waiting host and old timeout cannot restart work');
-console.log(`PASS BOSS browse budget: ${checks} persistent rolling-window/pacing, Stop, 403 recovery, actual collector/API and native IPC checks; zero platform requests.`);
+console.log(`PASS BOSS browse budget: ${checks} persistent rolling-window quota without per-job spacing, Stop, 403 recovery, actual collector/API and native IPC checks; zero platform requests.`);
