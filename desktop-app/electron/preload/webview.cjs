@@ -28,7 +28,7 @@ const { findTextSendButton } = require('./text-send-control.cjs');
 const ADAPTERS = require('./platform-adapters.cjs');
 const WUBA = require('./wuba.cjs');
 const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
-const { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl } = require('./zhaopin-im.cjs');
+const { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl, readZhaopinAttachmentSelection } = require('./zhaopin-im.cjs');
 const OFFICE = require('./office-address.cjs');
 const COMPANY = require('./company-size.cjs');
 const { readOfficeAddress } = require('./office-address-reader.cjs');
@@ -3661,7 +3661,9 @@ async function platformApplyOnce(args = {}) {
         if (block) return fail(block.kind, { code: block.kind === 'risk' ? 35 : undefined, message: block.message });
         return fail('failed', { needsReview: true, error: '智联页面没有可用的投递入口，可能需要验证、仍在加载或已跳转；已暂停并保留页面，请人工核对后再重试' });
       }
-      notify('apply-stage', { stage: 'send_message', label: '投递简历', platform });
+      const attachmentPolicy = await ipcRenderer.invoke('jc:zhaopin-attachment-policy', { action: 'begin' });
+      if (!attachmentPolicy?.ok) return fail('failed', { needsReview: true, error: attachmentPolicy?.message || '智联附件投递保护未就绪，未点击投递' });
+      notify('apply-stage', { stage: 'send_message', label: '投递附件简历', platform });
       await clickElement(btn);
 
       // 4) 结果判定：智联投递是「组件工作流」，点击后可能先弹「选择简历」面板需要二次确认，
@@ -3672,16 +3674,22 @@ async function platformApplyOnce(args = {}) {
       //    **不做全页正文扫描**——岗位描述里出现「验证码」「行为异常」等词是常见业务诉求
       //    （如反欺诈/风控开发岗），全页扫描会把正常岗位误判成风控并暂停引擎。
       let confirmedSig = '';
+      let attachmentError = '';
+      const attachmentClicks = new WeakSet();
       const judged = await waitFor(async () => {
         const body = bodyText();
         // 风控/账号阻断：立即停止本页任何点击动作，交人工
         const block = pageBlock();
         if (block) return block.kind;
         if (limitTexts.some((t) => body.includes(t))) return 'stop';
+        const policy = await ipcRenderer.invoke('jc:zhaopin-attachment-policy', { action: 'state' });
+        if (!policy?.ok || policy.blocked) {
+          attachmentError = policy?.message || '智联附件投递状态未确认，已停止';
+          return 'attachment-blocked';
+        }
         // 成功信号：成功面板 / 成功文案 / 主按钮态翻转为「已投递」/ 打招呼弹窗（deliver-greeting-modal）
-        if (firstVisible(spec.successSelectors)) return 'success';
-        if (successTexts.some((t) => body.includes(t))) return 'success';
-        if (readAppliedState()) return 'success';
+        if (policy.allowedRequests > 0 && (firstVisible(spec.successSelectors)
+          || successTexts.some((t) => body.includes(t)) || readAppliedState())) return 'success';
         // 阻断态面板：读面板原文归类（risk / login / blocked 由适配表纯函数裁决——
         // .a-job-apply-block-panel 一个面板承载多种原因，按文案分级才能区分
         // 「账号异常禁投」与「已屏蔽这家公司」）
@@ -3693,7 +3701,18 @@ async function platformApplyOnce(args = {}) {
           if (kind === 'login') return 'login';
           return 'blocked:' + (t || '平台投递工作流阻断');
         }
-        // 二次确认：命中「确定投递 / 同意并投递 / 投递简历」等按钮时点一次（同文案只点一次，防重复提交）
+        // An attachment panel defaults to its online row even when it contains
+        // a PDF. Explicitly select the attachment before its submit button.
+        // The request guard also rejects the widget's implicit online/ATS fallback.
+        const attachment = readZhaopinAttachmentSelection(document);
+        if (attachment.present) {
+          if (attachment.reason) { attachmentError = attachment.reason; return 'attachment-blocked'; }
+          const action = attachment.choose || attachment.confirm;
+          if (action && !attachmentClicks.has(action)) { attachmentClicks.add(action); await clickElement(action); }
+          return null;
+        }
+        // Native base-resume selection may be needed before the attachment
+        // step. It cannot submit an online resume through the request guard.
         const confirmBtn = findPlatformAction(spec.confirmSelectors, spec.confirmLabels || ['确定']);
         if (confirmBtn) {
           const sig = PLATFORM_NORM(textOf(confirmBtn));
@@ -3707,8 +3726,9 @@ async function platformApplyOnce(args = {}) {
 
       // 简历提交与自定义消息是两次独立确认。平台默认招呼不代表工作台文案已发送。
       if (judged === 'success') {
-        return ok({ method: 'dom', resumeDelivered: true, greetingConfirmed: false });
+        return ok({ method: 'dom', resumeDelivered: true, resumeKind: 'attachment', greetingConfirmed: false });
       }
+      if (judged === 'attachment-blocked') return fail('failed', { needsReview: true, error: attachmentError });
       if (judged === 'stop') return fail('stop', { message: '智联今日投递已达到上限，已停止该岗位' });
       if (judged === 'risk') return fail('risk', { code: 35, message: '检测到安全验证/账号风控提示，已暂停，请人工处理' });
       if (judged === 'login') return fail('login', { message: '智联未登录（投递工作流要求登录），请先在智联标签页完成登录' });

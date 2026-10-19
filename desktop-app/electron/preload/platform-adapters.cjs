@@ -801,9 +801,8 @@ const PLATFORM_APPLY_SPEC = Object.freeze({
     confirmSelectors: [
       '.a-job-apply-resume-selection-panel__actions .a-button',
       '.a-job-apply-resume-selection-panel__actions button',
-      // ATTACHMENT_SELECT 步骤：附件简历面板的确认入口是 <a>（不是 button），必须单列
-      '.a-attachment-select__action-btn__delivery',
-      '[class*="attachment-select"] a',
+      // ATTACHMENT_SELECT is handled separately: select an approved attachment
+      // first. Its default online row must never pass a generic confirmation.
       '.a-job-apply-workflow .a-button--primary',
       '.a-job-apply-workflow button',
       '.a-modal .a-button--primary',

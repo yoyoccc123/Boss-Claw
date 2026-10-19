@@ -308,9 +308,13 @@ def deliver(job: dict, greeting: str, os_name: str | None = None,
             send_resume_image: bool = False, send_online_resume: bool = False,
             expected: dict | None = None, resume_images: list | None = None,
             mode: str = 'auto', reply_text: str | None = None) -> dict:
-    """智联投递：打开岗位详情 → 点「投递」→ 确认投递成功（未确认不计成功）。"""
-    return _COLLECTOR.deliver(job, greeting, os_name, send_resume_image, send_online_resume,
-                              expected, resume_images, mode, reply_text)
+    """WorkBench uses the guarded native attachment workflow for this platform.
+
+    The legacy generic engine can choose an online resume implicitly. Do not
+    use it as a fallback when only attachment delivery has been authorized.
+    """
+    return {'ok': False, 'code': 400, 'sent': False,
+            'message': '智联仅允许附件简历投递，请使用工作台内置浏览器；已停止通用在线简历投递'}
 
 
 def do_login(timeout: int = 180, os_name: str | None = None) -> dict:

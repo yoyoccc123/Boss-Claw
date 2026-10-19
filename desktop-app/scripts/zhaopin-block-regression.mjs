@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 const require=createRequire(import.meta.url),root=dirname(dirname(fileURLToPath(import.meta.url))),work=mkdtempSync(join(tmpdir(),'bossclaw-zhaopin-block-'));
 const A=require(join(root,'electron/preload/platform-adapters.cjs'));
+const {readBossPageBlock}=require(join(root,'electron/preload/boss-page-block.cjs'));
 const imHelper=readFileSync(join(root,'electron/preload/zhaopin-im.cjs'),'utf8');
 function parse(file) {
   const source=ts.createSourceFile(file,readFileSync(join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions=new Map(),vars=new Map();
@@ -20,6 +21,8 @@ const preload=parse('electron/preload/webview.cjs'),wb=parse('src/pages/Workbenc
 const normal='<div class="summary-planes__action"><button id="apply">立即投递</button></div><div class="job-description">职位描述：Python开发实习</div>';
 const challenge='<div class="geetest_panel" style="width:300px;height:180px">请拖动滑块完成人机验证</div>';
 const success="document.body.insertAdjacentHTML('beforeend','<div class=\"a-job-apply-success-message-panel\">简历投递成功</div>');";
+const attachmentPanel=(selected='online',extra='')=>`<div class="a-attachment-select"><div class="a-attachment-select__item ${selected==='online'?'resume-select':''}" id="online"><span class="file-online"></span>在线简历</div><div class="a-attachment-select__item ${selected==='attachment'?'resume-select':''}" id="attachment"><span class="file-pdf"></span>示例姓名.pdf</div>${extra}<a class="a-attachment-select__action-btn__delivery">投递简历</a></div>`;
+const attachmentAfter=panel=>`if(el.id==='apply')document.body.insertAdjacentHTML('beforeend',${JSON.stringify(panel)});else if(el.matches('.a-attachment-select__item')){document.querySelectorAll('.resume-select').forEach(e=>e.classList.remove('resume-select'));el.classList.add('resume-select');}else if(el.matches('.a-attachment-select__action-btn__delivery')){if(!document.querySelector('#attachment.resume-select'))throw Error('Online resume must never be submitted');${success}}`;
 const cases=[
   {name:'详情进入时验证码',html:challenge,stage:'risk',clicks:0},
   {name:'验证遮罩覆盖正常按钮',html:normal+challenge,stage:'risk',clicks:0},
@@ -51,15 +54,24 @@ const cases=[
   {name:'点击后安全验证停止确认',html:normal,after:"document.body.insertAdjacentHTML('beforeend',"+JSON.stringify(challenge+'<div class="a-job-apply-workflow"><button>确定投递</button></div>')+");",stage:'risk',clicks:1},
   {name:'选择简历正常二次确认',html:normal,after:"if(el.id==='apply')document.body.insertAdjacentHTML('beforeend','<div class=\"a-job-apply-workflow\"><button>确定投递</button></div>');else{"+success+'}',stage:'success',clicks:2},
   {name:'按钮点击结果不明保留',html:normal,stage:'failed',review:true,clicks:1},
+  {name:'附件面板默认在线时先选附件',html:normal,after:attachmentAfter(attachmentPanel()),stage:'success',clicks:3},
+  {name:'已选附件直接提交附件',html:normal,after:attachmentAfter(attachmentPanel('attachment')),stage:'success',clicks:2},
+  {name:'附件未审核不回退在线',html:normal,after:attachmentAfter(attachmentPanel().replace('id="attachment"','id="attachment" aria-disabled="true"')),stage:'failed',review:true,clicks:1},
+  {name:'多份附件不随便选一份',html:normal,after:attachmentAfter(attachmentPanel('online','<div class="a-attachment-select__item"><span class="file-doc"></span>另一份.docx</div>')),stage:'failed',review:true,clicks:1},
+  {name:'策略拦住平台默认在线',html:normal,policyBlocked:true,stage:'failed',review:true,clicks:1},
+  {name:'附件保护未就绪不能点主按钮',html:normal,policyUnavailable:true,stage:'failed',review:true,clicks:0},
+  {name:'旧成功提示不能替代附件请求证据',html:normal,after:success,noAttachmentRequest:true,stage:'failed',review:true,clicks:1},
 ];
 const helper=readFileSync(join(root,'electron/preload/zhaopin-page-block.cjs'),'utf8');
 const names=['visible','textOf','findPlatformAction','externalApplyDetected','firstVisible','platformApplyOnce','pageStatusData'];names.forEach(n=>assert.ok(preload.functions.has(n),n));
 const fixtureCode=fixture=>`(async()=>{const fixture=${JSON.stringify(fixture)};
 const readZhaopinPageBlock=(()=>{const module={exports:{}};${helper};return module.exports.readZhaopinPageBlock;})();
+const readBossPageBlock=${readBossPageBlock.toString()};
 const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};ADAPTERS.labelHit=${A.labelHit.toString()};ADAPTERS.labelExactHit=${A.labelExactHit.toString()};ADAPTERS.normLabelText=${A.normLabelText.toString()};ADAPTERS.classifyBlockedText=${A.classifyBlockedText.toString()};
 const normLabelText=ADAPTERS.normLabelText,labelHit=ADAPTERS.labelHit,PLATFORM_APPLY_SPEC=ADAPTERS.PLATFORM_APPLY_SPEC;
 const PLATFORM='zhaopin',location={href:fixture.href||window.location.href},PLATFORM_NORM=ADAPTERS.normLabelText;
-const {readZhaopinChatReady}=(()=>{const module={exports:{}};${imHelper};return module.exports;})();
+const {readZhaopinChatReady,readZhaopinAttachmentSelection}=(()=>{const module={exports:{}};${imHelper};return module.exports;})();
+const ipcRenderer={invoke:async(channel,payload)=>{if(channel!=='jc:zhaopin-attachment-policy')throw Error('Unexpected IPC');if(fixture.policyUnavailable)return{ok:false,message:'fixture guard unavailable'};return{ok:true,blocked:payload.action==='state'&&!!fixture.policyBlocked,allowedRequests:fixture.noAttachmentRequest?0:1,message:fixture.policyBlocked?'已阻止智联在线简历投递':''};}};
 const all=(s,scope=document)=>Array.from(scope.querySelectorAll(s)),events=[],clicks=[];
 const PLATFORM_LIST_SELECTORS={zhaopin:[]},LINK_SELECTOR='a',LIST_ROOT_SELECTORS=['.fixture-list'],$=s=>document.querySelector(s),collectCards=()=>[],loginWallDetected=()=>false;
 const notify=(channel,payload)=>events.push({channel,payload});
@@ -106,6 +118,7 @@ for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId
     PLATFORM_META:{zhaopin:{label:'智联'}},aliveRef:{current:true},APPLY_PAGE_READY_MS:30000,sleep:async()=>{},isPreloadReady:()=>false,isLoading:()=>true,
     pageStatus:async()=>({readyState:'complete',bodyLen:0,cards:0,applyBlock:{kind:'risk',message:'请完成人机验证'}}),
     seqRef:{current:0},apiResolvers:{current:new Map()},sendInTab:()=>{dispatched++;},describeApplyProbe:()=>''};
+  c.cmdOnce=async()=>{throw Error('Blocked frame must not execute a page command');};
   vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browser.vars.get('platformApply')};`,{loader:'tsx'})).code,c);
   const result=await c.apply('https://example.invalid','zhaopin',{});
   assert.equal(result.stage,'risk');assert.equal(dispatched,0);assert.equal(closed.length,0);hostChecks++;

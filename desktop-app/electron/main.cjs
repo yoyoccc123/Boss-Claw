@@ -21,6 +21,7 @@ const { WEBVIEW_AUTH_COOKIE_HINTS, WEBVIEW_PLATFORM_DOMAIN } = require('./browse
 const { startControlBridge, resolveEnablement } = require('./control-bridge.cjs');
 const { createZhaopinNativeChatBindings } = require('./zhaopin-native-chat.cjs');
 const zhaopinNativeChats = createZhaopinNativeChatBindings();
+const zhaopinAttachmentPolicy = require('./zhaopin-attachment-policy.cjs').createZhaopinAttachmentPolicy();
 // 内置浏览器「主世界」反检测补丁 + 指纹自检（补丁本体与探针同一模块，见文件头说明）
 const stealth = require('./preload/stealth.cjs');
 const { dispatchBossChatInput } = require('./preload/boss-chat-context.cjs');
@@ -1245,7 +1246,7 @@ async function createMainWindow() {
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     zhaopinNativeChats.attachGuest(wc);
     const nativeChatGuestId = wc.id;
-    wc.once('destroyed', () => zhaopinNativeChats.releaseGuest(nativeChatGuestId));
+    wc.once('destroyed', () => { zhaopinNativeChats.releaseGuest(nativeChatGuestId); zhaopinAttachmentPolicy.release(nativeChatGuestId); });
     // ===== 弹窗 / 新标签（target=_blank / window.open）处理：当前标签内导航 =====
     // 根因：Electron <webview> 不会向宿主派发 new-window DOM 事件（webViewEvents 白名单
     // 不含它，渲染层 addEventListener('new-window') 永远不触发），且 webview 未设
@@ -2112,6 +2113,17 @@ safeHandle('jc:zhaopin-native-chat', (event, payload = {}) => {
   return { ok: false, error: '未知智联原生会话核对操作' };
 });
 
+safeHandle('jc:zhaopin-attachment-policy', (event, payload = {}) => {
+  const frame = event.senderFrame;
+  if (!frame || frame.parent !== null || frame.url !== event.sender.getURL()
+    || !/^https:\/\/www\.zhaopin\.com\/jobdetail\/[a-z0-9]+\.html?(?:[?#]|$)/i.test(frame.url)) {
+    return { ok: false, message: '仅接受智联当前岗位主页面的附件投递检查' };
+  }
+  if (payload.action === 'begin') return zhaopinAttachmentPolicy.begin(event.sender);
+  if (payload.action === 'state') return zhaopinAttachmentPolicy.read(event.sender);
+  return { ok: false, message: '未知智联附件投递操作' };
+});
+
 ipcMain.on('jc:webview-input', (event, payload) => {
   const wc = event.sender;
   // P4-12：主进程侧频率兜底（渲染层自律之外的最后防线）。
@@ -2247,6 +2259,7 @@ app.whenReady().then(async () => {
   // 提前初始化还可以触发 session 的磁盘缓存预热，减少 BOSS 首页冷加载延迟。
   try {
     const bossclawSession = session.fromPartition('persist:bossclaw');
+    zhaopinAttachmentPolicy.install(bossclawSession);
     // Persist login changes for all platforms and await browser writes on normal exit.
     // Do not extend platform expiry or resurrect cookies removed by logout/the server.
     installSessionPersistence({ app, browserSession: bossclawSession, otherSessions: [session.defaultSession],

@@ -97,4 +97,24 @@ function readZhaopinDeliveryState(target, greeting = '', defaultGreeting = '') {
   const buttons = nodes(target.panel, 'button.im-sender__send-btn').filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && normalize(text(el)) === '发送');
   return { outgoing, incoming, matching, nonDefaultOutgoing, editorText: String(target.editor.value || '').trim(), sendButton: buttons.length === 1 ? buttons[0] : null };
 }
-module.exports = { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl };
+function readZhaopinAttachmentSelection(doc) {
+  const panels = nodes(doc, '.a-attachment-select');
+  if (!panels.length) return { present: false };
+  const fail = reason => ({ present: true, reason });
+  if (panels.length !== 1) return fail('存在多个附件选择面板，已停止投递');
+  const panel = panels[0], rows = nodes(panel, '.a-attachment-select__item');
+  // The native widget's file-pdf/file-doc icons distinguish attachment rows
+  // from file-online. Do not infer resume type from the filename or row text.
+  const attachments = rows.filter(row => row.querySelector('.file-pdf, .file-doc') && !row.querySelector('.file-online')
+    && !row.matches('.is-disabled, [aria-disabled="true"]') && !row.querySelector('.radio-disable'));
+  const selected = rows.filter(row => row.matches('.resume-select, .is-active') || row.querySelector('.radio-checked'));
+  const chosen = selected.length === 1 && attachments.includes(selected[0]) ? selected[0] : null;
+  if (!chosen) {
+    if (attachments.length === 1) return { present: true, choose: attachments[0] };
+    return fail(attachments.length ? '有多份可用附件，请在智联选择要发送的一份；不会改发在线简历' : '未找到审核通过的附件简历，不会改发在线简历');
+  }
+  const buttons = nodes(panel, '.a-attachment-select__action-btn__delivery')
+    .filter(e => !e.disabled && e.getAttribute('aria-disabled') !== 'true' && normalize(text(e)) === '投递简历');
+  return buttons.length === 1 ? { present: true, confirm: buttons[0] } : fail('附件投递按钮未就绪，未提交在线简历');
+}
+module.exports = { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl, readZhaopinAttachmentSelection };
