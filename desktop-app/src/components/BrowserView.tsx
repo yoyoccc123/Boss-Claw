@@ -27,6 +27,7 @@ import {
   PlusCircleOutlined, ThunderboltOutlined, CloseOutlined,
 } from '@ant-design/icons';
 import { useAppStore } from '@/store/useAppStore';
+import { rememberedNewTabPlatform } from '@/lib/bossclaw/platformSelection';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import electronApi from '@/lib/electronApi';
 import { PLATFORM_META, PLATFORM_IDS, PLATFORM_CHIP_PALETTE, platformEnabled, resolvePlatform, type JobPlatform } from '@/lib/bossclaw/platforms';
@@ -203,23 +204,25 @@ export default function BrowserView(props: Props) {
 }
 
 function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJobExtracted, onApplyStage, onLoginState, onCollectProgress, onCollectDone, onCollectInterrupted, onDomDump, apiRef, overlaySuppressed = false }: Props) {
-  const homeMeta = PLATFORM_META[defaultPlatform] || PLATFORM_META.boss;
+  const config0 = useSettingsStore((s) => s.config);
+  const savedNewTabPlatform = useAppStore((s) => s.browserNewTabPlatform);
+  const setNewTabPlatform = useAppStore((s) => s.setBrowserNewTabPlatform);
+  const newTabPlatform = rememberedNewTabPlatform(config0, savedNewTabPlatform ?? defaultPlatform);
+  const homeMeta = newTabPlatform === NEW_TAB_PAGE_URL ? null : PLATFORM_META[newTabPlatform];
   const [tabs, setTabs] = useState<TabState[]>(() => {
-    const tab = makeTab(homeMeta.homeUrl, homeMeta.label, 'main');
+    const tab = makeTab(homeMeta?.homeUrl || NEW_TAB_PAGE_URL, homeMeta?.label || '新标签页', 'main');
     return [tab];
   });
   const [activeId, setActiveId] = useState(() => tabs[0]?.id ?? '');
 
   // ===== 多平台适配：新建标签时选择的平台（与设置页「招聘平台」启用状态联动）=====
-  const config0 = useSettingsStore((s) => s.config);
   const enabledPlatforms = useMemo<JobPlatform[]>(
     () => PLATFORM_IDS.filter((p) => platformEnabled(config0, p)),
     [config0],
   );
-  const [newTabPlatform, setNewTabPlatform] = useState<NewTabSelection>('boss');
   useEffect(() => {
-    if (newTabPlatform !== NEW_TAB_PAGE_URL && !platformEnabled(config0, newTabPlatform)) setNewTabPlatform('boss');
-  }, [config0, newTabPlatform]);
+    if (savedNewTabPlatform !== newTabPlatform) setNewTabPlatform(newTabPlatform);
+  }, [savedNewTabPlatform, newTabPlatform, setNewTabPlatform]);
 
   // 便签页白名单分组：平台（按启用状态过滤）+ 综合/中高端 + 应届生/实习 + 蓝领/兼职/生活
   const newTabGroups = useMemo<NewTabGroup[]>(() => {

@@ -41,6 +41,7 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import { profileHasCore } from '@/lib/bossclaw/profile';
 import { selectedDirectionItems } from '@/lib/bossclaw/directions';
 import { rerankPending, promoteApprovedToQueue } from '@/lib/bossclaw/priority';
+import { selectedDeliveryPlatforms } from '@/lib/bossclaw/platformSelection';
 import { createTasks } from '@/lib/bossclaw/tasks';
 import { MetricCard } from '@/components/MetricCard';
 import { electronApi } from '@/lib/electronApi';
@@ -215,7 +216,8 @@ export default function Home() {
   /** 真正启动投递引擎（通过前置校验之后） */
   const startAssistNow = () => {
     setRoute('workbench');
-    const { next, count } = promoteApprovedToQueue(pending, useSettingsStore.getState().config);
+    const cfg = useSettingsStore.getState().config;
+    const { next, count } = promoteApprovedToQueue(pending, cfg, selectedDeliveryPlatforms(cfg, useAppStore.getState().deliveryPlatforms));
     if (count) setPending(next);
     if (!useAppStore.getState().autoAssist) setAutoAssist(true);
   };
@@ -224,9 +226,11 @@ export default function Home() {
     // 登录门禁按「待投递岗位所在平台」判定（与工作台口径一致，platformLogins 为 cookie 权威探测）：
     // 只检查队列里真实要投递的平台，不再拿 BOSS 登录态去拦截智联/猎聘/51job 的投递。
     const pendingData = useDataStore.getState().pending;
+    const selected = selectedDeliveryPlatforms(useSettingsStore.getState().config, useAppStore.getState().deliveryPlatforms);
+    if (!selected.length) { message.warning('请先在工作台选择投递平台'); setRoute('workbench'); return; }
     const platforms = new Set<JobPlatform>();
     for (const p of pendingData) {
-      if (p.status === 'approved' || p.status === 'approved_queue') {
+      if ((p.status === 'approved' || p.status === 'approved_queue') && selected.includes(p.job?.platform || 'boss')) {
         platforms.add(String(p.job?.platform || 'boss') as JobPlatform);
       }
     }

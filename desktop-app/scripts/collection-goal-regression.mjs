@@ -10,6 +10,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const bundled = await build({stdin:{contents:[
   "export * from './src/lib/bossclaw/collectionGoal';",
   "export * from './src/lib/bossclaw/autoConfirmation';",
+  "export * from './src/lib/bossclaw/platformSelection';",
   "export { DEFAULT_CONFIG } from './src/lib/bossclaw/defaults';",
   "export { useDataStore } from './src/store/useDataStore';",
   "export { applyMigrations } from './src/store/migrations/settingsMigrations';",

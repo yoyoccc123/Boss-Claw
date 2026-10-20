@@ -110,11 +110,11 @@ export function rerankPending(items: PendingItem[] = [], config?: Pick<AppConfig
 // 把「已批准 / 等待投递」(approved) 的岗位提升为「投递队列 / 投递中」(approved_queue)，
 // 返回新数组与本次提升数量。引擎只认 approved_queue 进行实际投递，
 // 因此「批准」只进等待态、「一键投递」才把等待态批量提升为可投递态。
-export function promoteApprovedToQueue(items: PendingItem[] = [], config?: Pick<AppConfig, 'platforms'> | null): { next: PendingItem[]; count: number } {
+export function promoteApprovedToQueue(items: PendingItem[] = [], config?: Pick<AppConfig, 'platforms'> | null, platforms?: JobPlatform[]): { next: PendingItem[]; count: number } {
   let count = 0;
   const next = rerankPending(
     items.map((entry) => {
-      if (entry.status === 'approved') {
+      if (entry.status === 'approved' && (!platforms || platforms.includes(entry.job?.platform || 'boss'))) {
         count += 1;
         return { ...entry, status: 'approved_queue' as const, approvedAt: entry.approvedAt || Date.now() };
       }

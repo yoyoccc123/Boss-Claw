@@ -25,6 +25,7 @@ import PlatformChip from '@/components/PlatformChip';
 import { ChevronDown } from '@/components/ChevronDown';
 import { LogConsole } from '@/components/LogConsole';
 import { rerankPending, promoteApprovedToQueue } from '@/lib/bossclaw/priority';
+import { rememberedCollectionPlatforms, selectedDeliveryPlatforms } from '@/lib/bossclaw/platformSelection';
 import { resolveQueueMinScore } from '@/lib/bossclaw/matching';
 import { analyzeJobWithResume, storedResumeForJob } from '@/lib/bossclaw/resumeRoutingRuntime';
 import { resolveJobDetailUrl, normalizeJobDetailMetadata, isZhaopinCardFragment, ZHAOPIN_LINK_ERROR } from '@/lib/bossclaw/jobDetailLink';
@@ -279,6 +280,11 @@ export default function Workbench() {
   const tailorBusy = useAppStore((s) => s.tailorBusy);
   const savedWorkbenchFilters = useAppStore((s) => s.workbenchFilters);
   const setWorkbenchFilters = useAppStore((s) => s.setWorkbenchFilters);
+  const savedCollectionPlatforms = useAppStore((s) => s.collectionPlatforms);
+  const setSearchPlatforms = useAppStore((s) => s.setCollectionPlatforms);
+  const savedDeliveryPlatforms = useAppStore((s) => s.deliveryPlatforms);
+  const setDeliveryPlatforms = useAppStore((s) => s.setDeliveryPlatforms);
+  const deliveryPlatforms = useMemo(() => selectedDeliveryPlatforms(config, savedDeliveryPlatforms), [config, savedDeliveryPlatforms]);
   const workbenchFilters = useMemo(() => normalizeWorkbenchFilters(savedWorkbenchFilters), [savedWorkbenchFilters]);
   const [addressScan, setAddressScan] = useState({ running: false, checked: 0, total: 0, found: 0, note: '' });
   const addressStop = useRef(false);
@@ -412,10 +418,7 @@ export default function Workbench() {
 
   // ===== 多平台适配：当前搜索/采集平台（多选；至少保留一个；仅显示已启用平台，按平台优先级排序）=====
   const enabledPlatforms = useMemo<JobPlatform[]>(() => sortedEnabledPlatforms(config), [config]);
-  const [searchPlatforms, setSearchPlatforms] = useState<JobPlatform[]>(() => {
-    const enabled = sortedEnabledPlatforms(config);
-    return enabled.length ? [enabled[0]] : ['boss'];
-  });
+  const searchPlatforms = useMemo(() => rememberedCollectionPlatforms(config, savedCollectionPlatforms), [config, savedCollectionPlatforms]);
   // 用户全部取消/所选平台全部被禁用时，自动回填第一个已启用平台，保证至少有一个
   const handleSearchPlatformsChange = useCallback((vals: JobPlatform[]) => {
     if (!vals.length) {
@@ -429,19 +432,10 @@ export default function Workbench() {
       return;
     }
     setSearchPlatforms(vals);
-  }, [config]);
+  }, [config, setSearchPlatforms]);
   useEffect(() => {
-    // 设置页关闭了某些平台 → 从已选项里剔除失效项
-    const filtered = searchPlatforms.filter((p) => platformEnabled(config, p));
-    if (filtered.length !== searchPlatforms.length) {
-      if (filtered.length === 0) {
-        const first = sortedEnabledPlatforms(config)[0];
-        setSearchPlatforms(first ? [first] : []);
-      } else {
-        setSearchPlatforms(filtered);
-      }
-    }
-  }, [config, searchPlatforms]);
+    if (JSON.stringify(savedCollectionPlatforms) !== JSON.stringify(searchPlatforms)) setSearchPlatforms(searchPlatforms);
+  }, [savedCollectionPlatforms, searchPlatforms, setSearchPlatforms]);
 
   // ===== 防封号：限速器 + 投递节奏 =====
   // 限速器（pacer）与「连续投递计数」**不在本组件持有一份**：二者都是账号级保护，必须与
@@ -945,9 +939,11 @@ export default function Workbench() {
   // 用户以为坏了，只能去右侧浏览器工具栏找「开始投递」（另一个按钮、另一套条件）。
   // 现在两者语义对齐：本按钮 = 入队 + 启动引擎（引擎已在跑则无操作可做，故禁用）。
   const onOneClickDeliver = () => {
-    const { next, count } = promoteApprovedToQueue(pending, useSettingsStore.getState().config);
-    const queued = pending.filter((p) => p.status === 'approved_queue').length;
-    if (!count && !queued) { message.info('队列里没有待投递的岗位'); return; }
+    const cfg = useSettingsStore.getState().config;
+    const platforms = selectedDeliveryPlatforms(cfg, useAppStore.getState().deliveryPlatforms);
+    const { next, count } = promoteApprovedToQueue(pending, cfg, platforms);
+    const queued = pending.filter((p) => p.status === 'approved_queue' && platforms.includes(p.job?.platform || 'boss')).length;
+    if (!count && !queued) { message.info('所选投递平台没有待投递的岗位'); return; }
     if (count) setPending(next);
     if (!running) setAutoAssist(true);
     addLog('success', count
@@ -2195,13 +2191,13 @@ export default function Workbench() {
   };
 
   /** 手动「搜索采集」入口：按当前所选平台串行采集（不等待，引擎常驻执行） */
-  const startCollect = (mode: CollectionStartMode = 'continue') => {
+  const startCollect = (mode: CollectionStartMode = 'continue', platformScope?: JobPlatform[]) => {
     if (visualActiveRef.current || cfxActiveRef.current) return;
     const generation = ++collectBatchGenerationRef.current;
     // 至少一个平台：UI 已兜底回填，此处再做一次防御性检查
-    const targets = searchPlatforms.length
+    const targets = platformScope ?? (searchPlatforms.length
       ? searchPlatforms
-      : (sortedEnabledPlatforms(config)[0] ? [sortedEnabledPlatforms(config)[0]] : []);
+      : (sortedEnabledPlatforms(config)[0] ? [sortedEnabledPlatforms(config)[0]] : []));
     if (!targets.length) { message.warning('请先在「设置 → 招聘平台」启用至少一个招聘平台'); return; }
     if (targets.length > 1) {
       addLog('info', `手动串行采集（${targets.map((p) => platformLabel(p)).join(' → ')}）`);
@@ -2775,27 +2771,31 @@ export default function Workbench() {
 
   const runNext = async () => {
     if (!useAppStore.getState().autoAssist) return;
-    // 多平台适配：投递覆盖全部平台——BOSS 走 webview 官方接口；猎聘/智联/51Job
-    // 分别新建对应平台标签页做 DOM 投递（见下方平台分派分支）。
+    // All start entry points consume the same persisted delivery scope.
     // 投递顺序完全由 rerankPending 决定（状态组 → 平台优先级 → priorityScore → AI 分 → 入队时间），
     // 不再记忆「最近点击批准的那个」：原 preferIdRef 是单值 ref，连点多个批准只会记最后一个，
     // 反而让先批准的被无理由后置，属于伪优先级，已移除。
     const data = useDataStore.getState(), cfg = useSettingsStore.getState().config;
+    const platforms = selectedDeliveryPlatforms(cfg, useAppStore.getState().deliveryPlatforms);
+    if (!platforms.length) {
+      addLog('info', '尚未选择可用的投递平台，请在工作台选择后开始投递');
+      setRunning(false); setAutoAssist(false); return;
+    }
     const confirmed = autoConfirmPending(data.pending, cfg);
     if (confirmed !== data.pending) { data.setPending(confirmed); data.recomputeStats(); }
     const ranked = rerankPending(confirmed, cfg);
-    let candidate = ranked.find((p) => p.status === 'approved_queue' && !isDeliveryClaimed(p.id, p.job?.platform));
+    let candidate = ranked.find((p) => p.status === 'approved_queue' && platforms.includes(p.job?.platform || 'boss') && !isDeliveryClaimed(p.id, p.job?.platform));
     if (!candidate) {
       if (visualActiveRef.current || cfxActiveRef.current) return;
-      const targets = searchPlatforms.length ? searchPlatforms : sortedEnabledPlatforms(cfg);
+      const targets = platforms;
       const canCollect = targets.some(p => platformEnabled(cfg, p) && !checkCollectionGoal(p));
       if (cfg.executionMode === 'auto' && canCollect && !searchTriggered.current) {
         searchTriggered.current = true;
-        addLog('info', '没有待投递的岗位，先自动采集一批岗位');
-        startCollect();
+        addLog('info', `所选投递平台暂无待投递岗位，先自动采集（${targets.map(platformLabel).join('、')}）`);
+        startCollect('continue', targets);
         return;
       }
-      addLog('info', '队列已空，投递结束');
+      addLog('info', '所选平台的投递队列已空，投递结束；其他平台岗位保留');
       setRunning(false);
       setAutoAssist(false);
       return;
@@ -3073,7 +3073,7 @@ export default function Workbench() {
   const deliveryApprovedCount = pending.filter((p) => p.status === 'approved').length;
   // 「一键投递」可点条件 = 队列里还有可投递的岗位（「待投递」或已入队的「投递中」）。
   // 与右侧「开始投递」口径统一，避免批准即入队后本按钮长期置灰（详见 onOneClickDeliver 注释）。
-  const deliverableCount = pending.filter((p) => p.status === 'approved' || p.status === 'approved_queue').length;
+  const deliverableCount = pending.filter((p) => (p.status === 'approved' || p.status === 'approved_queue') && deliveryPlatforms.includes(p.job?.platform || 'boss')).length;
   const collecting = visualCollecting || cfxCollecting;
 
   // 采集任务概览（与「任务进度」页共用 taskRuns，用于卡片内联动展示）
@@ -3288,6 +3288,7 @@ export default function Workbench() {
                 mode="multiple"
                 style={{ minWidth: 140, maxWidth: 200 }}
                 maxTagCount="responsive"
+                aria-label="采集平台"
                 value={searchPlatforms}
                 onChange={handleSearchPlatformsChange}
                 options={enabledPlatforms.map((p) => ({ value: p, label: platformLabel(p) }))}
@@ -3310,6 +3311,17 @@ export default function Workbench() {
             </Space>
           }
           styles={{ body: { padding: 12 } }}>
+          <div style={{ marginBottom: 12 }}>
+            <Space style={{ display: 'flex', marginBottom: 4 }}>
+              <Text>投递平台</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{autoAssist || running ? '暂停投递后可修改' : '可多选，自动保存'}</Text>
+            </Space>
+            <Select aria-label="投递平台" mode="multiple" size="small" style={{ width: '100%' }}
+              value={deliveryPlatforms} onChange={setDeliveryPlatforms} disabled={autoAssist || running}
+              options={enabledPlatforms.map(p => ({ value: p, label: platformLabel(p) }))}
+              placeholder="选择要投递的平台" />
+            <Text type="secondary" style={{ fontSize: 12 }}>仅投所选平台，其他平台岗位保留在队列中</Text>
+          </div>
           <Text type="secondary" style={{ fontSize: 12 }}>全部平台统计 · 点击数字查看对应岗位（清除列表筛选）</Text>
           <div className="wb-progress-stats">
             <div className={'wb-stat' + (statSearching ? ' is-on' : '')}>

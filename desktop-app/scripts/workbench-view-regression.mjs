@@ -32,7 +32,7 @@ assert.equal(visibleWorkbenchJobs(filterWorkbenchJobs(pending, DEFAULT_WORKBENCH
 const uiPath = join(temporary, 'ui.js');
 await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import Workbench from './src/pages/Workbench';import{useDataStore}from'./src/store/useDataStore';import{useAppStore}from'./src/store/useAppStore';import{useSettingsStore}from'./src/store/useSettingsStore';import './src/index.css';
 const test:any=window;test.data=useDataStore;test.app=useAppStore;test.fetchAttempts=[];test.fetch=async(...args:any[])=>{test.fetchAttempts.push(String(args[0]));throw Error('Offline fixture');};
-useAppStore.setState({autoAssist:false,workbenchFilters:${JSON.stringify(DEFAULT_WORKBENCH_FILTERS)}});useDataStore.setState({pending:${JSON.stringify(pending)},taskRuns:[],profile:null});useSettingsStore.getState().setConfig({executionMode:'review',camoufox:{enabled:false,prefer:false,os:'windows',pages:1}});
+useAppStore.setState({autoAssist:false,workbenchFilters:${JSON.stringify(DEFAULT_WORKBENCH_FILTERS)}});useDataStore.setState({pending:${JSON.stringify(pending)},taskRuns:[],profile:null});useSettingsStore.getState().setConfig({executionMode:'review',camoufox:{enabled:false,prefer:false,os:'windows',pages:1},platforms:Object.fromEntries(Object.entries(useSettingsStore.getState().config.platforms).map(([id,p]:any)=>[id,{...p,enabled:true}])) as any});
 test.original=JSON.stringify(useDataStore.getState().pending);createRoot(document.getElementById('root')!).render(<Workbench/>);`, loader: 'tsx', resolveDir: root }, tsconfig: join(root, 'tsconfig.json'), bundle: true, platform: 'browser', format: 'iife', outfile: uiPath, logLevel: 'silent', plugins: [{ name: 'offline-browser', setup(b) {
   b.onLoad({ filter: /[\\/]BrowserView\.tsx$/ }, () => ({ contents: "import React from 'react';export default function BrowserView(){return <div data-testid='offline-browser' style={{flex:1,minWidth:300}}>离线测试浏览器</div>}", loader: 'tsx', resolveDir: root }));
 } }] });
@@ -45,6 +45,15 @@ const runUi = async function () {
   const stat = name => document.querySelector(`button[aria-label^="查看全部${name}岗位"]`);
   const select = label => [...document.querySelectorAll('.wb-status-filters button')].find(e => e.textContent.trim() === label)?.click();
   const button = text => [...document.querySelectorAll('button')].find(e => e.textContent.replace(/\s/g, '') === text.replace(/\s/g, ''));
+  const control = label => document.querySelector(`[aria-label="${label}"]`).closest('.ant-select');
+  const choose = async (label, title) => {
+    const input = control(label).querySelector('input[role="combobox"]');
+    const popup = () => document.getElementById(input.getAttribute('aria-controls'))?.closest('.ant-select-dropdown');
+    control(label).querySelector('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await wait(() => popup() && !popup().classList.contains('ant-select-dropdown-hidden') && popup().querySelector(`[title="${title}"]`), 'open platform choices');
+    popup().querySelector(`[title="${title}"]`).click();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+  };
   await wait(() => stat('待投递'), 'workbench rendered');
   check(stat('待投递').textContent.includes('13'), 'upper waiting total includes legacy approved and queue items across platforms');
   check(!document.body.textContent.includes('没有正在投递的岗位'), 'stopped queue is not presented as an empty progress card');
@@ -72,13 +81,42 @@ const runUi = async function () {
   check(window.original === JSON.stringify(window.data.getState().pending), 'view navigation preserves all records and delivery states');
   check(!window.app.getState().autoAssist, 'view navigation never starts delivery');
   stat('待投递').click(); await wait(() => context().includes('待投递 · 13'), 'final waiting view');
+  window.app.getState().setBrowserNewTabPlatform('wuba');
+  window.app.getState().setDeliveryPlatforms(['boss']);
+  await wait(() => control('投递平台').textContent.includes('BOSS直聘'), 'delivery scope rendered');
+  await choose('投递平台', '智联招聘');
+  await wait(() => control('投递平台').querySelector('[title="BOSS直聘"] .ant-select-selection-item-remove'), 'selected delivery tags');
+  control('投递平台').querySelector('[title="BOSS直聘"] .ant-select-selection-item-remove').click();
+  await wait(() => JSON.stringify(window.app.getState().deliveryPlatforms) === '["zhaopin"]', 'single delivery platform saved from real UI');
+  check(!button('一键投递').disabled, 'selected platform queued jobs enable one-click delivery');
+  await choose('采集平台', '猎聘');
+  control('采集平台').querySelector('[title="BOSS直聘"] .ant-select-selection-item-remove').click();
+  await wait(() => JSON.stringify(window.app.getState().collectionPlatforms) === '["liepin"]', 'collection selection saved from real UI');
+  check(window.app.getState().browserNewTabPlatform === 'wuba', 'collection and delivery controls cannot overwrite new-tab preference');
+  window.app.getState().setDeliveryPlatforms([]);
+  await wait(() => button('一键投递').disabled, 'no selected platform has no deliverable count');
+  check(button('一键投递').disabled, 'empty scope cannot start one-click delivery');
+  window.app.getState().setDeliveryPlatforms(['zhaopin']);
+  await wait(() => JSON.parse(localStorage.getItem('bossclaw-app') || '{}').state?.collectionPlatforms?.[0] === 'liepin'
+    && JSON.parse(localStorage.getItem('bossclaw-app') || '{}').state?.deliveryPlatforms?.[0] === 'zhaopin', 'platform preferences flushed');
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   await new Promise(resolve => setTimeout(resolve, 150));
   return checks;
 };
+const verifyRestart = async function () {
+  const end = Date.now() + 15000;
+  while (!document.querySelector('[aria-label="投递平台"]')) { if (Date.now() > end) throw Error('reopened workbench'); await new Promise(r => setTimeout(r, 25)); }
+  const s = window.app.getState();
+  if (JSON.stringify(s.collectionPlatforms) !== '["liepin"]' || JSON.stringify(s.deliveryPlatforms) !== '["zhaopin"]' || s.browserNewTabPlatform !== 'wuba') throw Error('platform preferences lost after reopen');
+  const text = label => document.querySelector(`[aria-label="${label}"]`).closest('.ant-select').textContent;
+  if (!text('投递平台').includes('智联招聘') || !text('采集平台').includes('猎聘')) throw Error('restored controls disagree with saved choices');
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await new Promise(resolve => setTimeout(resolve, 150));
+  return ['reopened Workbench restores independent delivery, collection and new-tab preferences'];
+};
 const htmlPath = join(temporary, 'ui.html'), entry = join(temporary, 'main.cjs'), reportPath = join(temporary, 'report.json');
 writeFileSync(htmlPath, '<meta charset="utf-8"><style>html,body,#root{height:100%;margin:0}</style><link rel="stylesheet" href="ui.css"><div id="root"></div><script src="ui.js"></script>');
-writeFileSync(entry, `const {app,BrowserWindow}=require('electron'),fs=require('node:fs');app.setPath('userData',${JSON.stringify(join(temporary, 'profile'))});app.setPath('sessionData',${JSON.stringify(join(temporary, 'profile'))});let blocked=0;app.on('session-created',s=>s.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(_,cb)=>{blocked++;cb({cancel:true})}));app.whenReady().then(async()=>{const w=new BrowserWindow({show:false,width:1280,height:1000,webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true,offscreen:true,backgroundThrottling:false}});try{await w.loadFile(${JSON.stringify(htmlPath)});const checks=await w.webContents.executeJavaScript('('+${JSON.stringify(runUi.toString())}+')()');fs.writeFileSync(${JSON.stringify(join(temporary, 'waiting.png'))},(await w.webContents.capturePage()).toPNG());fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({checks,blocked,allowedPlatformRequests:0}));}catch(e){fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({error:e.stack,checks:await w.webContents.executeJavaScript('window.__checks||[]'),body:await w.webContents.executeJavaScript('document.body.innerText.slice(0,1500)')}));}finally{w.destroy();app.quit();}});`);
+writeFileSync(entry, `const {app,BrowserWindow}=require('electron'),fs=require('node:fs');app.setPath('userData',${JSON.stringify(join(temporary, 'profile'))});app.setPath('sessionData',${JSON.stringify(join(temporary, 'profile'))});let blocked=0;app.on('session-created',s=>s.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(_,cb)=>{blocked++;cb({cancel:true})}));app.whenReady().then(async()=>{const w=new BrowserWindow({show:false,width:1280,height:1000,webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true,offscreen:true,backgroundThrottling:false}});try{await w.loadFile(${JSON.stringify(htmlPath)});const checks=await w.webContents.executeJavaScript('('+${JSON.stringify(runUi.toString())}+')()');await w.loadFile(${JSON.stringify(htmlPath)});checks.push(...await w.webContents.executeJavaScript('('+${JSON.stringify(verifyRestart.toString())}+')()'));fs.writeFileSync(${JSON.stringify(join(temporary, 'waiting.png'))},(await w.webContents.capturePage()).toPNG());fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({checks,blocked,allowedPlatformRequests:0}));}catch(e){fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({error:e.stack,checks:await w.webContents.executeJavaScript('window.__checks||[]'),body:await w.webContents.executeJavaScript('document.body.innerText.slice(0,1500)')}));}finally{w.destroy();app.quit();}});`);
 const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
 const proc = spawnSync(process.env.BOSSCLAW_ELECTRON || require('electron'), [entry], { env, windowsHide: true, timeout: 90000, encoding: 'utf8' });
 assert.equal(proc.status, 0, proc.error?.message || proc.stderr);

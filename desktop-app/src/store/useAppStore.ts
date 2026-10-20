@@ -6,6 +6,7 @@ import type { JobPlatform } from '@/lib/bossclaw/platforms';
 import { PLATFORM_IDS } from '@/lib/bossclaw/platforms';
 import type { PlatformLogins } from '@/lib/bossLogin';
 import type { WorkbenchFilters } from '@/lib/bossclaw/workbenchFilters';
+import type { NewTabPlatform } from '@/lib/bossclaw/platformSelection';
 
 export type RouteKey =
   | 'home'
@@ -131,6 +132,13 @@ interface AppState {
   setTailorBusy: (busy: boolean) => void;
   workbenchFilters: WorkbenchFilters;
   setWorkbenchFilters: (patch: Partial<WorkbenchFilters>) => void;
+  browserNewTabPlatform: NewTabPlatform;
+  setBrowserNewTabPlatform: (platform: NewTabPlatform) => void;
+  collectionPlatforms: JobPlatform[];
+  setCollectionPlatforms: (platforms: JobPlatform[]) => void;
+  /** null preserves legacy all-enabled behavior; [] explicitly selects none. */
+  deliveryPlatforms: JobPlatform[] | null;
+  setDeliveryPlatforms: (platforms: JobPlatform[]) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -163,6 +171,13 @@ export const useAppStore = create<AppState>()(
         setTailorBusy: (busy) => set({ tailorBusy: busy }),
         workbenchFilters: { hideResidential: false, salaryUnit: 'monthly', salaryMin: null, salaryMax: null, keepUnknownSalary: true, companyMin: null, companyMax: null, keepUnknownCompanySize: true },
         setWorkbenchFilters: (patch) => set((s) => ({ workbenchFilters: { ...s.workbenchFilters, ...patch } })),
+        browserNewTabPlatform: 'boss',
+        setBrowserNewTabPlatform: (platform) => set({ browserNewTabPlatform: platform }),
+        collectionPlatforms: ['boss'],
+        setCollectionPlatforms: (platforms) => set({ collectionPlatforms: [...new Set(platforms)].filter(p => PLATFORM_IDS.includes(p)) }),
+        deliveryPlatforms: null,
+        // Changing scope invalidates an unsent run through the existing Stop subscription.
+        setDeliveryPlatforms: (platforms) => set({ deliveryPlatforms: [...new Set(platforms)].filter(p => PLATFORM_IDS.includes(p)), autoAssist: false, engineStatus: 'stopped' }),
         setTheme: (t) => set({ theme: t }),
         toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
         setRoute: (r) => set({ activeRoute: r }),

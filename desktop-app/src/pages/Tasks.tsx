@@ -29,6 +29,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useScheduleStore } from '@/store/useScheduleStore';
 import { rerankPending, promoteApprovedToQueue } from '@/lib/bossclaw/priority';
+import { selectedDeliveryPlatforms } from '@/lib/bossclaw/platformSelection';
 import { pendingStatusMeta } from '@/lib/bossclaw/taskState';
 import { jobCardStatus, scoreChip } from '@/lib/bossclaw/statusMeta';
 import PlatformChip from '@/components/PlatformChip';
@@ -237,7 +238,9 @@ export default function Tasks() {
       return;
     }
     // 投递任务：提升「待投递」岗位进投递队列并启动引擎（与首页「开始投递」同一入口）
-    const { next, count } = promoteApprovedToQueue(useDataStore.getState().pending, config);
+    const platforms = selectedDeliveryPlatforms(config, useAppStore.getState().deliveryPlatforms);
+    if (!platforms.length) { message.warning('请先在工作台选择投递平台'); setRoute('workbench'); return; }
+    const { next, count } = promoteApprovedToQueue(useDataStore.getState().pending, config, platforms);
     if (count) setPending(next);
     updateTaskRun(t.id, {
       status: 'running',

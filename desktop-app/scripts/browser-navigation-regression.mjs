@@ -14,7 +14,8 @@ const plugins = prior ? [{ name: 'previous-released-browser', setup(b) {
   b.onLoad({ filter: /[\\/]BrowserView\.tsx$/ }, args => ({ contents: execFileSync('git',
     ['show', 'v2.5.39:desktop-app/src/components/BrowserView.tsx'], { cwd: root, encoding: 'utf8' }), loader: 'tsx', resolveDir: dirname(args.path) }));
 } }] : [];
-await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import BrowserView from './src/components/BrowserView';
+await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import BrowserView from './src/components/BrowserView';import{useAppStore}from'./src/store/useAppStore';import{useSettingsStore}from'./src/store/useSettingsStore';
+const fixtureWindow:any=window;fixtureWindow.appStore=useAppStore;useSettingsStore.getState().setConfig({platforms:Object.fromEntries(Object.entries(useSettingsStore.getState().config.platforms).map(([id,p]:any)=>[id,{...p,enabled:true}])) as any});
 const api={current:null};const test:any=window;test.browserRef=api;test.navigation=[];test.collected=[];test.collectDone=[];
 createRoot(document.getElementById('root')!).render(<BrowserView apiRef={api} onNavigate={info=>test.navigation.push(info)} onCollectProgress={data=>test.collected.push(data)} onCollectDone={data=>test.collectDone.push(data)}/>);`,
   loader: 'tsx', resolveDir: root }, tsconfig: join(root, 'tsconfig.json'), bundle: true, platform: 'browser',
@@ -123,7 +124,30 @@ const uiCheck = async function () {
   await wait(() => el.getURL() === 'https://www.zhipin.com/explicit-next' && !el.isLoading(), 'explicit navigation with existing guest');
   const explicitLoads = await window.electron.invoke('jc:fixture-loads');
   check(explicitLoads.filter(u => u === 'https://www.zhipin.com/explicit-next').length === 1, 'explicit user/API navigation does not receive a second src load');
+  const selector = document.querySelector('[aria-label="新标签页平台"]').closest('.ant-select');
+  selector.querySelector('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  await wait(() => document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden) [title="58同城"]'), 'new-tab platform dropdown');
+  document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden) [title="58同城"]').click();
+  await wait(() => window.appStore.getState().browserNewTabPlatform === 'wuba', 'new-tab platform persisted from actual control');
+  window.appStore.getState().setCollectionPlatforms(['liepin']);
+  document.querySelector('button[aria-label="新标签页"]').click();
+  await wait(() => findActive()?.getURL().startsWith('https://www.58.com/'), 'plus opens the selected platform');
+  check(findActive().getURL().startsWith('https://www.58.com/'), 'new-tab control opens 58 without switching back to BOSS');
+  await wait(() => JSON.parse(localStorage.getItem('bossclaw-app') || '{}').state?.browserNewTabPlatform === 'wuba', 'new-tab preference flushed');
   return window.checks;
+};
+const restartCheck = async function () {
+  const until = Date.now() + 10000;
+  for (;;) {
+    try { if (window.browserRef.current && document.querySelector('.browser-pane.is-active webview')?.getWebContentsId()) break; } catch { /* native guest attachment */ }
+    if (Date.now() > until) throw Error('reopened browser guest'); await new Promise(r => setTimeout(r, 30));
+  }
+  const guest = document.querySelector('.browser-pane.is-active webview');
+  while (guest.isLoading() || !guest.getURL()) { if (Date.now() > until) throw Error('restored platform loaded'); await new Promise(r => setTimeout(r, 30)); }
+  const selected = document.querySelector('[aria-label="新标签页平台"]').closest('.ant-select').textContent;
+  if (!selected.includes('58同城') || !guest.getURL().startsWith('https://www.58.com/')) throw Error('new-tab choice or startup platform reverted after reopen');
+  if (JSON.stringify(window.appStore.getState().collectionPlatforms) !== '["liepin"]') throw Error('new-tab preference overwrote independent collection choice');
+  return ['reopened BrowserView restores last platform in both dropdown and startup guest, independently of collection'];
 };
 const reportPath = join(fixture, 'report.json');
 writeFileSync(join(fixture, 'main.cjs'), `const{app,BrowserWindow,session,ipcMain}=require('electron'),fs=require('fs');
@@ -134,7 +158,7 @@ session.defaultSession.webRequest.onBeforeRequest({urls:['http://*/*','https://*
 ses.webRequest.onBeforeRequest({urls:['http://*/*','ws://*/*','wss://*/*']},(_,cb)=>cb({cancel:true}));
 const win=new BrowserWindow({show:false,width:1440,height:1000,webPreferences:{webviewTag:true,sandbox:false,nodeIntegration:false,contextIsolation:true,backgroundThrottling:false,preload:${JSON.stringify(join(root, 'electron/preload/app.cjs'))}}});
 const deadline=setTimeout(()=>{fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({error:'Actual BrowserView navigation timed out',loads}));app.exit(1);},45000);
-try{await win.loadFile(${JSON.stringify(join(fixture, 'ui.html'))});const checks=await win.webContents.executeJavaScript('('+${JSON.stringify(uiCheck.toString())}+')()');fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({checks,loads,platformRequests:0}));}
+try{await win.loadFile(${JSON.stringify(join(fixture, 'ui.html'))});const checks=await win.webContents.executeJavaScript('('+${JSON.stringify(uiCheck.toString())}+')()');if(!${prior}){await win.loadFile(${JSON.stringify(join(fixture, 'ui.html'))});checks.push(...await win.webContents.executeJavaScript('('+${JSON.stringify(restartCheck.toString())}+')()'));}fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({checks,loads,platformRequests:0}));}
 catch(e){fs.writeFileSync(${JSON.stringify(reportPath)},JSON.stringify({error:e.stack,loads,checks:await win.webContents.executeJavaScript('window.checks||[]')}));}
 finally{clearTimeout(deadline);win.destroy();app.quit();}});`);
 const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
