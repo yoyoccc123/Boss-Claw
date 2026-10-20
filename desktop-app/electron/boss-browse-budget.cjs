@@ -44,7 +44,13 @@ function createBossBrowseBudget(file, { clock = Date.now, write = null } = {}) {
       message: error || (blocked ? state.restriction.message : retryAt > now ? `BOSS 浏览频率限制：每 ${policy.windowMinutes} 分钟最多 ${policy.maxViews} 次，当前 ${times.length} 次` : '') };
   }
   function configure(policy) {
-    state.policy = normalizePolicy(policy); save(); return status();
+    const next = normalizePolicy(policy);
+    if (next.maxViews !== state.policy.maxViews || next.windowMinutes !== state.policy.windowMinutes) {
+      const previous = state.policy;
+      state.policy = next;
+      if (!save()) state.policy = previous;
+    }
+    return status();
   }
   function reserve() {
     const current = status();

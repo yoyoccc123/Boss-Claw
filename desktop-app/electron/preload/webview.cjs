@@ -72,6 +72,7 @@ async function reportBossRestriction(url = location.href, text = String(document
   return block;
 }
 async function waitForBossBrowse(stopped, progress) {
+  let waitSignature = '';
   for (;;) {
     await waitWhilePaused();
     if (stopped()) return { ok: false, stopped: true };
@@ -80,9 +81,16 @@ async function waitForBossBrowse(stopped, progress) {
     const permit = await bossBrowsePermission();
     if (stopped()) return { ok: false, stopped: true };
     if (permit.ok) { progress('browse-view', permit); return permit; }
-    if (permit.blocked || permit.error || !Number.isFinite(permit.retryAt) || permit.retryAt <= Date.now()) return permit;
-    progress('browse-wait', permit);
-    while (!stopped() && Date.now() < permit.retryAt) await sleep(Math.min(250, permit.retryAt - Date.now()));
+    if (permit.blocked || permit.error || !Number.isFinite(permit.retryAt) || permit.retryAt <= 0) return permit;
+    // The deadline may expire while IPC is in flight. Re-reserve rather than
+    // treating an outdated denial as failure or opening without admission.
+    if (permit.retryAt <= Date.now()) { await sleep(1); continue; }
+    const signature = `${permit.windowMinutes}:${permit.maxViews}:${permit.retryAt}`;
+    if (signature !== waitSignature) { progress('browse-wait', permit); waitSignature = signature; }
+    // Re-read the authoritative policy while waiting. A changed period/quota
+    // can shorten or extend the deadline; the old advertised time is not a timer.
+    const wakeAt = Math.min(permit.retryAt, Date.now() + 1000);
+    while (!stopped() && Date.now() < wakeAt) await sleep(Math.min(250, wakeAt - Date.now()));
   }
 }
 

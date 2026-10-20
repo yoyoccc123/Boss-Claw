@@ -66,6 +66,12 @@ export default function App() {
     void electronApi.bossBrowse.call('configure', browseLimit || { maxViews: 30, windowMinutes: 30 });
   }, [browseLimit]);
   useEffect(() => electronApi.bossBrowse.onState(state => {
+    if (state.policyChanged && state.previousPolicy) {
+      const before = state.previousPolicy;
+      const outcome = state.error || (state.blocked ? '平台限制仍生效' : state.ok ? '原等待已重新计算，当前额度允许继续'
+        : `等待时间已更新为 ${new Date(state.retryAt).toLocaleString('zh-CN', { hour12: false })}`);
+      useRuntimeLogsStore.getState().addLog('info', `BOSS 浏览限额已修改：每 ${before.windowMinutes} 分钟 ${before.maxViews} 次 → 每 ${state.windowMinutes} 分钟 ${state.maxViews} 次；${outcome}，浏览历史保留`);
+    }
     if (state.blocked) useRuntimeLogsStore.getState().addLog('warn', `${state.message}；停止访问至 ${new Date(state.retryAt).toLocaleString('zh-CN')}`);
   }), []);
   // P28：从 ThemeProvider 上下文复用 Root 算好的 effective，避免 App 再各自持有一份 matchMedia 监听

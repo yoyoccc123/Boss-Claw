@@ -22,6 +22,7 @@ const noopUnsub = () => () => {};
 export interface BossBrowseState {
   ok: boolean; blocked: boolean; error?: string; retryAt: number;
   count: number; maxViews: number; windowMinutes: number; code?: number; message?: string;
+  policyChanged?: boolean; previousPolicy?: { maxViews: number; windowMinutes: number };
 }
 
 function api(): NonNullable<Window['electron']> | Record<string, never> {

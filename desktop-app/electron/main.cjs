@@ -150,7 +150,14 @@ safeHandle('jc:boss-browse', (event, action, payload = {}) => {
     && frame.url === event.sender.getURL() && /(^|\.)zhipin\.com$/i.test(new URL(frame.url).hostname); } catch {}
   if (!owner && !bossGuest) return { ok: false, error: '浏览限额仅供工作台及 BOSS 主页面使用' };
   const budget = getBossBrowseBudget();
-  if (action === 'configure' && owner) return budget.configure(payload);
+  if (action === 'configure' && owner) {
+    const previous = budget.status(), next = budget.configure(payload);
+    if (previous.maxViews !== next.maxViews || previous.windowMinutes !== next.windowMinutes) {
+      mainWindow?.webContents.send('jc:boss-browse-state', { ...next, policyChanged: true,
+        previousPolicy: { maxViews: previous.maxViews, windowMinutes: previous.windowMinutes } });
+    }
+    return next;
+  }
   if (action === 'status') return budget.status();
   if (action === 'reserve') return budget.reserve();
   if (action === 'observe' && bossGuest) return observeBossBrowseBlock(frame.url, String(payload.text || '').slice(0, 6000));

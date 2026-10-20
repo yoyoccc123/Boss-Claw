@@ -56,6 +56,30 @@ check(!staggered.reserve().ok && staggered.status().retryAt === windowStart + 60
 now += 1;
 check(staggered.reserve().ok && staggered.status().count === 2 && staggered.status().retryAt === windowStart + 80000,
   'each expired record releases one slot without resetting the whole window');
+let writes = 0;
+const adjustable = createBossBrowseBudget(path.join(temp, 'adjustable.json'), { clock: () => now, write: () => { writes++; } });
+adjustable.configure({ maxViews: 2, windowMinutes: 10 }); adjustable.reserve(); adjustable.reserve();
+const beforeWrites = writes;
+for (let i = 0; i < 20; i++) adjustable.configure({ maxViews: 2, windowMinutes: 10 });
+check(writes === beforeWrites, 'unchanged policy polling never rewrites the budget file');
+check(adjustable.configure({ maxViews: 2, windowMinutes: 45 }).retryAt === now + 45 * 60000,
+  'a longer custom period extends an active wait without resetting history');
+check(adjustable.configure({ maxViews: 3, windowMinutes: 45 }).ok && adjustable.status().count === 2,
+  'a larger custom quota can release an active wait while retaining history');
+check(adjustable.configure({ maxViews: 1, windowMinutes: 7 }).retryAt === now + 7 * 60000,
+  'a shorter non-default period and smaller quota calculate a new exact deadline');
+let writable = true;
+const policyFile = path.join(temp, 'failed-policy.json');
+const policyFailure = createBossBrowseBudget(policyFile, { clock: () => now, write: state => {
+  if (!writable) throw Error('synthetic disk full'); fs.writeFileSync(policyFile, JSON.stringify(state));
+} });
+policyFailure.reserve(); writable = false;
+const failedPolicy = policyFailure.configure({ maxViews: 60, windowMinutes: 45 });
+check(failedPolicy.error && failedPolicy.maxViews === 30 && failedPolicy.windowMinutes === 30 && !policyFailure.reserve().ok,
+  'production save failure rolls back the policy and stops admission instead of splitting UI/native settings');
+check(createBossBrowseBudget(policyFile, { clock: () => now }).status().count === 1
+  && JSON.parse(fs.readFileSync(policyFile)).policy.maxViews === 30,
+  'failed policy persistence leaves the previous durable history and settings intact');
 
 now = Date.parse('2026-10-18T22:08:39+08:00');
 const restrictedUrl = 'https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=%2Fweb%2Fgeek%2Fjobs';
@@ -92,7 +116,7 @@ const nativeSource = fs.readFileSync(path.join(root, 'electron/preload/webview.c
 const ast = ts.createSourceFile('webview.cjs', nativeSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS), funcs = new Map();
 function visit(n) { if (ts.isFunctionDeclaration(n) && n.name) funcs.set(n.name.text, n.getText(ast)); ts.forEachChild(n, visit); } visit(ast);
 async function nativeCase(options = {}) {
-  let tick = 100_000, clicks = 0, stopped = false, network = 0, release;
+  let tick = 100_000, clicks = 0, stopped = false, network = 0, delayed = false;
   class Clock extends Date { static now() { return tick; } }
   const b = createBossBrowseBudget(path.join(temp, 'native-' + Math.random() + '.json'), { clock: () => tick });
   const events = [], location = { href: 'https://www.zhipin.com/web/geek/jobs', hostname: 'www.zhipin.com' };
@@ -101,10 +125,15 @@ async function nativeCase(options = {}) {
     document: { body: { innerText: '' }, readyState: 'complete' }, PLATFORM: 'boss', collectCtl: {},
     ADAPTERS: { supportsInlineDetail: () => true },
     collectNotify: (channel, data) => events.push({ channel, data }), notify: () => {},
-    ipcRenderer: { invoke: async (_channel, action, payload) => action === 'observe' ? b.observe(location.href, payload.text) : b[action]() },
+    ipcRenderer: { invoke: async (_channel, action, payload) => {
+      const result = action === 'observe' ? b.observe(location.href, payload.text) : b[action]();
+      if (options.expireDuringReply && !delayed && !result.ok && result.retryAt > tick) { delayed = true; tick = result.retryAt; }
+      return result;
+    } },
     waitWhilePaused: async () => {},
     sleep: async ms => {
       tick += ms;
+      if (options.duringSleep) options.duringSleep({ tick, b, events });
       if (options.stopInWait && events.some(e => e.data.phase === 'browse-wait')) { stopped = true; c.collectCtl.stopped = true; }
       if (options.restartInWait && events.some(e => e.data.phase === 'browse-wait')) c.collectCtl.token = 'new-generation';
     },
@@ -141,6 +170,25 @@ check(n.clicks() === 0 && n.b.status().count === 1, 'a replaced collector genera
 n = await nativeCase({ stopInWait: true }); n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.reserve();
 const denied = await n.c.waitForBossBrowse(n.stopped, (phase, state) => n.events.push({ data: { phase, ...state } }));
 check(denied.stopped && n.network() === 0 && n.b.status().count === 1, 'Stop during a budget wait performs no later request or extra reservation');
+for (const [policy, expectedMs, waitEvents] of [
+  [{ maxViews: 2, windowMinutes: 30 }, 1000, 1],
+  [{ maxViews: 1, windowMinutes: 1 }, 60000, 2],
+  [{ maxViews: 1, windowMinutes: 45 }, 45 * 60000, 2],
+]) {
+  let changed = false;
+  n = await nativeCase({ duringSleep: ({ b, events }) => {
+    if (!changed && events.some(e => e.data.phase === 'browse-wait')) { changed = true; b.configure(policy); }
+  } });
+  n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.reserve();
+  const result = await n.c.waitForBossBrowse(n.stopped, (phase, state) => n.events.push({ data: { phase, ...state } }));
+  check(result.ok && n.c.Date.now() === 100000 + expectedMs, 'actual native wait honors an applied custom policy: ' + JSON.stringify(policy));
+  check(n.events.filter(e => e.data.phase === 'browse-wait').length === waitEvents,
+    'actual native wait emits one notice per policy/deadline and no per-second noise');
+}
+n = await nativeCase({ expireDuringReply: true }); n.b.configure({ maxViews: 1, windowMinutes: 7 }); n.b.reserve();
+check((await n.c.waitForBossBrowse(n.stopped, (phase, state) => n.events.push({ data: { phase, ...state } }))).ok
+  && n.c.Date.now() === 100000 + 7 * 60000 + 1 && n.b.status().count === 1,
+  'native IPC reply crossing retryAt re-reserves exactly once instead of falsely failing at expiry');
 n = await nativeCase();
 await n.c.zpFetch('/wapi/zpgeek/job/card.json?encryptJobId=synthetic');
 await n.c.fetchDetailSourceWelfare('https://www.zhipin.com/job_detail/synthetic.html', true);
@@ -154,7 +202,8 @@ check(n.clicks() === 0 && n.events.some(e => e.data.reason === 'blocked'), 'a mi
 const mainText = fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8');
 const mainAst = ts.createSourceFile('main.cjs', mainText, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS), handlers = new Map();
 function scan(node) { if (ts.isCallExpression(node) && node.expression.getText(mainAst) === 'safeHandle' && ts.isStringLiteral(node.arguments[0])) handlers.set(node.arguments[0].text, node.arguments[1].getText(mainAst)); ts.forEachChild(node, scan); } scan(mainAst);
-const sender = { id: 1, getURL: () => 'file:///app/index.html' }, guest = { id: 2, getURL: () => 'https://www.zhipin.com/web/geek/jobs' };
+const policyEvents = [];
+const sender = { id: 1, getURL: () => 'file:///app/index.html', send: (channel, state) => policyEvents.push({ channel, state }) }, guest = { id: 2, getURL: () => 'https://www.zhipin.com/web/geek/jobs' };
 now = Date.parse('2026-10-18T22:08:39+08:00');
 const shared = createBossBrowseBudget(path.join(temp, 'ipc.json'), { clock: () => now });
 shared.configure({ maxViews: 1, windowMinutes: 30 });
@@ -170,6 +219,26 @@ check(!h.gate({ sender: guest, senderFrame: { parent: null, url: guest.getURL() 
 const cfx = await h.cfx({ sender }, 'chat', { platform: 'boss' });
 check(cfx.browseLimited && !cfx.sent && shared.status().count === 1, 'Camoufox cannot open another job around an exhausted Electron budget');
 check(!(await h.cfx({ sender: guest }, 'chat', { platform: 'boss' })).ok, 'browser-engine invocation requires the host caller');
+const changedPolicy = { maxViews: 3, windowMinutes: 45 };
+h.gate({ sender }, 'configure', changedPolicy); h.gate({ sender }, 'configure', changedPolicy);
+check(policyEvents.length === 1 && policyEvents[0].state.previousPolicy.maxViews === 1
+  && policyEvents[0].state.maxViews === 3 && policyEvents[0].state.windowMinutes === 45 && policyEvents[0].state.count === 1,
+  'native configuration broadcasts old/new settings once, retaining history and explaining a released wait');
+const appText = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
+const appAst = ts.createSourceFile('App.tsx', appText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let stateListener;
+function findListener(node) {
+  if (ts.isCallExpression(node) && node.expression.getText(appAst) === 'electronApi.bossBrowse.onState') stateListener = node.arguments[0].getText(appAst);
+  ts.forEachChild(node, findListener);
+} findListener(appAst);
+const changeLogs = [], listenerContext = { Date, useRuntimeLogsStore: { getState: () => ({ addLog: (level, text) => changeLogs.push({ level, text }) }) } };
+vm.createContext(listenerContext);
+vm.runInContext(ts.transpileModule('globalThis.listener = ' + stateListener, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, listenerContext);
+listenerContext.listener(policyEvents[0].state);
+check(changeLogs[0].text.includes('每 30 分钟 1 次 → 每 45 分钟 3 次') && changeLogs[0].text.includes('当前额度允许继续'),
+  'actual App listener explains why applying a higher quota releases a previous wait');
+listenerContext.listener({ ...policyEvents[0].state, ok: false, retryAt: now + 45 * 60000 });
+check(changeLogs.at(-1).text.includes('等待时间已更新为'), 'actual App listener logs a recalculated deadline for a changed period');
 shared.observe(restrictedUrl, notice);
 check((await h.cfx({ sender }, 'search', { platform: 'boss' })).browseLimited, 'restricted Camoufox search is stopped before Python/browser startup');
 Object.assign(h, { Date: class extends Date { static now() { return now; } }, AbortSignal,
@@ -208,6 +277,28 @@ check(!await deliveryContext.awaitBossBrowseForDelivery(1) && policyCalls === 1,
 deliveryRunning = true;
 deliveryContext.electronApi.bossBrowse.call = async action => { check(action === 'reserve', 'DOM delivery requests an atomic reservation'); return { ok: true, count: 1, maxViews: 30, windowMinutes: 30 }; };
 check(await deliveryContext.awaitBossBrowseForDelivery(1), 'DOM detail navigation can proceed only after admission');
+for (const [policy, expectedMs] of [[{ maxViews: 2, windowMinutes: 30 }, 1000], [{ maxViews: 1, windowMinutes: 1 }, 60000], [{ maxViews: 1, windowMinutes: 45 }, 45 * 60000]]) {
+  clockTick = 5000;
+  const b = createBossBrowseBudget(path.join(temp, 'delivery-' + Math.random() + '.json'), { clock: () => clockTick });
+  b.configure({ maxViews: 1, windowMinutes: 30 }); b.reserve();
+  let changed = false; const logs = [];
+  deliveryContext.addLog = (_level, text) => logs.push(text);
+  deliveryContext.sleep = async ms => { clockTick += ms; if (!changed) { changed = true; b.configure(policy); } };
+  deliveryContext.electronApi.bossBrowse.call = async action => b[action]();
+  check(await deliveryContext.awaitBossBrowseForDelivery(1) && clockTick === 5000 + expectedMs,
+    'actual Workbench delivery wait rechecks period/quota without early or stale-deadline admission');
+  check(logs.filter(s => s.includes('等待至')).length === (policy.maxViews === 2 ? 1 : 2),
+    'delivery updates its deadline notice only when the effective policy changes');
+}
+clockTick = 5000;
+const delayedDelivery = createBossBrowseBudget(path.join(temp, 'late-delivery.json'), { clock: () => clockTick });
+delayedDelivery.configure({ maxViews: 1, windowMinutes: 7 }); delayedDelivery.reserve();
+let lateReplies = 0;
+deliveryContext.electronApi.bossBrowse.call = async action => {
+  const gate = delayedDelivery[action](); if (lateReplies++ === 0) clockTick = gate.retryAt; return gate;
+};
+check(await deliveryContext.awaitBossBrowseForDelivery(1) && lateReplies === 2 && delayedDelivery.status().count === 1,
+  'Workbench rechecks an expired denial response and obtains admission rather than pausing or navigating unchecked');
 let opened = 0;
 const candidate = { id: 'one', deliveryGreeting: '合成招呼语', job: { platform: 'boss', title: '合成岗位' } };
 Object.assign(deliveryContext, { deliveryEpochRef: { current: 1 },
@@ -240,3 +331,4 @@ wh.controlCollect('stop'); await collected;
 const stoppedCalls = calls.length; timers[1].fn();
 check(!wh.visualActiveRef.current && calls.length === stoppedCalls, 'Stop settles the real waiting host and old timeout cannot restart work');
 console.log(`PASS BOSS browse budget: ${checks} persistent rolling-window quota without per-job spacing, Stop, 403 recovery, actual collector/API and native IPC checks; zero platform requests.`);
+await import('./boss-browse-settings-regression.mjs');

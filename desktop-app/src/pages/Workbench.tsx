@@ -1034,6 +1034,7 @@ export default function Workbench() {
    * 因此点击/发送的时序与串行版本一致。**禁止**把它改成「不等」或缩短间隔。
    */
   const awaitBossBrowseForDelivery = async (epoch: number, action: 'status' | 'reserve' = 'reserve'): Promise<boolean> => {
+    let waitSignature = '';
     while (canContinueDelivery(epoch)) {
       const gate = await electronApi.bossBrowse.call(action);
       if (!canContinueDelivery(epoch)) return false;
@@ -1041,15 +1042,18 @@ export default function Workbench() {
         if (action === 'reserve') addLog('info', `BOSS 详情查看已计数：近 ${gate.windowMinutes} 分钟 ${gate.count}/${gate.maxViews} 次`);
         return true;
       }
-      if (gate.blocked || gate.error || !gate.retryAt || gate.retryAt <= Date.now()) {
+      if (gate.blocked || gate.error || !Number.isFinite(gate.retryAt) || gate.retryAt <= 0) {
         pauseAssist(gate.error || gate.message || 'BOSS 自动浏览已停止'); return false;
       }
+      if (gate.retryAt <= Date.now()) { await sleep(1); continue; }
       setApplyStage('queued');
-      addLog('info', `${gate.message}；等待至 ${new Date(gate.retryAt).toLocaleTimeString()} 再打开岗位，可随时停止`);
-      while (Date.now() < gate.retryAt) {
-        if (!canContinueDelivery(epoch)) return false;
-        await sleep(Math.min(250, gate.retryAt - Date.now()));
+      const signature = `${gate.windowMinutes}:${gate.maxViews}:${gate.retryAt}`;
+      if (signature !== waitSignature) {
+        addLog('info', `${gate.message}；等待至 ${new Date(gate.retryAt).toLocaleTimeString()} 再打开岗位，可随时停止`);
+        waitSignature = signature;
       }
+      const wakeAt = Math.min(gate.retryAt, Date.now() + 1000);
+      while (canContinueDelivery(epoch) && Date.now() < wakeAt) await sleep(Math.min(250, wakeAt - Date.now()));
     }
     return false;
   };
@@ -1496,11 +1500,11 @@ export default function Workbench() {
     }
   }, []);
 
-  // 可视化采集的可中断等待（每 300ms 检查一次，停止后尽快退出）
+  // 可视化采集的可中断等待（每 250ms 检查一次，停止后尽快退出）
   const visualWait = async (ms: number) => {
-    const step = 300;
     let waited = 0;
     while (waited < ms && visualActiveRef.current) {
+      const step = Math.min(250, ms - waited);
       await sleep(step);
       waited += step;
     }
@@ -1753,26 +1757,34 @@ export default function Workbench() {
     addLog('info', `开始可视化采集（${platformLabel(platform)}）：共 ${queue.length} 个搜索组合，${platform === 'boss' ? '逐岗位平滑滚动 + 高亮 + 点击展开详情' : '列表级滚动 + 高亮（不点开详情，详情 JD 按平台详情接口补齐）'}${cfg0.collectWithoutKeyword ? '（无关键字模式：链接不带 query，仅保留城市 / 求职类型等筛选）' : ''}`);
     // 本批采集任务的 runId（用于结束时把未收尾的卡片统一收口）
     const batchRunIds: string[] = [];
+    let browseWaitSignature = '';
     for (let qi = checkpointContext.checkpoint.index; qi < queue.length; qi += 1) {
       const item = queue[qi];
       if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current || checkCollectionGoal(platform)) break;
       // 该平台未登录：后续搜索组合必然同样失败 → 立即收口（登录墙判定在页内完成，不靠猜）
       if (visualLoginBlockedRef.current) break;
       if (platform === 'boss') {
-        const guard = await electronApi.bossBrowse.call('configure', useSettingsStore.getState().config.bossBrowseLimit);
+        const guard = await electronApi.bossBrowse.call('status');
         if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
         if (guard.blocked || guard.error) {
           addLog('warn', `${guard.error || guard.message}；已保留采集断点${guard.retryAt ? `，停止访问至 ${new Date(guard.retryAt).toLocaleString('zh-CN')}` : ''}`);
           visualActiveRef.current = false; break;
         }
-        if (!guard.ok && guard.retryAt > Date.now()) {
+        if (!guard.ok && (!Number.isFinite(guard.retryAt) || guard.retryAt <= 0)) {
+          addLog('warn', 'BOSS 浏览限额状态无效，已停止采集并保留断点'); visualActiveRef.current = false; break;
+        }
+        if (!guard.ok && guard.retryAt <= Date.now()) { await visualWait(1); qi -= 1; continue; }
+        if (!guard.ok) {
           collectPhaseRef.current = 'browse-wait';
           const status = `${guard.message}；等待至 ${new Date(guard.retryAt).toLocaleTimeString()} 后继续，可随时停止`;
-          setVisualItem(v => ({ ...v, phase: 'browse-wait', status })); addLog('info', status);
-          await visualWait(guard.retryAt - Date.now());
+          const signature = `${guard.windowMinutes}:${guard.maxViews}:${guard.retryAt}`;
+          setVisualItem(v => ({ ...v, phase: 'browse-wait', status }));
+          if (signature !== browseWaitSignature) { browseWaitSignature = signature; addLog('info', status); }
+          await visualWait(Math.min(1000, guard.retryAt - Date.now()));
           if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
           qi -= 1; continue;
         }
+        browseWaitSignature = '';
       }
       addLog('info', `可视化采集「${item.keyword}」· ${item.location || '全国'} · 方向：${item.directionName || '随机推荐'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）`);
       let tabId = collectTabId;
