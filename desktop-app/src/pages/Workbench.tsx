@@ -1039,7 +1039,7 @@ export default function Workbench() {
       const gate = await electronApi.bossBrowse.call(action);
       if (!canContinueDelivery(epoch)) return false;
       if (gate.ok) {
-        if (action === 'reserve') addLog('info', `BOSS 详情查看已计数：近 ${gate.windowMinutes} 分钟 ${gate.count}/${gate.maxViews} 次`);
+        if (action === 'reserve') addLog('info', gate.admissionMessage || `BOSS 已允许本次查看：近 ${gate.windowMinutes} 分钟 ${gate.count}/${gate.maxViews} 次（含本次 +1）`);
         return true;
       }
       if (gate.blocked || gate.error || !Number.isFinite(gate.retryAt) || gate.retryAt <= 0) {

@@ -2568,8 +2568,9 @@ async function visualCollect(opts = {}) {
     const permit = await waitForBossBrowse(stopped, (phase, state) => notify('collect-progress', {
       phase, index, total: cards.length, title: identity.title, company: identity.company,
       retryAt: state.retryAt, count: state.count, maxViews: state.maxViews, windowMinutes: state.windowMinutes,
+      countBefore: state.countBefore, expiredSinceLastView: state.expiredSinceLastView, remainingViews: state.remainingViews,
       status: phase === 'browse-wait' ? `${state.message}；等待至 ${new Date(state.retryAt).toLocaleTimeString()} 后继续，可随时停止`
-        : `详情查看已计数：近 ${state.windowMinutes} 分钟 ${state.count}/${state.maxViews} 次`,
+        : state.admissionMessage || `BOSS 已允许本次查看：近 ${state.windowMinutes} 分钟 ${state.count}/${state.maxViews} 次（含本次 +1）`,
     }));
     if (stopped()) break;
     await waitWhilePaused();

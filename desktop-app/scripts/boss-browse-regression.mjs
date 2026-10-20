@@ -81,6 +81,33 @@ check(createBossBrowseBudget(policyFile, { clock: () => now }).status().count ==
   && JSON.parse(fs.readFileSync(policyFile)).policy.maxViews === 30,
   'failed policy persistence leaves the previous durable history and settings intact');
 
+// Reproduce the reported repeated 100/100 messages: one old slot expires before
+// each new view, so every admission must explain 99 -> 100 instead of a bare cap.
+const receiptStart = Date.parse('2026-10-20T18:46:41+08:00');
+let receiptClock = receiptStart;
+const receiptFile = path.join(temp, 'rolling-receipt.json');
+let receipts = createBossBrowseBudget(receiptFile, { clock: () => receiptClock });
+receipts.configure({ maxViews: 100, windowMinutes: 30 });
+for (let i = 0; i < 100; i++) { receiptClock = receiptStart + i * 6000; receipts.reserve(); }
+check(!receipts.reserve().ok && !receipts.reserve().admissionMessage, 'a denied view never produces an allowed-view receipt');
+receipts = createBossBrowseBudget(receiptFile, { clock: () => receiptClock });
+let lastFullReceipt;
+for (let i = 0; i < 2; i++) {
+  receiptClock = receiptStart + 30 * 60000 + i * 6000;
+  const admitted = receipts.reserve();
+  lastFullReceipt = admitted;
+  check(admitted.ok && admitted.countBefore === 99 && admitted.count === 100 && admitted.remainingViews === 0
+    && admitted.expiredSinceLastView === 1 && admitted.retryAt === receiptClock + 6000,
+    'restarted rolling budget reports one released slot, before/after counts and next expiry for each 100/100 admission');
+  check(admitted.admissionMessage.includes('99 → 100/100') && admitted.admissionMessage.includes('本次 +1')
+    && admitted.admissionMessage.includes('旧记录到期释放 1 个名额') && admitted.admissionMessage.includes('下一名额'),
+    'a full-looking admission explains old-slot expiry and the exact new view rather than implying an over-limit send');
+}
+receiptClock += 31 * 60000;
+const drained = receipts.reserve();
+check(drained.countBefore === 0 && drained.count === 1 && drained.expiredSinceLastView === 100 && drained.remainingViews === 99
+  && !drained.admissionMessage.includes('下一名额'), 'fully expired history reports a fresh count and available quota without a false wait');
+
 now = Date.parse('2026-10-18T22:08:39+08:00');
 const restrictedUrl = 'https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=%2Fweb%2Fgeek%2Fjobs';
 const notice = '访问受限 抱歉，您暂时无法访问此页面 您的账户存在异常行为，已暂时被限制访问！将于 2026-10-19 00:08 恢复正常 请勿频繁提交刷新请求，耐心等待';
@@ -152,6 +179,9 @@ let n = await nativeCase();
 await n.c.visualCollect({ seq: 'view', maxJobs: 1, autoScroll: false });
 check(n.clicks() === 1 && n.b.status().count === 1, 'actual collector reserves exactly one attempt before opening its card');
 check(n.events.some(e => e.data.phase === 'browse-view'), 'actual collector emits counted detail-view metadata');
+check(n.events.find(e => e.data.phase === 'browse-view').data.status.includes('0 → 1/30')
+  && n.events.find(e => e.data.phase === 'browse-view').data.countBefore === 0,
+  'actual collector forwards the production admission explanation and before count to the workbench log');
 n = await nativeCase(); n.b.reserve();
 await n.c.visualCollect({ seq: 'quota-available', maxJobs: 1, autoScroll: false });
 check(!n.events.some(e => e.data.phase === 'browse-wait') && n.clicks() === 1 && n.b.status().count === 2,
@@ -277,6 +307,12 @@ check(!await deliveryContext.awaitBossBrowseForDelivery(1) && policyCalls === 1,
 deliveryRunning = true;
 deliveryContext.electronApi.bossBrowse.call = async action => { check(action === 'reserve', 'DOM delivery requests an atomic reservation'); return { ok: true, count: 1, maxViews: 30, windowMinutes: 30 }; };
 check(await deliveryContext.awaitBossBrowseForDelivery(1), 'DOM detail navigation can proceed only after admission');
+const receiptLogs = [];
+deliveryContext.addLog = (_level, text) => receiptLogs.push(text);
+deliveryContext.electronApi.bossBrowse.call = async () => lastFullReceipt;
+check(await deliveryContext.awaitBossBrowseForDelivery(1) && receiptLogs[0] === lastFullReceipt.admissionMessage
+  && receiptLogs[0].includes('99 → 100/100') && receiptLogs[0].includes('到期释放 1'),
+  'actual delivery gate logs the authoritative explanation instead of rebuilding the old bare 100/100 message');
 for (const [policy, expectedMs] of [[{ maxViews: 2, windowMinutes: 30 }, 1000], [{ maxViews: 1, windowMinutes: 1 }, 60000], [{ maxViews: 1, windowMinutes: 45 }, 45 * 60000]]) {
   clockTick = 5000;
   const b = createBossBrowseBudget(path.join(temp, 'delivery-' + Math.random() + '.json'), { clock: () => clockTick });

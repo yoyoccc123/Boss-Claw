@@ -22,6 +22,7 @@ const noopUnsub = () => () => {};
 export interface BossBrowseState {
   ok: boolean; blocked: boolean; error?: string; retryAt: number;
   count: number; maxViews: number; windowMinutes: number; code?: number; message?: string;
+  admittedAt?: number; countBefore?: number; expiredSinceLastView?: number; remainingViews?: number; admissionMessage?: string;
   policyChanged?: boolean; previousPolicy?: { maxViews: number; windowMinutes: number };
 }
 

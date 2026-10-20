@@ -32,8 +32,8 @@ function createBossBrowseBudget(file, { clock = Date.now, write = null } = {}) {
       return true;
     } catch { storageError = 'BOSS 浏览计数无法保存，已停止自动访问，请检查磁盘空间和权限'; return false; }
   }
-  function status() {
-    const now = clock(), policy = state.policy, windowMs = policy.windowMinutes * 60_000;
+  function status(now = clock()) {
+    const policy = state.policy, windowMs = policy.windowMinutes * 60_000;
     const times = state.attempts.filter(t => t > now - windowMs);
     const blocked = !!state.restriction && state.restriction.until > now;
     const capUntil = times.length >= policy.maxViews ? times[times.length - policy.maxViews] + windowMs : 0;
@@ -53,14 +53,22 @@ function createBossBrowseBudget(file, { clock = Date.now, write = null } = {}) {
     return status();
   }
   function reserve() {
-    const current = status();
+    // Freeze one admission timestamp so a record expiring during the save cannot
+    // make the before/after counts in its receipt refer to different windows.
+    const now = clock(), current = status(now);
     if (!current.ok) return current;
-    const now = clock();
+    const windowMs = state.policy.windowMinutes * 60_000;
+    const expiredSinceLastView = state.lastNow > 0 ? state.attempts.filter(t => t > state.lastNow - windowMs && t <= now - windowMs).length : 0;
     // Keep a full day so lengthening the configured window cannot reset history.
     state.attempts = state.attempts.filter(t => t > now - 86400_000);
     state.attempts.push(now); state.lastNow = now;
     if (!save()) return status();
-    return { ...status(), ok: true, admittedAt: now };
+    const after = status(now), remainingViews = Math.max(0, after.maxViews - after.count);
+    const release = expiredSinceLastView ? `；较上次查看，旧记录到期释放 ${expiredSinceLastView} 个名额` : '';
+    const next = remainingViews === 0 && after.retryAt > now
+      ? `，下一名额 ${new Date(after.retryAt).toLocaleTimeString('zh-CN', { hour12: false })} 释放` : '';
+    return { ...after, ok: true, admittedAt: now, countBefore: current.count, expiredSinceLastView, remainingViews,
+      admissionMessage: `BOSS 已允许本次查看：近 ${after.windowMinutes} 分钟 ${current.count} → ${after.count}/${after.maxViews} 次（本次 +1）${release}；剩余 ${remainingViews} 个名额${next}` };
   }
   function observe(url, text) {
     const found = readBossPageBlock(url, text, clock());
