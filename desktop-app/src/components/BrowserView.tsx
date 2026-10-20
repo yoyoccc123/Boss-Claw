@@ -146,7 +146,7 @@ export interface WebviewApi {
    * 采集侧以此为**权威**判定「搜索页是否真的加载完成」——加载遮罩状态机只作参考，
    * 避免事件序列异常时一直误判「加载中」。返回 {error} 表示探测失败（preload 未就绪等）。
    */
-  pageStatus: (tabId?: string) => Promise<any>;
+  pageStatus: (tabId?: string, expectedSearchUrl?: string) => Promise<any>;
 }
 
 interface Props {
@@ -939,7 +939,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
 
   const readPage = useCallback((tabId?: string) => cmdOnce('page-read', {}, 15000, tabId), [cmdOnce]);
   // 页面就绪事实探测：短超时（6s）——探测失败本身也是有效信息（preload 未就绪）
-  const pageStatus = useCallback((tabId?: string) => cmdOnce('page-status', {}, 6000, tabId), [cmdOnce]);
+  const pageStatus = useCallback((tabId?: string, expectedSearchUrl?: string) => cmdOnce('page-status', { expectedSearchUrl }, 6000, tabId), [cmdOnce]);
   const fetchJobOfficeAddress = useCallback((job: { url?: string; jobId?: string; platform?: JobPlatform }, tabId?: string) =>
     cmdOnce('job-office-address', { job }, 45000, tabId), [cmdOnce]);
 

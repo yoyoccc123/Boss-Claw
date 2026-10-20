@@ -94,7 +94,7 @@ async function harness(platform, engine, options = {}) {
     pageStatus: async () => ({ readyState: 'complete', cards: 0, bodyLen: 2000 }), sendInTab: (...args) => commands.push(args) } };
   h.visualCollectInTab = async (_tab, opts) => {
     collectOptions.push(opts);
-    h.collectTerminalRef.current = options.terminal ?? 'completed';
+    h.collectTerminalRef.current = options.failFirst && collectOptions.length === 1 ? 'failed' : options.terminal ?? 'completed';
     if (options.duplicates) await h.ingestJob(repeatedJob, h.collectBatchGenerationRef.current,
       h.checkpointJobAcknowledgment('card-' + urls.length, repeatedJob.title));
     if (options.unresolved) h.checkpointContextRef.current.unresolved.add('unconfirmed-analysis');
@@ -152,7 +152,7 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
   check(limited.runs.some(x => x.status === 'success' && x.stageLabel.includes('达到本组采集上限')), `${platform}: task progress records capped completion explicitly`);
   for (const terminal of ['stopped', 'blocked', 'failed', '']) {
     const interrupted = await harness(platform, 'visual', { terminal });
-    check(interrupted.urls.length === 1 && interrupted.data.collectionCheckpoints[platform].index === 0 && !interrupted.data.collectionCheckpoints[platform].complete, `${platform}: ${terminal || 'missing completion'} still stops without advancing`);
+    check(interrupted.urls.length === (platform === 'zhaopin' && terminal === 'failed' ? 2 : 1) && interrupted.data.collectionCheckpoints[platform].index === 0 && !interrupted.data.collectionCheckpoints[platform].complete, `${platform}: ${terminal || 'missing completion'} stops without advancing after at most one permitted list retry`);
   }
   const unconfirmed = await harness(platform, 'visual', { terminal: 'limit', unresolved: true });
   check(unconfirmed.urls.length === 1 && unconfirmed.data.collectionCheckpoints[platform].index === 0, `${platform}: a scan cap never acknowledges unresolved analysis`);
@@ -164,4 +164,11 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
   const stale = await harness(platform, 'visual', { terminal: 'limit', staleGeneration: true });
   check(stale.outcome === 'abort' && stale.urls.length === 1 && stale.data.collectionCheckpoints[platform].index === 0, `${platform}: stale collection generations cannot advance after a group limit`);
 }
+const recoveredList = await harness('zhaopin', 'visual', { failFirst: true });
+check(recoveredList.data.collectionCheckpoints.zhaopin.complete && recoveredList.urls[0] === recoveredList.urls[1]
+  && recoveredList.urls.length === makeQueue('zhaopin').length + 1,
+  'Zhaopin retries a transient zero-job failure once at the same city/keyword, then continues every later combination');
+check(recoveredList.collectOptions.every(o => o.expectedSearchUrl?.includes('zhaopin.com'))
+  && recoveredList.logs.filter(x => x.msg.includes('重新加载重试一次')).length === 1,
+  'Zhaopin host forwards expected search scope and explains a bounded retry');
 console.log(`PASS collection traversal: ${checks} city-first queue, order-only migration and real visual/Camoufox runner checks across five platforms; zero platform requests.`);

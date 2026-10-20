@@ -27,6 +27,7 @@ const { findTextSendButton } = require('./text-send-control.cjs');
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
 const WUBA = require('./wuba.cjs');
+const ZHAOPIN_LIST = require('./zhaopin-list.cjs');
 const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
 const { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl, readZhaopinAttachmentSelection } = require('./zhaopin-im.cjs');
 const OFFICE = require('./office-address.cjs');
@@ -1988,6 +1989,8 @@ function pickFromCard(card, selectorCandidates) {
 
 // 卡片身份（对齐 job-claw-main cardIdentity，多选择器候选 + 行兜底）
 function zhaopinTitleFromCard(card) {
+  const nativeTitle = String(card.getAttribute?.('data-bossclaw-jobtitle') || '').trim();
+  if (nativeTitle && !SALARY_WHOLE_RE.test(nativeTitle)) return nativeTitle;
   const nodes = FIELD_SELECTORS.title.map(selector => card.querySelector(selector)).filter(Boolean);
   // Vue may keep the complete title only in a child's aria-label while the wrapper is empty/clamped.
   for (const node of nodes) {
@@ -2710,7 +2713,7 @@ function domDump() {
 // 而页面其实早已可用 —— 日志刷「页面加载中…」但用户看到的页面是好的。
 // 这里直接读页面自身的事实：document.readyState / 正文长度 / 岗位卡片命中数 / 选择器逐一命中数 /
 // 列表容器 / 骨架屏启发式；宿主以这些事实为权威，遮罩状态只作参考。
-function pageStatusData() {
+function pageStatusData(expectedSearchUrl) {
   // 选择器按平台取（BOSS 覆盖原 7 项，另多一项 .search-job-result li.job-card-box 诊断键）
   const selectors = [...new Set([...(PLATFORM_LIST_SELECTORS[PLATFORM] || []), LINK_SELECTOR])];
   const counts = {};
@@ -2730,7 +2733,8 @@ function pageStatusData() {
   });
   const bossBlock = readBossPageBlock(location.href, bodyText);
   if (bossBlock) void reportBossRestriction(location.href, bodyText);
-  const collectionBlocked = bossBlock?.message || (/\/verify\.|\/captcha(?:\/|\?|$)/i.test(location.href)
+  const zhaopinBlock = PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null;
+  const collectionBlocked = bossBlock?.message || (zhaopinBlock?.kind === 'risk' ? zhaopinBlock.message : '') || (/\/verify\.|\/captcha(?:\/|\?|$)/i.test(location.href)
     || visibleDialogs.some(e => /确认您是|安全验证|完成验证|请先验证|滑动验证|拖动滑块/.test(textOf(e)))
     ? '招聘页面需要人工完成安全验证' : '');
   const collectionLoading = all('[class*="skeleton"], [class*="loading"], [class*="mask"], [class*="overlay"]').some(largeVisible);
@@ -2740,14 +2744,15 @@ function pageStatusData() {
     readyState: String(document.readyState || ''),
     bodyLen: bodyText.length,
     collectionBlocked, collectionLoading,
-    applyBlock: PLATFORM === 'wuba' ? WUBA.readPageBlock(document, location.href) : PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null,
+    collectionScopeMatches: PLATFORM !== 'zhaopin' || !expectedSearchUrl || ZHAOPIN_LIST.searchScopeMatches(location.href, expectedSearchUrl),
+    applyBlock: PLATFORM === 'wuba' ? WUBA.readPageBlock(document, location.href) : zhaopinBlock,
     zhaopinChatReady: PLATFORM === 'zhaopin' && readZhaopinChatReady(document, location.href),
     cards,
     counts,
     listRootCls: listRoot ? String(listRoot.className || '').slice(0, 120) : '',
     skeleton: all('[class*="skeleton"], [class*="loading"], [class*="spinner"], [class*="placeholder"]').length,
     // 登录墙 = 原文案命中（含安全验证/验证码等风控文案）或「平台登录墙特征 且 无任何岗位链接」
-    loginWall: /请登录|扫码登录|安全验证|验证码/.test(bodyText.slice(0, 500)) || loginWallDetected(),
+    loginWall: zhaopinBlock?.kind === 'login' || /请登录|扫码登录|安全验证|验证码/.test(bodyText.slice(0, 500)) || loginWallDetected(),
   };
 }
 
@@ -3120,6 +3125,15 @@ async function visualCollectListOnly(opts = {}) {
     notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'completed' });
     return true;
   };
+  const scopeReady = () => PLATFORM !== 'zhaopin' || !opts.expectedSearchUrl || ZHAOPIN_LIST.searchScopeMatches(location.href, opts.expectedSearchUrl);
+  const zhaopinBlocked = () => {
+    if (PLATFORM !== 'zhaopin') return false;
+    const block = readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {});
+    if (!block) return false;
+    notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs,
+      reason: 'blocked', loginRequired: block.kind === 'login', error: block.message });
+    return true;
+  };
   resetJdFillState(); // 每轮采集重置 JD 补齐计数 / 熔断状态
   notify('collect-progress', { phase: 'start', index: 0, total: 0, maxJobs, platform: PLATFORM, status: `准备中（${PLATFORM} · 列表级采集）` });
 
@@ -3135,10 +3149,11 @@ async function visualCollectListOnly(opts = {}) {
   const listReadyDeadline = listWaitStartedAt + listTimeoutMs;
   let initialWaitCount = 0;
   while (Date.now() < listReadyDeadline && !stopped()) {
+    if (zhaopinBlocked()) return;
     if (wubaBlocked()) return;
     if (wubaSearchEnded(true)) return;
     let cards = [];
-    try { cards = collectCards(true); } catch (e) {
+    try { cards = scopeReady() ? collectCards(true) : []; } catch (e) {
       notify('collect-progress', { phase: 'collect-error', index: 0, total: 0, processed: 0, maxJobs, status: `列表查询异常：${String(e?.message || e).slice(0, 80)}` });
     }
     if (cards.length > 0 || (PLATFORM === 'wuba' && WUBA.listState(document).excludedCategoryCount > 0)) {
@@ -3160,13 +3175,22 @@ async function visualCollectListOnly(opts = {}) {
 
   // 主循环：逐卡滚动 + 高亮 + 回传（**不点击卡片** —— 见函数头注释）
   // 智联额外一步：入库前按 number 调平台详情接口补齐 JD（失败保留卡片文本兜底）。
+  if (!stopped() && !scopeReady()) {
+    notify('collect-done', { listUrl: location.href, processed: 0, total: 0, maxJobs, reason: 'failed', error: '智联尚未进入目标城市、关键词或筛选条件，进度已保留' });
+    return;
+  }
   if (!stopped() && !collectCards().length && !collectionListExplicitlyEmpty()
     && !(PLATFORM === 'wuba' && WUBA.listState(document).excludedCategoryCount > 0)) {
     notify('collect-done', { listUrl: location.href, processed: 0, total: 0, maxJobs, reason: 'failed', error: '未识别到岗位列表，进度已保留' });
     return;
   }
   while (!stopped()) {
+    if (zhaopinBlocked()) return;
     if (wubaBlocked()) return;
+    if (!scopeReady()) {
+      notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'failed', error: '智联搜索条件在采集中发生变化，进度已保留' });
+      return;
+    }
     await waitWhilePaused();
     if (stopped()) break;
     if (processedCount >= maxJobs) break;
@@ -3216,6 +3240,8 @@ async function visualCollectListOnly(opts = {}) {
     await sleep(settleMsNow());
     if (stopped()) break;
     await waitWhilePaused();
+    if (stopped()) break;
+    if (zhaopinBlocked() || wubaBlocked()) return;
     const job = extractJobFromCardOnly(card);
     if (!job) continue; // A native recommendation boundary can arrive after a card was selected.
     // 补齐详情 JD / 技能 / 福利 / HR（智联经 JSON 详情接口、猎聘经同源详情页 HTML；
@@ -3302,9 +3328,9 @@ ipcRenderer.on('prefill-greeting', (_e, arg) => {
 // page-status：页面自身的就绪事实（readyState / 卡片命中 / 选择器计数 / 骨架屏启发式），
 // seq 供宿主 promise 化。宿主据此判定「搜索页是否真的加载完成」，不再只信加载遮罩状态机。
 ipcRenderer.on('page-status', (_e, arg) => {
-  const { seq } = (arg && typeof arg === 'object') ? arg : {};
+  const { seq, expectedSearchUrl } = (arg && typeof arg === 'object') ? arg : {};
   let data = { error: 'page-status 失败' };
-  try { data = pageStatusData(); } catch (e) { data = { error: String(e?.message || e), url: location.href }; }
+  try { data = pageStatusData(expectedSearchUrl); } catch (e) { data = { error: String(e?.message || e), url: location.href }; }
   notify('page-status-result', { seq, ...data });
 });
 

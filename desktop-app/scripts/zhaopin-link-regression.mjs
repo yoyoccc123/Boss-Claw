@@ -12,8 +12,8 @@ import { spawnSync } from 'node:child_process';
 const require = createRequire(import.meta.url), root = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporary = mkdtempSync(join(tmpdir(), 'bossclaw-zhaopin-link-'));
 const outfile = join(temporary, 'link.cjs');
-await build({ stdin: { contents: "export * from './src/lib/bossclaw/jobDetailLink'; export {makePendingItem,useDataStore} from './src/store/useDataStore';", loader: 'ts', resolveDir: root }, bundle: true, platform: 'node', format: 'cjs', outfile, tsconfig: join(root, 'tsconfig.json'), logLevel: 'silent' });
-const { resolveJobDetailUrl, normalizeJobDetailMetadata, repairZhaopinPending, isZhaopinCardFragment, makePendingItem } = require(outfile);
+await build({ stdin: { contents: "export * from './src/lib/bossclaw/jobDetailLink'; export {autoConfirmPending} from './src/lib/bossclaw/autoConfirmation'; export {makePendingItem,useDataStore} from './src/store/useDataStore';", loader: 'ts', resolveDir: root }, bundle: true, platform: 'node', format: 'cjs', outfile, tsconfig: join(root, 'tsconfig.json'), logLevel: 'silent' });
+const { resolveJobDetailUrl, normalizeJobDetailMetadata, repairZhaopinPending, isZhaopinCardFragment, makePendingItem, autoConfirmPending } = require(outfile);
 const A = require(join(root, 'electron/preload/platform-adapters.cjs'));
 const number = 'CC000100540J41023445004', detail = `https://www.zhaopin.com/jobdetail/${number}.htm`;
 let checks = 0;
@@ -65,7 +65,7 @@ const body = `<style>.job-card,.joblist-box__item{padding:10px;margin:4px;min-he
 </div>
 <div class="joblist-box__item" data-case="legacy"><a class="jobinfo__name" href="${detail}">旧版开发实习生</a><span class="jobinfo__salary">200元/天</span><a class="companyinfo__name">旧版公司</a></div>`;
 const code = `(()=>{const ADAPTERS=${JSON.stringify({ PLATFORM_CARD_SELECTORS: A.PLATFORM_CARD_SELECTORS, PLATFORM_CARD_CONTAINER_SELECTOR: A.PLATFORM_CARD_CONTAINER_SELECTOR })}; ADAPTERS.jobIdFromUrl=${A.jobIdFromUrl.toString()};const PLATFORM='zhaopin',PLATFORM_LIST_SELECTORS=ADAPTERS.PLATFORM_CARD_SELECTORS,FIELD_SELECTORS=${JSON.stringify(A.PLATFORM_FIELD_SELECTORS.zhaopin)},LINK_SELECTOR=${JSON.stringify(A.PLATFORM_LINK_SELECTOR.zhaopin)};
-const all=(selector,scope=document)=>Array.from(scope.querySelectorAll(selector)),first=(selector,scope=document)=>scope?.querySelector(selector),notify=()=>{},cleanCompanyName=s=>String(s||''),looksLikeLocation=()=>false;
+const detectPlatform=${A.detectPlatform.toString()};const all=(selector,scope=document)=>Array.from(scope.querySelectorAll(selector)),first=(selector,scope=document)=>scope?.querySelector(selector),notify=()=>{},cleanCompanyName=s=>String(s||''),looksLikeLocation=()=>false;
 ${['CARD_LINE_NOISE','SALARY_LINE_RE','SALARY_TEXT_RE','SALARY_WHOLE_RE'].map(name => `const ${name}=${constants.get(name)};`).join('\n')}
 ${functionNames.map(name => functions.get(name)).join('\n')}
 const cards=collectCards(true);return {cases:cards.map(c=>c.getAttribute('data-case')),titles:cards.map(c=>cardIdentity(c).title),oldSelectorCount:document.querySelectorAll('[class*="job-card"]').length,actualCardCount:cards.length};})()`;
@@ -95,7 +95,7 @@ const context = {
   visualActiveRef: { current: false }, cfxActiveRef: { current: false }, searchTriggered: { current: false }, lastApplyStageRef: { current: '' },
   deliverySubmittedRef: { current: false },
   setActiveId: () => {}, setApplyStage: () => {}, addLog: () => {}, setRunning: () => {}, setAutoAssist: () => {}, startCollect: () => {},
-  resolveJobDetailUrl, isZhaopinCardFragment, ZHAOPIN_LINK_ERROR: 'incomplete detail link',
+  resolveJobDetailUrl, isZhaopinCardFragment, autoConfirmPending, ZHAOPIN_LINK_ERROR: 'incomplete detail link',
   updatePending: (id, patch) => { queue = queue.map(p => p.id === id ? { ...p, ...patch } : p); }, recomputeStats: () => {},
   requestRunNext: () => { requested++; }, pauseAssist: () => { pauses++; }, precheckDelivery: () => allowed,
   deliverNonBoss: async (item, url) => { boundaryCalls.push({ id: item.id, url }); }, deliverCamoufox: async () => {}, deliverBossDom: async (item, url) => { boundaryCalls.push({ id: item.id, url }); },

@@ -162,6 +162,7 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
   const cards = ['A', 'B'].map(id => ({ id, querySelector: () => ({ href: `https://example.test/job/${id}?tracking=secret#hash` }), getAttribute: () => null }));
   const p = { Date, Math, Set, URL, PLATFORM: platform, ADAPTERS: { supportsInlineDetail: () => platform === 'boss' },
     WUBA: { readPageBlock: () => null, listState: () => ({ endReached: false }) },
+    readZhaopinPageBlock: () => null,
     location: { href: 'https://example.test/jobs' }, document: { readyState: 'complete' }, collectCtl: {},
     notify: (channel, data) => events.push({ channel, data }), collectNotify: (channel, data) => { events.push({ channel, data }); if (data.phase === 'done') reordered = true; },
     collectCards: () => reordered ? [...cards].reverse() : cards, cardIdentity: card => ({ title: card.id, company: 'company' }),
@@ -210,3 +211,4 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
 }
 console.log(`PASS collection resume and withdrawal: ${checks} production policy/store/host/preload checks; no platform calls.`);
 await import('./collection-traversal-regression.mjs');
+await import('./zhaopin-list-regression.mjs');

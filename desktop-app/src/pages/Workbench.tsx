@@ -1662,16 +1662,16 @@ export default function Workbench() {
     // 现改为：向页内发 page-status 探测，读 document.readyState / 岗位卡片命中数 / 正文长度；
     //   ① 探测能回（说明 preload 已就绪，IPC 不丢）且页面已可用 → 就绪；
     //   ② 遮罩状态只作参考，宽限 2s 后即使遮罩未收敛也按页面事实放行（并记一条诊断日志）。
-    const probePage = async (tabId: string): Promise<any | null> => {
+    const probePage = async (tabId: string, expectedSearchUrl: string): Promise<any | null> => {
       try {
-        const st = await webviewApi.current?.pageStatus?.(tabId);
+        const st = await webviewApi.current?.pageStatus?.(tabId, platform === 'zhaopin' ? expectedSearchUrl : undefined);
         return st && !st.error ? st : null;
       } catch {
         return null;
       }
     };
     const pageUsable = (st: any): boolean =>
-      Boolean(st && !st.collectionBlocked && !st.collectionLoading && (
+      Boolean(st && st.collectionScopeMatches !== false && !st.collectionBlocked && !st.collectionLoading && (
         Number(st.cards) > 0 ||
         String(st.readyState) === 'complete' ||
         String(st.readyState) === 'interactive' ||
@@ -1704,7 +1704,7 @@ export default function Workbench() {
       return `${base}，末次 ${describePage(r.st)}${r.st.url ? `，URL=${String(r.st.url).slice(0, 120)}` : ''}${loginWallHit(r.st) ? '，命中登录特征' : ''}`;
     };
 
-    const waitTabReady = async (tabId: string, timeoutMs: number, keyword: string): Promise<PageReadyResult> => {
+    const waitTabReady = async (tabId: string, timeoutMs: number, keyword: string, expectedSearchUrl: string): Promise<PageReadyResult> => {
       const startedAt = Date.now();
       const deadline = startedAt + timeoutMs;
       let lastNotice = 0;
@@ -1716,7 +1716,7 @@ export default function Workbench() {
         const preloadFlag = Boolean(webviewApi.current?.isPreloadReady?.(tabId));
         const overlay = Boolean(webviewApi.current?.isLoading?.(tabId));
         probes += 1;
-        const probed = await probePage(tabId);
+        const probed = await probePage(tabId, expectedSearchUrl);
         if (generation !== collectBatchGenerationRef.current) return { ready: false, reason: 'stopped', st, probes, okProbes };
         if (probed) okProbes += 1;
         st = probed || st;
@@ -1757,6 +1757,7 @@ export default function Workbench() {
     addLog('info', `开始可视化采集（${platformLabel(platform)}）：共 ${queue.length} 个搜索组合，${platform === 'boss' ? '逐岗位平滑滚动 + 高亮 + 点击展开详情' : '列表级滚动 + 高亮（不点开详情，详情 JD 按平台详情接口补齐）'}${cfg0.collectWithoutKeyword ? '（无关键字模式：链接不带 query，仅保留城市 / 求职类型等筛选）' : ''}`);
     // 本批采集任务的 runId（用于结束时把未收尾的卡片统一收口）
     const batchRunIds: string[] = [];
+    const listRetryIndexes = new Set<number>();
     let browseWaitSignature = '';
     for (let qi = checkpointContext.checkpoint.index; qi < queue.length; qi += 1) {
       const item = queue[qi];
@@ -1819,7 +1820,7 @@ export default function Workbench() {
       collectPhaseRef.current = 'loading';
       webviewApi.current?.loadURLInTab(tabId, item.url);
       const kwLabel = keywordLabel(item.keyword);
-      let waitRes = await waitTabReady(tabId, pageTimeoutMs, kwLabel);
+      let waitRes = await waitTabReady(tabId, pageTimeoutMs, kwLabel, item.url);
       if (generation !== collectBatchGenerationRef.current) break;
       // 未登录 / 登录态失效属「平台级」故障：**不重试**（重试只会再白等一整轮），
       // 记录原因后由主循环收口本平台剩余搜索组合（与 collectFaultScope 的平台级口径一致）。
@@ -1838,7 +1839,7 @@ export default function Workbench() {
         // 首次等待超时：重载一次再等一轮（BOSS 偶发首屏挂起 / 重定向吞掉导航事件导致标记不翻转）
         addLog('warn', `「${kwLabel}」页面首次加载超时（${Math.round(pageTimeoutMs / 1000)}s；${describeProbe(waitRes)}），自动重载重试一次…`);
         webviewApi.current?.loadURLInTab(tabId, item.url);
-        waitRes = await waitTabReady(tabId, pageTimeoutMs, kwLabel);
+        waitRes = await waitTabReady(tabId, pageTimeoutMs, kwLabel, item.url);
         if (generation !== collectBatchGenerationRef.current) break;
       }
       if (!waitRes.ready) {
@@ -1882,7 +1883,7 @@ export default function Workbench() {
       //   maxJobsPerRun（单次采集兜底上限，0 或缺失沿用 webview 内置 1000 防失控）。
       // 扫描预算只结束本组；每日合格入队目标仍由 checkCollectionGoal 负责停止整批采集。
       await visualCollectInTab(tabId, {
-        expectedSearchUrl: platform === 'wuba' ? item.url : undefined,
+        expectedSearchUrl: platform === 'wuba' || platform === 'zhaopin' ? item.url : undefined,
         settleMs: collectSpeedMs,
         listTimeoutMs: pageTimeoutMs,
         autoScroll: config.listAutoScroll !== false,
@@ -1907,6 +1908,12 @@ export default function Workbench() {
       const got = Math.max(0, ingestedSeenRef.current.size - before);
       if (generation !== collectBatchGenerationRef.current || !visualActiveRef.current) break;
       const reachedGroupLimit = collectTerminalRef.current === 'limit';
+      if (platform === 'zhaopin' && collectTerminalRef.current === 'failed' && got === 0
+        && !checkpointContext.unresolved.size && !listRetryIndexes.has(qi)) {
+        listRetryIndexes.add(qi);
+        addLog('warn', `智联「${kwLabel}」未读取到有效岗位列表，保留本组断点并重新加载重试一次`);
+        qi -= 1; continue;
+      }
       if (checkpointContext.unresolved.size || (collectTerminalRef.current !== 'completed' && !reachedGroupLimit)) {
         const terminalLabels: Record<string, string> = { completed: '已采完', stopped: '已中止', limit: '达到本组采集上限', blocked: '页面要求登录或验证', failed: '采集异常' };
         addLog('warn', `本组尚未完成（页面：${terminalLabels[collectTerminalRef.current] || '未收到结束确认'}；未完成分析确认：${checkpointContext.unresolved.size} 个），已保存城市、关键词和已处理岗位；下次可继续采集`);

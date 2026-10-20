@@ -1060,9 +1060,10 @@ async function createMainWindow() {
   //   3. click 捕获：用户点岗位卡 → 命中索引 → preventDefault + 整页导航到独立详情页
   //      （当前标签跳转、可后退回列表）；匹配不到不做接管，退回站点原生内联。
   const ZP_DETAIL_NAV_SCRIPT = `(function () {
+    var readZhaopinCardModel = ${require('./preload/zhaopin-list.cjs').readZhaopinCardModel.toString()};
+    if (location.pathname.indexOf('/sou/') !== 0 && location.pathname !== '/jobs' && location.pathname.indexOf('/jobs/') !== 0) return;
     if (window.__bossclawZpNavDone) return; window.__bossclawZpNavDone = true;
-    var inc = window.__INITIAL_STATE__;
-    if (!inc) return;
+    var inc = window.__INITIAL_STATE__ || {};
     // 不再因「此刻还没有 .job-card」就整体退出：应用自身搜索 URL 是 /sou/（服务端渲染的
     // 旧版 .joblist-box__item 列表，带 jobdetail 锚点），而智联客户端随后可能把它换成新版
     // 拆分布局（.job-card，卡片无锚点）——若在 did-finish-load 时就退出，换版后新出现的
@@ -1092,9 +1093,9 @@ async function createMainWindow() {
         if (Array.isArray(v) && v.length && v[0] && (v[0].positionName || v[0].name) && (v[0].positionNumber || v[0].number)) collectArray(v);
       });
     }
-    if (!jobs.length && !document.querySelector('.job-card') && !document.querySelector('[class*="joblist-box"]')) return;
-    // 注：SSR 无岗位索引但页面有列表 DOM 时**继续安装**（下方列表接口旁路监听会把滚动加载出来的
-    // 岗位并入索引）；两者都没有 = 与岗位列表无关的智联页面（首页 / 公司页等）→ 不注入任何钩子。
+    // Keep observing search skeletons even before SSR/native cards exist.
+    // 搜索骨架页也继续安装：原生卡片和后续列表响应可能晚于 did-finish-load。
+    // 非搜索页面已由入口路径检查排除。
     var detailBase = 'https://www.zhaopin.com/jobdetail/';
     // ===== 新鲜度闸门：激活卡（页面 boot 选中）标题与 selectedJobId 岗位名一致才算「索引可信」=====
     // 智联客户端刷新 / 交互后 __INITIAL_STATE__ 可能与当前卡片不同步（实测 20 卡 20 岗两套数据），
@@ -1127,6 +1128,17 @@ async function createMainWindow() {
       var done = 0;
       for (var i = 0; i < cards.length; i++) {
         var card = cards[i];
+        if (card.__vue__?.$props?.job || card.hasAttribute('data-bossclaw-native-job')) {
+          var native = readZhaopinCardModel(card);
+          var attrs = { 'data-bossclaw-jobdetail': native?.url, 'data-bossclaw-jobtitle': native?.title };
+          for (var attr in attrs) {
+            if (!attrs[attr]) card.removeAttribute(attr);
+            else if (card.getAttribute(attr) !== attrs[attr]) card.setAttribute(attr, attrs[attr]);
+          }
+          if (card.getAttribute('data-bossclaw-native-job') !== (native?.number || 'pending')) card.setAttribute('data-bossclaw-native-job', native?.number || 'pending');
+          if (native) done += 1;
+          continue;
+        }
         if (card.getAttribute('data-bossclaw-jobdetail')) { done += 1; continue; }
         var nameEl = card.querySelector('.vue-clamp__text');
         var name = nameEl ? norm(nameEl.getAttribute('aria-label') || nameEl.textContent) : '';
@@ -1140,14 +1152,14 @@ async function createMainWindow() {
       if (fresh && done === 0 && inc.selectedJobId && byJobId[String(inc.selectedJobId)]) {
         var active = document.querySelector('.job-card--active');
         var aj = byJobId[String(inc.selectedJobId)];
-        if (active && !active.getAttribute('data-bossclaw-jobdetail')) {
+        if (active && !active.hasAttribute('data-bossclaw-native-job') && !active.getAttribute('data-bossclaw-jobdetail')) {
           active.setAttribute('data-bossclaw-jobdetail', detailBase + aj.pn + '.htm');
         }
       }
       if (fresh && done === 0 && cards.length === jobs.length && cards.length > 0) {
         for (var k = 0; k < cards.length; k++) {
           var c2 = cards[k];
-          if (!c2.getAttribute('data-bossclaw-jobdetail')) c2.setAttribute('data-bossclaw-jobdetail', detailBase + jobs[k].pn + '.htm');
+          if (!c2.hasAttribute('data-bossclaw-native-job') && !c2.getAttribute('data-bossclaw-jobdetail')) c2.setAttribute('data-bossclaw-jobdetail', detailBase + jobs[k].pn + '.htm');
         }
       }
     };
