@@ -7,3 +7,5 @@
 *.webp binary
 *.pdf binary
 *.zip binary
+# Git hooks must keep Unix newlines on Windows as well.
+.githooks/* text eol=lf

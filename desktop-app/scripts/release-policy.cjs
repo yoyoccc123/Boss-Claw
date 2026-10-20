@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const OWNER = 'BossClaw-release-v1';
-const SUITES = ['delivery-stop', 'collection-resume', 'collection-goal', 'delivery-throttle',
+const SUITES = ['repository-privacy', 'delivery-stop', 'collection-resume', 'collection-goal', 'delivery-throttle',
   'boss-chat', 'boss-browse', 'browser-navigation', 'session-persistence', 'single-instance', 'zhaopin-greeting', 'wuba', 'resume-facts', 'tailor-iteration', 'resume-variants', 'resume'];
 const same = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 const inside = (parent, target) => {

@@ -57,6 +57,8 @@ const report = { version: pkg.version, state: 'checking', asar: pkg.build.asar =
 const reportPath = path.join(logDir, 'release-report.json');
 const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
 try {
+  console.log('校验仓库隐私：源码和全部新增历史对象');
+  await node('scripts/repository-privacy-check.mjs', '--history', 'HEAD');
   if (!checkOnly) {
     if (git('status', '--porcelain')) throw Error('Commit reviewed source changes before publishing');
     report.commit = git('rev-parse', 'HEAD');
@@ -150,6 +152,8 @@ try {
       sourceTags.push(name);
     }
     // A remote failure leaves validated artifacts and the rollback program intact.
+    for (const revision of ['HEAD', 'refs/tags/v' + pkg.version, ...sourceTags.map(t => 'refs/tags/' + t)])
+      await node('scripts/repository-privacy-check.mjs', '--history', revision);
     await run('git', ['push', '--atomic', 'origin', 'HEAD', 'refs/tags/v' + pkg.version, ...sourceTags.map(t => 'refs/tags/' + t)], { env });
     report.state = marker.state = 'published';
     fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2)); save();

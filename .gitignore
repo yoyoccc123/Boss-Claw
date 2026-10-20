@@ -68,6 +68,21 @@ venv/
 *.diagnostic.json
 *.local.json
 
+# Private profiles and attachments must stay outside the source repository.
+.bossclaw/
+**/.bossclaw/
+**/userData/
+**/Local Storage/
+**/Partitions/
+**/leveldb/
+**/private-resumes/
+*.har
+*.pdf
+*.doc
+*.docx
+**/*cookies*.json
+**/*credentials*.json
+
 # MCP 本地持久化残留（bossclaw_workspace 已删除，仅保留忽略规则防历史文件入库）
 mcp/bossclaw-mcp/.workspace-root
 

@@ -47,7 +47,11 @@
     "test:browser-navigation": "node scripts/browser-navigation-regression.mjs",
     "test:session-persistence": "node scripts/session-persistence-regression.mjs",
     "test:single-instance": "node scripts/single-instance-regression.mjs",
-    "test:wuba": "node scripts/wuba-regression.mjs"
+    "test:wuba": "node scripts/wuba-regression.mjs",
+    "postinstall": "node scripts/install-privacy-hooks.mjs",
+    "test:privacy": "node scripts/repository-privacy-regression.mjs",
+    "privacy:check": "node scripts/repository-privacy-check.mjs --history HEAD",
+    "privacy:install": "node scripts/install-privacy-hooks.mjs"
   },
   "build": {
     "appId": "com.bossclaw.desktop",
