@@ -49,10 +49,10 @@ async function runner(scope, executionMode = 'review') {
   const state = { autoAssist: true, deliveryPlatforms: scope }, config = { ...cfg, executionMode }, sent = [], collected = [];
   const data = { pending: [make('boss'), make('liepin'), make('zhaopin')], setPending(v) { this.pending = v; }, recomputeStats() {} };
   const c = { ...T, Date, useAppStore: { getState: () => state }, useDataStore: { getState: () => data }, useSettingsStore: { getState: () => ({ config }) },
-    visualActiveRef: { current: false }, cfxActiveRef: { current: false }, searchPlatforms: ['boss'], searchTriggered: { current: false },
+    visualActiveRef: { current: false }, cfxActiveRef: { current: false }, collectBatchRef: { current: null }, searchPlatforms: ['boss'], searchTriggered: { current: false },
     isDeliveryClaimed: () => false, setRunning: () => {}, setAutoAssist: v => { state.autoAssist = v; }, addLog: () => {}, setActiveId: () => {},
     setApplyStage: () => {}, deliverySubmittedRef: { current: false }, lastApplyStageRef: { current: '' }, precheckDelivery: () => true,
-    checkCollectionGoal: () => false, startCollect: (mode, platforms) => collected.push({ mode, platforms }),
+    checkCollectionGoal: () => false, startCollect: (mode, platforms, automatic) => collected.push({ mode, platforms, automatic }),
     deliverNonBoss: async p => sent.push(p.job.platform), deliverBossDom: async p => sent.push(p.job.platform),
     deliverCamoufox: async p => sent.push(p.job.platform), pauseAssist: msg => { throw Error(msg); } };
   vm.createContext(c); vm.runInContext((await transform(`globalThis.runNext=${variables.get('runNext')};`, { loader: 'tsx' })).code, c);
@@ -71,7 +71,12 @@ async function runner(scope, executionMode = 'review') {
 }
 {
   const h = await runner(['zhaopin'], 'auto'); h.data.pending = [make('boss')]; await h.c.runNext();
-  check(!h.sent.length && same(h.collected, [{ mode: 'continue', platforms: ['zhaopin'] }]), 'automatic collection follows delivery scope rather than the manual collection selector');
+  check(!h.sent.length && same(h.collected, [{ mode: 'continue', platforms: ['zhaopin'], automatic: true }]), 'automatic collection follows delivery scope and marks the batch as owned by delivery');
+}
+{
+  const h = await runner(['zhaopin'], 'auto'); h.data.pending = [make('boss')];
+  h.c.collectBatchRef.current = { generation: 1, automatic: true }; await h.c.runNext();
+  check(h.state.autoAssist && !h.sent.length && !h.collected.length, 'an active multi-platform collection batch prevents a premature selected-queue completion');
 }
 {
   const h = await runner([]); await h.c.runNext(); check(!h.sent.length && !h.collected.length && !h.state.autoAssist, 'empty scope cannot collect or dispatch');
