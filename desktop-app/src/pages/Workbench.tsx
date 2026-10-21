@@ -46,7 +46,7 @@ import { detectInterviewMode } from '@/lib/bossclaw/interviewMode';
 import { detectWorkSchedule } from '@/lib/bossclaw/workSchedule';
 import { buildSearchQueue } from '@/lib/bossclaw/searchUrl';
 import { buildPlatformSearchQueue, describePlatformCriteria, type PlatformSearchQueueItem } from '@/lib/bossclaw/platformUrls';
-import { collectFaultScope, platformEnabled, platformLabel, sortedEnabledPlatforms, PLATFORM_IDS, type JobPlatform } from '@/lib/bossclaw/platforms';
+import { collectFaultScope, platformLabel, sortedEnabledPlatforms, PLATFORM_IDS, type JobPlatform } from '@/lib/bossclaw/platforms';
 import {
   effectiveDailyCapFor, dailySentCountFor, isLockedOut,
   cooldownRemaining, classifyRiskCode, humanDelayMs, SAFETY_LIMITS, resolveCooldownMs, nextCooldownUntil,
@@ -2200,8 +2200,8 @@ export default function Workbench() {
     return runVisualCollect(platform, runIds, mode);
   };
 
-  // The batch owns the gaps between platform runners too. An empty delivery queue during
-  // such a gap must not turn off autoAssist while the next platform is about to start.
+  // The batch owns the gaps between platform runners too, so another collection cannot
+  // overlap it. Collection and delivery have independent start/stop controls.
   const runCollectionBatch = async (targets: JobPlatform[], mode: CollectionStartMode = 'continue', runIdsAll?: string[], automatic = false) => {
     if (collectBatchRef.current || visualActiveRef.current || cfxActiveRef.current || !targets.length) return;
     const generation = ++collectBatchGenerationRef.current;
@@ -2833,16 +2833,7 @@ export default function Workbench() {
     const ranked = rerankPending(confirmed, cfg);
     let candidate = ranked.find((p) => p.status === 'approved_queue' && platforms.includes(p.job?.platform || 'boss') && !isDeliveryClaimed(p.id, p.job?.platform));
     if (!candidate) {
-      if (collectBatchRef.current || visualActiveRef.current || cfxActiveRef.current) return;
-      const targets = platforms;
-      const canCollect = targets.some(p => platformEnabled(cfg, p) && !checkCollectionGoal(p));
-      if (cfg.executionMode === 'auto' && canCollect && !searchTriggered.current) {
-        searchTriggered.current = true;
-        addLog('info', `所选投递平台暂无待投递岗位，先自动采集（${targets.map(platformLabel).join('、')}）`);
-        startCollect('continue', targets, true);
-        return;
-      }
-      addLog('info', '所选平台的投递队列已空，投递结束；其他平台岗位保留');
+      addLog('info', '所选平台的投递队列已空，投递已停止；如需更多岗位，请手动点击「搜索采集」');
       setRunning(false);
       setAutoAssist(false);
       return;
@@ -3370,7 +3361,7 @@ export default function Workbench() {
               value={deliveryPlatforms} onChange={setDeliveryPlatforms} disabled={autoAssist || running}
               options={enabledPlatforms.map(p => ({ value: p, label: platformLabel(p) }))}
               placeholder="选择要投递的平台" />
-            <Text type="secondary" style={{ fontSize: 12 }}>仅投所选平台，其他平台岗位保留在队列中</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>仅投所选平台的队列，投完即停；需要更多岗位请手动搜索采集</Text>
           </div>
           <Text type="secondary" style={{ fontSize: 12 }}>全部平台统计 · 点击数字查看对应岗位（清除列表筛选）</Text>
           <div className="wb-progress-stats">

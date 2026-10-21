@@ -158,13 +158,13 @@ async function host(){
   const platforms=[],rechecks=[];
   h.c.runCollectFor=async pf=>{
     platforms.push(pf);await h.c.runNext();
-    check(h.app.autoAssist,'empty queue during a platform gap leaves automatic delivery enabled');
+    check(!h.app.autoAssist,'an empty delivery queue stops without waiting for collection or searching again');
     return 'done';
   };
   h.c.requestRunNext=()=>rechecks.push('after batch');
-  await h.c.runCollectionBatch(['boss','zhaopin'],'continue',undefined,true);
-  check(platforms.join()==='boss,zhaopin'&&rechecks.length===1&&!h.c.collectBatchRef.current,
-    'the complete automatic batch finishes before its final queue-empty recheck');
+  await h.c.runCollectionBatch(['boss','zhaopin']);
+  check(platforms.join()==='boss,zhaopin'&&rechecks.length===0&&!h.c.collectBatchRef.current,
+    'manual collection can finish both platforms without restarting the stopped delivery engine');
 }
 for(const automatic of [true,false]){
   const h=await host();h.c.visualActiveRef.current=false;
@@ -228,6 +228,22 @@ for(const failure of ['abort','exception']){
   check(h.deliveries()===1&&h.searches()===0,'real runNext confirms an existing eligible pending job before searching');
   h.data.pending=[];h.data.collectionCounts={boss:{date:T.collectionDay(now),count:cfg.platforms.boss.pendingTarget}};
   await h.c.runNext();check(h.searches()===0&&!h.app.autoAssist,'when goal is reached and queue is empty the engine ends without starting another search');
+}
+for(const mode of ['auto','review']) for(const targetReached of [false,true]){
+  const h=await host();const original=cfg.executionMode;cfg.executionMode=mode;
+  h.c.visualActiveRef.current=false;
+  h.data.collectionCounts=targetReached?{boss:{date:T.collectionDay(now),count:cfg.platforms.boss.pendingTarget}}:{};
+  h.data.pending=[item('existing',{status:'approved_queue'})];await h.c.runNext();
+  h.data.pending=[];await h.c.runNext();
+  check(h.deliveries()===1&&h.searches()===0&&!h.app.autoAssist,
+    `${mode}/${targetReached?'goal reached':'below goal'}: finishing the existing queue stops without automatic top-up`);
+  await h.c.runNext();
+  check(h.searches()===0&&h.deliveries()===1,'late runner callbacks cannot restart a completed delivery');
+  cfg.executionMode=original;
+}
+{
+  const h=await host();h.c.visualActiveRef.current=false;await h.c.runNext();
+  check(h.searches()===0&&!h.app.autoAssist,'starting delivery with an empty queue never starts collection');
 }
 {
   const h=await host();h.app.autoAssist=false;h.data.pending=[item('stopped')];await h.c.runNext();

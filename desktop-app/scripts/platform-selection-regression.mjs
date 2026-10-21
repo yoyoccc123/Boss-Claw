@@ -71,12 +71,13 @@ async function runner(scope, executionMode = 'review') {
 }
 {
   const h = await runner(['zhaopin'], 'auto'); h.data.pending = [make('boss')]; await h.c.runNext();
-  check(!h.sent.length && same(h.collected, [{ mode: 'continue', platforms: ['zhaopin'], automatic: true }]), 'automatic collection follows delivery scope and marks the batch as owned by delivery');
+  check(!h.sent.length && !h.collected.length && !h.state.autoAssist, 'an empty selected queue stops full-auto delivery without collecting more jobs or widening platform scope');
 }
 {
   const h = await runner(['zhaopin'], 'auto'); h.data.pending = [make('boss')];
   h.c.collectBatchRef.current = { generation: 1, automatic: true }; await h.c.runNext();
-  check(h.state.autoAssist && !h.sent.length && !h.collected.length, 'an active multi-platform collection batch prevents a premature selected-queue completion');
+  check(!h.state.autoAssist && !h.sent.length && !h.collected.length && h.c.collectBatchRef.current,
+    'an empty delivery queue stops independently while an explicitly started collection retains its ownership');
 }
 {
   const h = await runner([]); await h.c.runNext(); check(!h.sent.length && !h.collected.length && !h.state.autoAssist, 'empty scope cannot collect or dispatch');
