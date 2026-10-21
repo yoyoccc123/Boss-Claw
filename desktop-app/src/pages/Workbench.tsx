@@ -355,6 +355,8 @@ export default function Workbench() {
   const collectDoneResolve = useRef<(() => void) | null>(null);
   const collectSequenceRef = useRef(0);
   const collectBatchGenerationRef = useRef(0);
+  const collectBatchRef = useRef<{ generation: number; automatic: boolean } | null>(null);
+  const [collectBatchActive, setCollectBatchActive] = useState(false);
   const collectPhaseRef = useRef<'idle' | 'loading' | 'collecting' | 'analyzing' | 'browse-wait'>('idle');
   const collectDeadlineRef = useRef(0);
   const collectTimeoutMsRef = useRef(0);
@@ -504,11 +506,6 @@ export default function Workbench() {
       }
     } else {
       if (running) {
-        visualActiveRef.current = false;
-        setVisualCollecting(false);
-        setVisualPaused(false);
-        cfxActiveRef.current = false;
-        setCfxCollecting(false);
         setRunning(false);
         if (!deliverySubmittedRef.current) {
           setActiveId(null);
@@ -1356,7 +1353,12 @@ export default function Workbench() {
   // ===== 可视化采集（对齐 job-claw-main：逐卡片滚动 + 高亮 + 点击展开详情）=====
   // 采集进度回传（collect-progress）：更新实时状态面板；phase=done 时入库
   const handleCollectProgress = useCallback((data: any) => {
-    if (data?.seq && data.seq !== collectAwaitingSeqRef.current) return;
+    if (!collectAwaitingSeqRef.current || data?.seq !== collectAwaitingSeqRef.current) return;
+    // A long list can legitimately take longer than the initial allowance. Only a completed
+    // extraction renews it; waiting notices and repeated heartbeats cannot keep a stuck page alive.
+    if (data.phase === 'done' && data.job) {
+      collectDeadlineRef.current = Math.max(collectDeadlineRef.current, Date.now() + collectTimeoutMsRef.current);
+    }
     if (data?.phase === 'browse-wait') {
       collectPhaseRef.current = 'browse-wait';
       if (Number.isFinite(data.retryAt)) collectDeadlineRef.current = Math.max(collectDeadlineRef.current, data.retryAt + collectTimeoutMsRef.current);
@@ -1432,7 +1434,8 @@ export default function Workbench() {
   const handleCollectDone = useCallback((data: any) => {
     if (!collectAwaitingSeqRef.current || data?.seq !== collectAwaitingSeqRef.current) return;
     collectTerminalRef.current = data?.reason || (data?.error ? 'failed' : data?.loginRequired ? 'blocked' : data?.finalized ? 'failed' : 'completed');
-    if (data?.error) addLog('warn', `本组采集未完成：${String(data.error).slice(0, 400)}`);
+    const error = data?.error || (data?.finalized ? '采集脚本已退出，但未返回本组结束状态' : '');
+    if (error) addLog('warn', `本组采集未完成：${String(error).slice(0, 400)}`);
     if (data?.empty && collectTerminalRef.current === 'completed') addLog('info', '平台明确返回暂无匹配岗位，本组已完成，继续下一个搜索组合');
     // 不采用 webview 回传的 processed（卡片 key 去重不稳定，会虚高如"5181"）；
     // 「已处理」以 batch 内实际入库/入眼的唯一岗位数（ingestedSeenRef.size）为准，见 runVisualCollect。
@@ -1464,7 +1467,7 @@ export default function Workbench() {
       const listWaitMs = Math.max(5000, Number(opts.listTimeoutMs) || 30000);
       // 客户端兜底超时必须晚于页内「列表首屏等待 + 逐卡片采集」的自然结束点：
       // 旧公式只按 settleMs 线性估算，列表页更长时会在页内仍在采集时切走标签（跨组合串台）；
-      // 现在把列表首屏等待与逐卡片节奏一并计入，并放宽到 15min 上限（仅作最后兜底）。
+      // 此值是无有效采集进展的等待上限；每次提取成功都续期，不限制整组总耗时。
       const timeoutMs = Math.min(900000, listWaitMs + 120000 + 240 * settleMs);
       collectTimeoutMsRef.current = timeoutMs;
       collectDeadlineRef.current = Date.now() + timeoutMs;
@@ -1474,12 +1477,13 @@ export default function Workbench() {
           timer = setTimeout(checkTimeout, Math.max(1000, collectDeadlineRef.current - Date.now())); return;
         }
         collectTerminalRef.current = 'failed';
+        addLog('warn', `采集连续 ${Math.round(timeoutMs / 1000)} 秒未完成新的岗位读取，已停止本组并保留断点`);
         webviewApi.current?.sendInTab(tabId, 'collect-control', { action: 'stop' });
         finish();
       };
       timer = setTimeout(checkTimeout, timeoutMs);
     });
-  }, []);
+  }, [addLog]);
 
   // 运行时控制：暂停 / 继续 / 停止 / 调速
   const controlCollect = useCallback((action: 'pause' | 'resume' | 'stop' | 'speed', settleMs?: number) => {
@@ -1649,6 +1653,8 @@ export default function Workbench() {
       message.warning('没有可用标签页，无法启动可视化采集');
       return 'skip';
     }
+    webviewApi.current?.activateTab(collectTabId);
+    addLog('info', `已显示${platformLabel(platform)}采集页`);
 
     const collectSpeedMs = Math.max(400, Number(config.collectSpeedMs) || 1200);
     // 搜索页加载等待上限：可配置（设置 → 搜索采集范围控制），默认 30s。
@@ -1793,6 +1799,7 @@ export default function Workbench() {
         if (!t) break;
         tabId = t;
         visualTabRef.current = tabId;
+        webviewApi.current?.activateTab(tabId);
       }
 
       // 采集任务卡片（写入 taskRuns → 「任务进度」页实时出现/更新对应卡片）
@@ -2193,39 +2200,64 @@ export default function Workbench() {
     return runVisualCollect(platform, runIds, mode);
   };
 
-  /** 手动「搜索采集」入口：按当前所选平台串行采集（不等待，引擎常驻执行） */
-  const startCollect = (mode: CollectionStartMode = 'continue', platformScope?: JobPlatform[]) => {
-    if (visualActiveRef.current || cfxActiveRef.current) return;
+  // The batch owns the gaps between platform runners too. An empty delivery queue during
+  // such a gap must not turn off autoAssist while the next platform is about to start.
+  const runCollectionBatch = async (targets: JobPlatform[], mode: CollectionStartMode = 'continue', runIdsAll?: string[], automatic = false) => {
+    if (collectBatchRef.current || visualActiveRef.current || cfxActiveRef.current || !targets.length) return;
     const generation = ++collectBatchGenerationRef.current;
+    collectBatchRef.current = { generation, automatic };
+    setCollectBatchActive(true);
+    try {
+      for (const pf of targets) {
+        if (generation !== collectBatchGenerationRef.current || visualActiveRef.current || cfxActiveRef.current
+          || (automatic && !useAppStore.getState().autoAssist)) break;
+        const ids = runIdsAll?.filter((id) => String(id).split('_')[1] === pf);
+        let outcome: CollectOutcome = 'done';
+        try {
+          outcome = await runCollectFor(pf, ids, mode);
+        } catch (e) {
+          addLog('error', `采集平台「${platformLabel(pf)}」执行失败：${String((e as Error)?.message || e)}`);
+          if (generation === collectBatchGenerationRef.current) {
+            controlCollect('stop');
+            cfxActiveRef.current = false;
+            setCfxCollecting(false);
+            collectingPlatformRef.current = null;
+          }
+          outcome = 'abort';
+        }
+        if (outcome === 'abort') {
+          addLog('warn', `采集批次已中止：平台「${platformLabel(pf)}」采集被中断，剩余平台不再继续`);
+          break;
+        }
+      }
+    } finally {
+      // A stopped/replaced batch cannot clear a newer batch or restart delivery.
+      if (collectBatchRef.current?.generation === generation) {
+        collectBatchRef.current = null;
+        setCollectBatchActive(false);
+        if (generation === collectBatchGenerationRef.current && useAppStore.getState().autoAssist) requestRunNext();
+      }
+    }
+  };
+
+  /** 手动「搜索采集」入口：按当前所选平台串行采集（不等待，引擎常驻执行） */
+  const startCollect = (mode: CollectionStartMode = 'continue', platformScope?: JobPlatform[], automatic = false) => {
+    if (collectBatchRef.current || visualActiveRef.current || cfxActiveRef.current) return;
     // 至少一个平台：UI 已兜底回填，此处再做一次防御性检查
     const targets = platformScope ?? (searchPlatforms.length
       ? searchPlatforms
       : (sortedEnabledPlatforms(config)[0] ? [sortedEnabledPlatforms(config)[0]] : []));
     if (!targets.length) { message.warning('请先在「设置 → 招聘平台」启用至少一个招聘平台'); return; }
     if (targets.length > 1) {
-      addLog('info', `手动串行采集（${targets.map((p) => platformLabel(p)).join(' → ')}）`);
+      addLog('info', `${automatic ? '自动' : '手动'}串行采集（${targets.map((p) => platformLabel(p)).join(' → ')}）`);
     }
-    void (async () => {
-      for (const pf of targets) {
-        // 中途有手动采集介入则不再启动剩余平台（各引擎入口自带 busy 防御）
-        if (generation !== collectBatchGenerationRef.current || visualActiveRef.current || cfxActiveRef.current) break;
-        let outcome: CollectOutcome = 'done';
-        try {
-          outcome = await runCollectFor(pf, undefined, mode);
-        } catch (e) {
-          addLog('error', `采集平台「${platformLabel(pf)}」执行失败：${String((e as Error)?.message || e)}`);
-        }
-        // 队列级阻断（风控/受限/环境异常）：不再继续剩余平台，交人工确认后再采（BossHunter orchestrator 口径）
-        if (outcome === 'abort') {
-          addLog('warn', `采集批次已中止：平台「${platformLabel(pf)}」触发需人工确认的阻断，剩余平台不再继续`);
-          break;
-        }
-      }
-    })();
+    void runCollectionBatch(targets, mode, undefined, automatic);
   };
 
   const stopAllCollect = () => {
     collectBatchGenerationRef.current += 1;
+    collectBatchRef.current = null;
+    setCollectBatchActive(false);
     searchTriggered.current = true; // A manual stop must not immediately trigger another automatic search batch.
     controlCollect('stop');
     collectPhaseRef.current = 'idle';
@@ -2233,6 +2265,26 @@ export default function Workbench() {
     setCfxCollecting(false);
     addLog('warn', '已停止采集');
   };
+
+  const stopAutomaticCollect = useCallback(() => {
+    if (!collectBatchRef.current?.automatic) return;
+    collectBatchGenerationRef.current += 1;
+    collectBatchRef.current = null;
+    setCollectBatchActive(false);
+    searchTriggered.current = true;
+    controlCollect('stop');
+    collectPhaseRef.current = 'idle';
+    cfxActiveRef.current = false;
+    setCfxCollecting(false);
+    addLog('warn', '已停止投递触发的自动采集，进度已保留');
+  }, [controlCollect, addLog]);
+
+  useEffect(() => {
+    if (!autoAssist) stopAutomaticCollect();
+    return useAppStore.subscribe((state, previous) => {
+      if (previous.autoAssist && !state.autoAssist) stopAutomaticCollect();
+    });
+  }, [autoAssist, stopAutomaticCollect]);
 
   const handleCollectInterrupted = useCallback((data: { tabId: string; reason: string }) => {
     if (!visualActiveRef.current || data.tabId !== visualTabRef.current || collectPhaseRef.current === 'loading' || collectPhaseRef.current === 'idle') return;
@@ -2270,7 +2322,7 @@ export default function Workbench() {
     if (!collectRequest) return;
     const runIdsAll = collectRequest.runIds?.length ? collectRequest.runIds : undefined;
     // 防御：已有采集在进行中则不叠加，仅清除请求（下个周期到点会再次触发）
-    if (visualActiveRef.current || cfxActiveRef.current) {
+    if (collectBatchRef.current || visualActiveRef.current || cfxActiveRef.current) {
       if (runIdsAll) {
         // 定向请求被拒：收口卡片，避免长期停在「已加入采集队列」
         for (const rid of runIdsAll) {
@@ -2295,26 +2347,7 @@ export default function Workbench() {
         ? `按任务定向重新采集（平台：${targets.map((p) => platformLabel(p)).join('/')}，组合 ${runIdsAll.length} 个）`
         : `定时任务触发搜索采集（平台：${targets.map((p) => platformLabel(p)).join('/')}）`
     );
-    const generation = ++collectBatchGenerationRef.current;
-    void (async () => {
-      for (const pf of targets) {
-        // 中途停止或新批次介入，不再启动剩余平台。
-        if (generation !== collectBatchGenerationRef.current || visualActiveRef.current || cfxActiveRef.current) break;
-        // 只把属于该平台的 runId 传下去（空数组会被视为「整批」，故此处必须过滤）
-        const ids = runIdsAll?.filter((id) => String(id).split('_')[1] === pf);
-        let outcome: CollectOutcome = 'done';
-        try {
-          outcome = await runCollectFor(pf, ids);
-        } catch (e) {
-          addLog('error', `采集平台「${platformLabel(pf)}」执行失败：${String((e as Error)?.message || e)}`);
-        }
-        // 队列级阻断：定时采集同样整批中止，避免在风控/受限状态下继续打其它平台
-        if (outcome === 'abort') {
-          addLog('warn', `定时采集已中止：平台「${platformLabel(pf)}」触发需人工确认的阻断，剩余平台不再继续`);
-          break;
-        }
-      }
-    })();
+    void runCollectionBatch(targets, 'continue', runIdsAll);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectRequest, config.camoufox?.enabled]);
 
@@ -2800,13 +2833,13 @@ export default function Workbench() {
     const ranked = rerankPending(confirmed, cfg);
     let candidate = ranked.find((p) => p.status === 'approved_queue' && platforms.includes(p.job?.platform || 'boss') && !isDeliveryClaimed(p.id, p.job?.platform));
     if (!candidate) {
-      if (visualActiveRef.current || cfxActiveRef.current) return;
+      if (collectBatchRef.current || visualActiveRef.current || cfxActiveRef.current) return;
       const targets = platforms;
       const canCollect = targets.some(p => platformEnabled(cfg, p) && !checkCollectionGoal(p));
       if (cfg.executionMode === 'auto' && canCollect && !searchTriggered.current) {
         searchTriggered.current = true;
         addLog('info', `所选投递平台暂无待投递岗位，先自动采集（${targets.map(platformLabel).join('、')}）`);
-        startCollect('continue', targets);
+        startCollect('continue', targets, true);
         return;
       }
       addLog('info', '所选平台的投递队列已空，投递结束；其他平台岗位保留');
@@ -3032,10 +3065,13 @@ export default function Workbench() {
   // ===== 侧边栏底部「当前动作」状态（与 StatusBar 的 OpenClaw 连接状态区分开）=====
   // chatRunning 作为重跑触发器：自动沟通停止后，若工作台仍在运行则恢复工作台文本
   const chatRunning = useAutoChatStore((s) => s.chatRunning);
+  const currentCollectPlatform = collectingPlatformRef.current;
   useEffect(() => {
     let action: string | null = null;
-    if (cfxCollecting) action = '正在隐身搜集岗位信息';
-    else if (visualCollecting) action = '正在搜集岗位信息';
+    const platform = currentCollectPlatform ? `${platformLabel(currentCollectPlatform)} · ` : '';
+    if (cfxCollecting) action = `${platform}正在隐身搜集岗位信息`;
+    else if (visualCollecting) action = `${platform}正在搜集岗位信息`;
+    else if (collectBatchActive) action = '正在切换采集平台';
     else if (running && applyStage) {
       const label = taskStageMetaFor(activeItem?.job?.platform, applyStage).label;
       if (COMM_PHASE_STAGES.includes(applyStage)) action = `正在自动沟通：${label}`;
@@ -3047,7 +3083,7 @@ export default function Workbench() {
     const store = useAppStore.getState();
     if (action) store.setCurrentAction('workbench', action);
     else store.clearCurrentAction('workbench');
-  }, [cfxCollecting, visualCollecting, running, applyStage, activeItem, chatRunning]);
+  }, [cfxCollecting, visualCollecting, collectBatchActive, currentCollectPlatform, running, applyStage, activeItem, chatRunning]);
 
   const deliveryTasks = useMemo(() => {
     const list: { p: PendingItem; stage: TaskStage; label: string; progress: number }[] = [];
@@ -3088,7 +3124,7 @@ export default function Workbench() {
   // 「一键投递」可点条件 = 队列里还有可投递的岗位（「待投递」或已入队的「投递中」）。
   // 与右侧「开始投递」口径统一，避免批准即入队后本按钮长期置灰（详见 onOneClickDeliver 注释）。
   const deliverableCount = pending.filter((p) => (p.status === 'approved' || p.status === 'approved_queue') && deliveryPlatforms.includes(p.job?.platform || 'boss')).length;
-  const collecting = visualCollecting || cfxCollecting;
+  const collecting = collectBatchActive || visualCollecting || cfxCollecting;
 
   // 采集任务概览（与「任务进度」页共用 taskRuns，用于卡片内联动展示）
   const collectRuns = useMemo(() => taskRuns.filter((t) => isCollectRunId(t.id)), [taskRuns]);
@@ -3308,7 +3344,7 @@ export default function Workbench() {
                 options={enabledPlatforms.map((p) => ({ value: p, label: platformLabel(p) }))}
                 placeholder="选择采集平台"
               />
-              {visualCollecting || cfxCollecting ? (
+              {collecting ? (
                 <Button size="small" danger icon={<StopOutlined />} onClick={stopAllCollect}>停止采集</Button>
               ) : (
                 <Dropdown trigger={['click']} menu={{ items: [
@@ -3403,6 +3439,10 @@ export default function Workbench() {
                   : '还没有进行中的岗位。点「搜索采集」按投递方向采集岗位，或在右侧浏览器打开岗位后点「加入任务」，进度会实时显示在这里。'}
             </Text>
           </div>
+
+          {collecting && <Text style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
+            {currentCollectPlatform ? `当前采集：${platformLabel(currentCollectPlatform)}` : '正在切换采集平台'}
+          </Text>}
 
           <Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
             待确认目标（今日累计入队）：{searchPlatforms.map(p => {

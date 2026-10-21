@@ -125,6 +125,8 @@ export interface WebviewApi {
   getDetailTabIds: () => string[];
   getActiveTabId: () => string;
   getFirstTabId: () => string;
+  /** 显示正在执行可视化采集的平台标签，不额外导航或重建网页。 */
+  activateTab: (id: string) => void;
   /**
    * 查找**已打开**且属于指定平台的标签（按 URL hostname 判定，与 platforms.ts::resolvePlatform 同口径）。
    * 多平台采集靠它复用已有标签，避免每次为同一平台新开标签；未命中返回 ''。
@@ -428,7 +430,9 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   }, [tabs]);
   // 切换激活标签视为活跃
   const activateTab = useCallback((id: string) => {
+    if (!tabsRef.current.some((tab) => tab.id === id)) return;
     touchTab(id);
+    activeIdRef.current = id;
     setActiveId((prev) => (prev === id ? prev : id));
   }, [touchTab]);
 
@@ -1147,6 +1151,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       pageStatus,
       getActiveTabId: () => activeIdRef.current || '',
       getFirstTabId: () => tabsRef.current[0]?.id || '',
+      activateTab,
       // 多平台采集入口复用标签：优先 main 标签（detail 标签会被空闲回收），其次任意同平台标签
       findTabByPlatform: (platform: JobPlatform) => {
         const list = tabsRef.current;
@@ -1154,7 +1159,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
         return (main || list.find((t) => resolvePlatform(t.url) === platform))?.id || '';
       },
     };
-  }, [apiRef, send, loadURL, closeTabById, openInNewTab, openEngineTab, loadURLInTab, sendInTab, hasTab, isPreloadReady, isLoading, getMainTabId, getDetailTabIds, bossApi, fetchJobOfficeAddress, platformApply, zhaopinGreet, pageStatus]);
+  }, [apiRef, send, loadURL, closeTabById, openInNewTab, openEngineTab, loadURLInTab, sendInTab, hasTab, isPreloadReady, isLoading, getMainTabId, getDetailTabIds, bossApi, fetchJobOfficeAddress, platformApply, zhaopinGreet, pageStatus, activateTab]);
   const prefillGreeting = useCallback((greeting: string) => cmdOnce('prefill-greeting', { greeting }, 20000), [cmdOnce]);
   const runDomDump = useCallback((tabId?: string) => {
     sendInTab(tabId || '', 'webview-command', { action: 'dom-dump' });

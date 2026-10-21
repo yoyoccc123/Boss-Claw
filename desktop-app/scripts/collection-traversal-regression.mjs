@@ -62,7 +62,7 @@ async function harness(platform, engine, options = {}) {
   const cfg = options.config || structuredClone(config), directionPlan = options.plan || structuredClone(plan);
   const data = { collectionCheckpoints: { ...(options.saved ? { [platform]: structuredClone(options.saved) } : {}) }, pending: [], collectionCounts: {}, profile: {},
     setCollectionCheckpoint: (p, cp) => { data.collectionCheckpoints[p] = cp; } };
-  const urls = [], searches = [], logs = [], warnings = [], runs = [], commands = [], collectOptions = []; let analyses = 0;
+  const urls = [], searches = [], logs = [], warnings = [], runs = [], commands = [], collectOptions = [], activations = []; let analyses = 0;
   const repeatedJob = { platform, jobId: 'same-filtered-job', title: '合成重复岗位', url: 'https://example.test/same-filtered-job' };
   const h = { ...T, Promise, Date, Math, Set, Map, config: cfg, directionPlan, profile: {},
     electronApi: { bossBrowse: { call: async () => ({ ok: true }) } },
@@ -90,6 +90,7 @@ async function harness(platform, engine, options = {}) {
     addPendingItem: () => { throw Error('Rejected fixtures must never enter the delivery queue'); }, camoufoxJobToMeta: j => j,
   };
   h.webviewApi = { current: { getFirstTabId: () => 'tab', getActiveTabId: () => 'tab', findTabByPlatform: () => 'tab',
+    activateTab: id => activations.push(id),
     hasTab: () => true, loadURLInTab: (_tab, url) => urls.push(url), isPreloadReady: () => true, isLoading: () => false,
     pageStatus: async () => ({ readyState: 'complete', cards: 0, bodyLen: 2000 }), sendInTab: (...args) => commands.push(args) } };
   h.visualCollectInTab = async (_tab, opts) => {
@@ -119,12 +120,15 @@ async function harness(platform, engine, options = {}) {
     };
   }
   const outcome = await h[engine === 'visual' ? 'runVisualCollect' : 'runCamoufoxCollect'](platform, undefined, options.mode || 'restart');
-  return { h, data, urls, searches, logs, warnings, runs, outcome, analyses, commands, collectOptions };
+  return { h, data, urls, searches, logs, warnings, runs, outcome, analyses, commands, collectOptions, activations };
 }
 for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) for (const engine of ['visual', 'camoufox']) {
   const expectedQueue = makeQueue(platform), result = await harness(platform, engine);
   check(result.outcome === 'done' && !result.warnings.length && result.data.collectionCheckpoints[platform].complete, `${platform}/${engine}: real runner completes all cities and directions with empty results`);
-  if (engine === 'visual') check(result.urls.join() === expectedQueue.map(x => x.url).join(), `${platform}: real webview navigation uses each successive city/direction URL`);
+  if (engine === 'visual') {
+    check(result.urls.join() === expectedQueue.map(x => x.url).join(), `${platform}: real webview navigation uses each successive city/direction URL`);
+    check(result.activations.join()==='tab', `${platform}: the real collector activates its chosen platform tab before collecting`);
+  }
   else {
     assert.equal(result.searches.map(x => `${x.keyword}/${x.cityCode}`).join('|'), expectedQueue.map(x => `${x.keyword}/${platform === 'boss' ? (T.resolveCityCode(x.location) || '100010000') : x.location}`).join('|'), `${platform}: real engine calls change keyword and city together with the queue`); checks++;
   }

@@ -124,6 +124,18 @@ const uiCheck = async function () {
   await wait(() => el.getURL() === 'https://www.zhipin.com/explicit-next' && !el.isLoading(), 'explicit navigation with existing guest');
   const explicitLoads = await window.electron.invoke('jc:fixture-loads');
   check(explicitLoads.filter(u => u === 'https://www.zhipin.com/explicit-next').length === 1, 'explicit user/API navigation does not receive a second src load');
+  const second = await open('https://www.zhaopin.com/fixture-collection');
+  const beforeActivation = (await window.electron.invoke('jc:fixture-loads')).length;
+  api.activateTab(id);
+  await wait(() => findActive() === el, 'existing BOSS collector tab becomes visible');
+  check(api.getActiveTabId()===id, 'activation reports the actual visible BOSS collecting tab');
+  api.activateTab(second.id);
+  await wait(() => findActive()===second.el, 'platform handoff displays the existing Zhaopin collecting tab');
+  check((await window.electron.invoke('jc:fixture-loads')).length===beforeActivation,
+    'switching visible collection platforms keeps both native documents and issues no extra requests');
+  api.activateTab('removed-tab');
+  check(api.getActiveTabId()===second.id, 'an obsolete tab ID cannot hide the active collecting page');
+  api.closeTab(second.id);
   const selector = document.querySelector('[aria-label="新标签页平台"]').closest('.ant-select');
   selector.querySelector('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   await wait(() => document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden) [title="58同城"]'), 'new-tab platform dropdown');

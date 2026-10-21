@@ -13,6 +13,7 @@ const bundled = await build({stdin:{contents:[
   "export * from './src/lib/bossclaw/platformSelection';",
   "export { DEFAULT_CONFIG } from './src/lib/bossclaw/defaults';",
   "export { useDataStore } from './src/store/useDataStore';",
+  "export { useAppStore } from './src/store/useAppStore';",
   "export { applyMigrations } from './src/store/migrations/settingsMigrations';",
   "export { effectiveDailyCapFor } from './src/lib/bossclaw/safety';",
   "export { rerankPending } from './src/lib/bossclaw/priority';",
@@ -86,22 +87,25 @@ const changedCap=structuredClone(cfg);changedCap.platforms.boss.pendingTarget=99
 check(T.effectiveDailyCapFor(changedCap,'boss')===50,'collection goal does not weaken the delivery cap');
 
 const source=ts.createSourceFile('Workbench.tsx',readFileSync(join(root,'src/pages/Workbench.tsx'),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),vars=new Map();
-const visit=n=>{if(ts.isVariableDeclaration(n)&&ts.isIdentifier(n.name)&&n.initializer)vars.set(n.name.text,n.initializer.getText(source));ts.forEachChild(n,visit);};visit(source);
+let automaticStopEffect;
+const visit=n=>{if(ts.isVariableDeclaration(n)&&ts.isIdentifier(n.name)&&n.initializer)vars.set(n.name.text,n.initializer.getText(source));
+  if(ts.isCallExpression(n)&&n.expression.getText(source)==='useEffect'&&n.arguments[0]?.getText(source).includes('previous.autoAssist && !state.autoAssist) stopAutomaticCollect()'))automaticStopEffect=n.arguments[0].getText(source);
+  ts.forEachChild(n,visit);};visit(source);
 async function host(){
   const timers=new Map(),sent=[],logs=[],app={autoAssist:true}, data={pending:[],collectionCounts:{},setPending(p){this.pending=p;},recomputeStats(){}};
   let timerId=0, searchCount=0, deliveryCount=0;
   const c={...T,Promise,Date:Clock,Math,useCallback:fn=>fn,useDataStore:{getState:()=>data},useSettingsStore:{getState:()=>({config:cfg})},useAppStore:{getState:()=>app},
     webviewApi:{current:{sendInTab:(...args)=>sent.push(args),hasTab:()=>true}},visualTabRef:{current:'tab'},visualActiveRef:{current:true},cfxActiveRef:{current:false},
-    collectDoneResolve:{current:null},collectSequenceRef:{current:0},collectAwaitingSeqRef:{current:null},collectBottomTimerRef:{current:null},collectBatchGenerationRef:{current:0},collectTerminalRef:{current:''},collectPhaseRef:{current:'collecting'},collectTimeoutMsRef:{current:0},collectDeadlineRef:{current:0},
+    collectDoneResolve:{current:null},collectSequenceRef:{current:0},collectAwaitingSeqRef:{current:null},collectBottomTimerRef:{current:null},collectBatchGenerationRef:{current:0},collectBatchRef:{current:null},setCollectBatchActive:()=>{},collectTerminalRef:{current:''},collectPhaseRef:{current:'collecting'},collectTimeoutMsRef:{current:0},collectDeadlineRef:{current:0},
     collectingPlatformRef:{current:'boss'},goalLoggedRef:{current:new Set()},visualItemBufRef:{current:{}},visualsRafRef:{current:1},collectListReadyLoggedRef:{current:false},visualLoginBlockedRef:{current:''},
     analysisQueueRef:{current:null},setVisualCollecting:()=>{},setVisualPaused:()=>{},setCfxCollecting:()=>{},setVisualItem:()=>{},
     searchTriggered:{current:false},platformLabel:p=>p,searchPlatforms:['boss'],setRunning:()=>{},setAutoAssist:v=>{app.autoAssist=v;},
-    addLog:(...args)=>logs.push(args),ingestJob:async()=>true,isDeliveryClaimed:()=>false,setActiveId:()=>{},setApplyStage:()=>{},deliverySubmittedRef:{current:false},lastApplyStageRef:{current:''},
+    addLog:(...args)=>logs.push(args),ingestJob:async()=>true,checkpointJobAcknowledgment:()=>()=>{},isDeliveryClaimed:()=>false,setActiveId:()=>{},setApplyStage:()=>{},deliverySubmittedRef:{current:false},lastApplyStageRef:{current:''},
     startCollect:()=>searchCount++,deliverBossDom:async()=>{deliveryCount++;},deliverResumeOnly:async()=>{deliveryCount++;},
     precheckDelivery:()=>true,
     setTimeout:(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)};
   vm.createContext(c);
-  for(const name of ['checkCollectionGoal','visualCollectInTab','handleCollectDone','handleCollectProgress','controlCollect','stopAllCollect','runNext']){
+  for(const name of ['checkCollectionGoal','visualCollectInTab','handleCollectDone','handleCollectProgress','controlCollect','stopAllCollect','stopAutomaticCollect','runCollectionBatch','runNext']){
     assert.ok(vars.has(name),name);vm.runInContext((await transform(`globalThis.${name}=${vars.get(name)};`,{loader:'tsx'})).code,c);
   }
   return {c,data,app,timers,sent,logs,searches:()=>searchCount,deliveries:()=>deliveryCount};
@@ -130,6 +134,82 @@ async function host(){
   check(h.c.collectTerminalRef.current==='failed'&&h.logs.some(l=>l[1].includes('Synthetic native search scope mismatch')),'native collection failure is logged with its concrete reason');
   h.c.handleCollectDone({seq,finalized:true});
   check(h.c.collectTerminalRef.current==='failed'&&h.logs.length===1,'a finalizer cannot overwrite or duplicate the original failure');
+}
+{
+  const h=await host();let finished=false;const savedNow=now;
+  const wait=h.c.visualCollectInTab('tab',{settleMs:1500,listTimeoutMs:30000}).then(()=>{finished=true;});
+  const seq=h.sent[0][2].seq, initialDeadline=h.c.collectDeadlineRef.current;
+  check(initialDeadline-now===510000,'reproduces the reported 8m30s initial wait allowance');
+  now=initialDeadline-1000;
+  h.c.handleCollectProgress({seq,phase:'done',cardKey:'new-job',job:{title:'合成新岗位'}});
+  const renewed=h.c.collectDeadlineRef.current;
+  now=initialDeadline;[...h.timers.values()][0].fn();await Promise.resolve();
+  check(!finished&&renewed>now,'a progressing long list continues beyond the original absolute deadline');
+  h.c.handleCollectProgress({seq:'old',phase:'done',job:{title:'旧岗位'}});
+  h.c.handleCollectProgress({seq,phase:'heartbeat'});
+  h.c.handleCollectProgress({phase:'done',job:{title:'无批次岗位'}});
+  check(h.c.collectDeadlineRef.current===renewed,'old/unidentified replies and heartbeats cannot renew a stuck collector');
+  now=renewed;[...h.timers.values()].at(-1).fn();await wait;now=savedNow;
+  check(finished&&h.sent.some(a=>a[1]==='collect-control'&&a[2].action==='stop')&&h.logs.some(l=>l[1].includes('未完成新的岗位读取')),
+    'no further real extraction still times out, stops the guest and logs the actual reason');
+}
+{
+  const h=await host();h.c.visualActiveRef.current=false;
+  const platforms=[],rechecks=[];
+  h.c.runCollectFor=async pf=>{
+    platforms.push(pf);await h.c.runNext();
+    check(h.app.autoAssist,'empty queue during a platform gap leaves automatic delivery enabled');
+    return 'done';
+  };
+  h.c.requestRunNext=()=>rechecks.push('after batch');
+  await h.c.runCollectionBatch(['boss','zhaopin'],'continue',undefined,true);
+  check(platforms.join()==='boss,zhaopin'&&rechecks.length===1&&!h.c.collectBatchRef.current,
+    'the complete automatic batch finishes before its final queue-empty recheck');
+}
+for(const automatic of [true,false]){
+  const h=await host();h.c.visualActiveRef.current=false;
+  const platforms=[];let release;
+  h.c.runCollectFor=pf=>{platforms.push(pf);return platforms.length===1?new Promise(r=>{release=r;}):Promise.resolve('done');};
+  h.c.requestRunNext=()=>{};
+  const wait=h.c.runCollectionBatch(['boss','zhaopin'],'continue',undefined,automatic);
+  h.app.autoAssist=false;h.c.stopAutomaticCollect();release('done');await wait;
+  check(platforms.join()===(automatic?'boss':'boss,zhaopin'),
+    automatic?'stopping delivery cancels the automatic batch before the next platform':'manual collection remains independent of the stopped delivery engine');
+  check(!h.c.collectBatchRef.current,'completed/stopped batches release their ownership');
+  if(automatic)check(h.sent.some(a=>a[1]==='collect-control'&&a[2].action==='stop'),'automatic Stop reaches the actual collecting guest');
+}
+{
+  const h=await host();h.c.visualActiveRef.current=false;
+  h.c.useAppStore=T.useAppStore;T.useAppStore.setState({autoAssist:true});h.c.autoAssist=true;
+  assert.ok(automaticStopEffect);vm.runInContext((await transform(`globalThis.stopEffect=${automaticStopEffect};`,{loader:'tsx'})).code,h.c);
+  const unsubscribe=h.c.stopEffect();let release;
+  h.c.runCollectFor=()=>new Promise(r=>{release=r;});h.c.requestRunNext=()=>{};
+  const wait=h.c.runCollectionBatch(['boss','zhaopin'],'continue',undefined,true);
+  T.useAppStore.getState().setAutoAssist(false);
+  check(!h.c.collectBatchRef.current&&h.sent.some(a=>a[1]==='collect-control'&&a[2].action==='stop'),
+    'the production effect subscription cancels the batch synchronously on the real app-store Stop action');
+  release('done');await wait;unsubscribe();
+}
+for(const failure of ['abort','exception']){
+  const h=await host();h.c.visualActiveRef.current=false;const platforms=[];h.c.requestRunNext=()=>{};
+  h.c.runCollectFor=async pf=>{platforms.push(pf);if(failure==='exception')throw Error('Synthetic collector exception');return 'abort';};
+  await h.c.runCollectionBatch(['boss','zhaopin']);
+  check(platforms.join()==='boss'&&!h.c.collectBatchRef.current,'a '+failure+' ends the batch without launching a hidden next platform');
+}
+{
+  const h=await host();h.c.visualActiveRef.current=false;const scopes=[];h.c.requestRunNext=()=>{};
+  h.c.runCollectFor=async(pf,ids,mode)=>{scopes.push([pf,ids.join(),mode]);return 'done';};
+  await h.c.runCollectionBatch(['boss','zhaopin'],'continue',['cr_boss_a','cr_zhaopin_b']);
+  check(scopes.map(s=>s.join('/')).join('|')==='boss/cr_boss_a/continue|zhaopin/cr_zhaopin_b/continue',
+    'scheduled targeted collection keeps each platform limited to its own requested combinations');
+}
+{
+  const h=await host();h.c.visualActiveRef.current=false;
+  let release;h.c.runCollectFor=()=>new Promise(r=>{release=r;});h.c.requestRunNext=()=>{};
+  const old=h.c.runCollectionBatch(['boss']);h.c.stopAllCollect();
+  h.c.collectBatchRef.current={generation:h.c.collectBatchGenerationRef.current+1,automatic:false};
+  release('done');await old;
+  check(!!h.c.collectBatchRef.current,'late old batch cleanup cannot clear a replacement batch');
 }
 {
   const h=await host();const wait=h.c.visualCollectInTab('tab',{}),seq=h.sent[0][2].seq;
