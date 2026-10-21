@@ -22,7 +22,9 @@ function visible(el) {
     return rect.width > 1 && rect.height > 1;
   } catch { return false; }
 }
-const text = el => String(el?.innerText || el?.textContent || '').replace(/\s+/g, '').trim();
+// An empty rendered string must stay empty: textContent includes hidden login
+// templates that the site keeps mounted behind its normal navigation/chat UI.
+const text = el => String(typeof el?.innerText === 'string' ? el.innerText : el?.textContent || '').replace(/\s+/g, '').trim();
 function challengeUrl(value) {
   try {
     const url = new URL(value, 'https://www.zhaopin.com');
@@ -30,7 +32,7 @@ function challengeUrl(value) {
   } catch { return false; }
 }
 const risk = source => ({ kind: 'risk', source, message: '检测到人机验证或安全验证，已暂停投递并保留页面，请手动完成验证后再继续' });
-const login = () => ({ kind: 'login', source: 'login', message: '智联页面需要登录或短信验证，已暂停并保留页面，请在当前页面手动完成' });
+const login = source => ({ kind: 'login', source, message: '智联页面需要登录或短信验证，已暂停并保留页面，请在当前页面手动完成' });
 
 function readZhaopinPageBlock(doc, href, spec = {}, { missingAction = false } = {}) {
   if (challengeUrl(href)) return risk('verification-url');
@@ -59,7 +61,7 @@ function readZhaopinPageBlock(doc, href, spec = {}, { missingAction = false } = 
     for (const el of root.querySelectorAll(selectors.join(', '))) {
       if (!visible(el) || el.matches(FIELD) || el.closest(JOB_SCOPE)) continue;
       const words = text(el);
-      if (SMS_TEXT.test(words) && !CHALLENGE_TEXT.test(words)) return login();
+      if (SMS_TEXT.test(words) && !CHALLENGE_TEXT.test(words)) return login('sms-panel');
       if (el.closest(LOGIN_SCOPE) && !CHALLENGE_TEXT.test(words)) continue;
       if (HUMAN_TEXT.test(words) || (!el.querySelector(FIELD) && riskTexts.some(t => words.includes(t)))) return risk('verification-panel');
     }
@@ -67,14 +69,16 @@ function readZhaopinPageBlock(doc, href, spec = {}, { missingAction = false } = 
       if (!visible(el) || el.closest(JOB_SCOPE)) continue;
       const words = text(el);
       if (/登录|注册/.test(words) && (el.matches('.a-job-apply-not-login-panel, [class*="not-login-panel"], [role="dialog"]')
-          || el.querySelector('input, form, [class*="qrcode"], [class*="qr-code"]'))) return login();
+          || Array.from(el.querySelectorAll('input:not([type="hidden"]), form, [class*="qrcode"], [class*="qr-code"]')).some(visible))) return login('login-panel');
     }
     // Full-page evidence is used only when there is no action and no job-description structure.
     if (missingAction && !Array.from(root.querySelectorAll(JOB_SCOPE)).some(visible)) {
       const words = text(root.body);
       if (words.length < 1600 && !JOB_TEXT.test(words)) {
         if (HUMAN_TEXT.test(words)) return risk('verification-interstitial');
-        if (/扫码登录|账号登录|手机登录|登录\/注册|请先登录|登录后才能/.test(words)) return login();
+        // Navigation's login/register link is not a login wall. This fallback
+        // needs an explicit instruction; visible forms/QR panels are read above.
+        if (/请先登录|请(?:使用.{0,24})?扫码登录|登录后才能|请(?:先)?(?:完成|进行)(?:登录|短信验证)/.test(words)) return login('login-interstitial');
       }
     }
   }

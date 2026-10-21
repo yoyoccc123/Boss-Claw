@@ -200,7 +200,22 @@ for(const stopAt of ['never','before-open','after-navigation','after-prepare','a
   const result=await context.greet(job,greeting,{canStart:()=>allowed,onStart:()=>started++});
   assert.equal(sends,['never','after-send'].includes(stopAt)?1:0,stopAt);assert.equal(started,sends);assert.equal(result.greetingConfirmed===true,sends===1);hostChecks++;
 }
-console.log(`PASS Zhaopin greeting host: ${hostChecks} production navigation/Stop cases; outbound commands are stubs.`);
+for(const mode of ['transient-detail','transient-chat','persistent-detail','persistent-chat','risk-during-login','stop-during-login']) {
+  let tick=0,allowed=true,phase='detail',phaseReads=0,sends=0,opens=0;
+  const c={Promise,URL,Date:{now:()=>tick},useCallback:fn=>fn,aliveRef:{current:true},openInNewTab:()=> 'tab',hasTab:()=>true,
+    sleep:async()=>{tick+=400;if(mode==='stop-during-login')allowed=false;},
+    pageStatus:async()=>{phaseReads++;const here={bodyLen:500,readyState:'complete',url:phase==='detail'?job.url:'https://i.zhaopin.com/im?sessionId=target',zhaopinChatReady:phase==='chat'};
+      const affected=mode.endsWith(phase)||mode.endsWith('login')&&phase==='detail';
+      if(affected&&(mode.startsWith('persistent')||mode.endsWith('login')||phaseReads<3))return{...here,applyBlock:{kind:mode==='risk-during-login'&&phaseReads>1?'risk':'login',source:'login-panel',message:'需要人工验证'}};
+      return here;},
+    cmdOnce:async(_channel,args)=>{if(args.action==='open'){opens++;phase='chat';phaseReads=0;return{ok:true,nativeChatToken:'native',defaultGreeting:platformDefault};}if(args.action==='prepare')return{ok:true,stage:'prepared',token:'prepared'};sends++;return{ok:true,stage:'success',greetingConfirmed:true};}};
+  vm.createContext(c);vm.runInContext((await transform(`globalThis.greet=${browser.vars.get('zhaopinGreet')};`,{loader:'tsx'})).code,c);
+  const result=await c.greet(job,greeting,{canStart:()=>allowed,onStart:()=>{}});
+  if(mode.startsWith('transient')){assert.equal(result.greetingConfirmed,true,mode);assert.equal(sends,1,mode);assert.ok(tick>=800,mode);}
+  else{assert.equal(result.stage,mode.startsWith('persistent')?'login':mode.startsWith('risk')?'risk':'cancelled',mode);assert.equal(sends,0,mode);if(mode.startsWith('persistent')){assert.ok(tick>=1500&&tick<3000,mode);assert.equal(opens,mode.endsWith('chat')?1:0,mode);}else assert.ok(tick<=400,mode);}
+  hostChecks++;
+}
+console.log(`PASS Zhaopin greeting host: ${hostChecks} production navigation/Stop/login-hydration cases; outbound commands are stubs.`);
 
 // Successful resume delivery survives a message failure, Stop, or exception. Supplement skips submission.
 let queueChecks=0;

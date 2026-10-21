@@ -1064,11 +1064,22 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     const cancelled = () => !control.canStart() || !hasTab(tabId) || !aliveRef.current;
     const waitReady = async (chat: boolean) => {
       const start = Date.now(); let sessionId = '';
+      let loginSince: number | null = null, loginKey = '';
       while (Date.now() - start < 30000) {
         if (cancelled()) return { ok: false, stage: 'cancelled', sendAttempted: false, tabId };
         const probe = await pageStatus(tabId);
         if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
-        if (probe?.applyBlock) return { ok: false, stage: probe.applyBlock.kind, code: probe.applyBlock.kind === 'risk' ? 35 : undefined, message: probe.applyBlock.message, needsReview: true, sendAttempted: false, tabId };
+        if (probe?.applyBlock) {
+          // The IM shell may render a login placeholder before restoring its
+          // session. Make no clicks while confirming a stable login wall.
+          if (probe.applyBlock.kind === 'login') {
+            const key = JSON.stringify([probe.url, probe.applyBlock.source, probe.applyBlock.message]);
+            if (key !== loginKey || loginSince === null) { loginKey = key; loginSince = Date.now(); }
+            if (Date.now() - loginSince < 1500) { await sleep(400); continue; }
+          }
+          return { ok: false, stage: probe.applyBlock.kind, code: probe.applyBlock.kind === 'risk' ? 35 : undefined, message: probe.applyBlock.message, needsReview: true, sendAttempted: false, tabId };
+        }
+        loginSince = null; loginKey = '';
         if (!probe?.error && probe?.readyState !== 'loading') {
           if (!chat && probe.bodyLen > 100) return { ok: true };
           if (chat) {

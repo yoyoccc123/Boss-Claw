@@ -3394,14 +3394,16 @@ function firstVisible(selectors) {
 // The offline stamp is an image on the live page, so text-only checks miss it.
 function readZhaopinApplyEntry() {
   const spec = (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {};
-  const block = readZhaopinPageBlock(document, location.href, spec, { missingAction: true });
-  if (block) return block;
   let detailPage = false;
   try {
     const url = new URL(location.href);
     detailPage = url.protocol === 'https:' && /(^|\.)zhaopin\.com$/i.test(url.hostname)
       && /^\/jobdetail\/[^/]+\.html?$/i.test(url.pathname);
   } catch {}
+  // Chat initialization has no apply widget. Only actual detail pages may use
+  // the missing-action interstitial fallback; explicit login/risk UI still wins.
+  const block = readZhaopinPageBlock(document, location.href, spec, { missingAction: detailPage });
+  if (block) return block;
   if (!detailPage) return { kind: 'missing' };
   const selectors = spec.buttonSelectors || ['button', 'a'];
   const already = findPlatformAction(spec.appliedSelectors || selectors, spec.appliedLabels || ['已投递'])

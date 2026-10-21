@@ -62,6 +62,12 @@ const cases=[
   {name:'同源短信登录框架',html:'<iframe style="width:500px;height:300px" srcdoc="<form class=login-panel>手机登录 短信验证码<input id=captcha></form>"></iframe>',stage:'login',clicks:0},
   {name:'独立扫码登录页',html:'<main>请先登录，使用智联APP扫码登录</main>',stage:'login',clicks:0},
   {name:'隐藏登录表单不误判',html:normal+'<form class="login-panel" style="display:none">登录<input id="captcha"></form>',after:success,stage:'success',clicks:1},
+  {name:'可见导航包裹隐藏登录表单不误判',html:normal+'<div class="header-login">登录/注册<form style="display:none"><input placeholder="手机号"></form></div>',after:success,stage:'success',clicks:1},
+  {name:'登录弹层中隐藏文字不当可见提示',html:normal+'<div class="a-modal" style="width:300px;height:80px"><div style="display:none">短信验证码 请先登录</div></div>',after:success,stage:'success',clicks:1},
+  {name:'聊天初始化导航不当登录墙',html:'<header>首页 职位 消息 登录/注册</header><main>聊天加载中</main>',href:'https://i.zhaopin.com/im?sessionId=fixture',stage:'failed',review:true,entry:'missing',block:null,clicks:0},
+  {name:'详情导航不当登录墙',html:'<header>首页 职位 消息 登录/注册</header><main>加载中</main>',stage:'failed',review:true,entry:'missing',block:null,clicks:0},
+  {name:'聊天页真实登录表单仍暂停',html:'<form class="login-panel">手机登录 短信验证码<input placeholder="验证码"><button>登录</button></form>',href:'https://i.zhaopin.com/im?sessionId=fixture',stage:'login',block:'login',clicks:0},
+  {name:'聊天页真实验证码仍暂停',html:challenge,href:'https://i.zhaopin.com/im?sessionId=fixture',stage:'risk',block:'risk',clicks:0},
   {name:'未知页面保留人工核对',html:'<main>页面尚未加载完成</main>',stage:'failed',review:true,clicks:0},
   {name:'跳回首页保留人工核对',html:'<main>智联招聘 首页<button>搜索</button></main>',stage:'failed',review:true,clicks:0},
   {name:'点击后安全验证停止确认',html:normal,after:"document.body.insertAdjacentHTML('beforeend',"+JSON.stringify(challenge+'<div class="a-job-apply-workflow"><button>确定投递</button></div>')+");",stage:'risk',clicks:1},
@@ -101,7 +107,7 @@ const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 const processResult=spawnSync(process.env.BOSSCLAW_ELECTRON||require('electron'),[entry],{env,windowsHide:true,timeout:45000,encoding:'utf8'});
 assert.equal(processResult.status,0,processResult.error?.message||processResult.stderr);
 const reports=JSON.parse(readFileSync(reportFile,'utf8'));assert.ok(!reports.error,reports.error);
-for(let i=0;i<cases.length;i++){const expected=cases[i],actual=reports[i];assert.equal(actual.result?.stage,expected.stage,expected.name);assert.equal(actual.clicks,expected.clicks,expected.name+' click count');assert.equal(Boolean(actual.result?.needsReview),Boolean(expected.review),expected.name+' review flag');if(expected.entry)assert.equal(actual.entry,expected.entry,expected.name+' entry state');}
+for(let i=0;i<cases.length;i++){const expected=cases[i],actual=reports[i];assert.equal(actual.result?.stage,expected.stage,expected.name);assert.equal(actual.clicks,expected.clicks,expected.name+' click count');assert.equal(Boolean(actual.result?.needsReview),Boolean(expected.review),expected.name+' review flag');if(expected.entry)assert.equal(actual.entry,expected.entry,expected.name+' entry state');if('block' in expected)assert.equal(actual.probeBlock?.kind||null,expected.block,expected.name+' page status block');}
 const emptyFrameProbe=reports.find(r=>r.name==='跨域验证码框架');assert.equal(emptyFrameProbe.bodyLen,0);assert.equal(emptyFrameProbe.probeBlock?.kind,'risk');
 console.log(`PASS Zhaopin blocks: ${cases.length} real isolated DOM workflows; ${reportFile}`);
 
