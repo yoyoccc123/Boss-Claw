@@ -156,12 +156,12 @@ async function host(){
 const preloadSource=ts.createSourceFile('webview.cjs',readFileSync(join(root,'electron/preload/webview.cjs'),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),functions=new Map();let ipcHandler;
 const visitPreload=n=>{if(ts.isFunctionDeclaration(n)&&n.name)functions.set(n.name.text,n.getText(preloadSource));if(ts.isCallExpression(n)&&n.expression.getText(preloadSource)==='ipcRenderer.on'&&n.arguments[0]?.text==='visual-collect')ipcHandler=n.arguments[1].getText(preloadSource);ts.forEachChild(n,visitPreload);};visitPreload(preloadSource);
 for(const scenario of ['bottom','login','error']){
-  const events=[],p={Date:Clock,Math,Set,PLATFORM:'boss',ADAPTERS:{supportsInlineDetail:()=>false},collectCtl:{},location:{href:'https://www.zhipin.com/web/geek/jobs'},
+  const events=[],p={Date:Clock,Math,Set,PLATFORM:'boss',ADAPTERS:{supportsInlineDetail:()=>false},collectCtl:{},document:{body:{innerText:''}},location:{href:'https://www.zhipin.com/web/geek/jobs'},
     notify:(channel,data)=>events.push({channel,data}),collectNotify:(channel,data)=>events.push({channel,data}),resetJdFillState:()=>{},reportJdFillSummary:()=>{},
     collectCards:()=>scenario==='login'?[]:[{}],loginWallDetected:()=>scenario==='login',waitWhilePaused:async()=>{},collectCardKey:()=> 'card',
     cardIdentity:()=>({title:'示例岗位',company:'示例公司'}),smoothScrollIntoView:async()=>{},highlightElement:()=>{},sleep:async()=>{},enrichJobDetail:async()=>{},
     scrollJobListLoadMore:async()=>({grew:false,atBottom:true}),extractJobFromCardOnly:()=>{if(scenario==='error')throw Error('Synthetic extraction failure');return{title:'示例岗位'};}};
-  vm.createContext(p);vm.runInContext(functions.get('visualCollectListOnly')+'\n'+functions.get('visualCollect')+'\nglobalThis.handler='+ipcHandler,p);
+  vm.createContext(p);vm.runInContext(functions.get('collectionListExplicitlyEmpty')+'\n'+functions.get('visualCollectListOnly')+'\n'+functions.get('visualCollect')+'\nglobalThis.handler='+ipcHandler,p);
   p.handler(null,{seq:'real-preload',maxJobs:2});await new Promise(r=>setImmediate(r));
   check(events.filter(e=>e.channel==='collect-done').length>0,'production preload always reports terminal completion, including error/login');
   check(events.every(e=>e.data.seq==='real-preload'),'production progress and completion carry the same batch identifier');
