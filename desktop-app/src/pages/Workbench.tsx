@@ -2420,8 +2420,8 @@ export default function Workbench() {
       if (!stopped) {
         if (chat.stage === 'risk' || chat.stage === 'login') pauseAssist(error);
         else {
-          addLog('warn', `该岗位招呼语已保留待核对，继续下一岗位：${nTitle}`);
-          if (useAppStore.getState().autoAssist) requestRunNext();
+          addLog('warn', `该岗位招呼语已保留待核对：${nTitle}`);
+          if (useAppStore.getState().autoAssist) { addLog('info', '继续处理下一岗位'); requestRunNext(); }
         }
       }
       return; // 已提交的简历永不作为失败重新投递；保留聊天页与草稿。
@@ -2478,12 +2478,12 @@ export default function Workbench() {
     }
     const errMsg = res.error || res.message || '投递失败';
     updatePending(candidate.id, { status: 'failed', error: errMsg, ...(res.needsReview ? { deliveryNeedsReview: true, retryable: false } : {}) });
-    addLog('error', `投递失败：${nTitle}（${errMsg}）`);
+    addLog(res.needsReview ? 'warn' : 'error', `${res.needsReview ? '投递结果待核对' : '投递失败'}：${nTitle}（${errMsg}）`);
     if (res.needsReview) {
       setApplyStage(null); recomputeStats();
       if (pf === 'zhaopin' && res.reviewScope === 'job') {
-        addLog('warn', `该岗位结果待核对，已保留页面且禁止自动重投，继续下一岗位：${nTitle}`);
-        if (useAppStore.getState().autoAssist) requestRunNext();
+        addLog('warn', `该岗位已保留页面且禁止自动重投：${nTitle}`);
+        if (useAppStore.getState().autoAssist) { addLog('info', '继续处理下一岗位'); requestRunNext(); }
         return;
       }
       pauseAssist(errMsg);

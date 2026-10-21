@@ -112,13 +112,15 @@ async function browserEnvironment({ready=false}={}) {
 }
 // A completed unknown Zhaopin result isolates this job; Stop still wins over advancement.
 for(const stopAfter of [false,true]) {
-  const env=await environment();const patches=[];let next=0;
+  const env=await environment();const patches=[],logs=[];let next=0;
+  env.c.addLog=(_level,message)=>logs.push(message);
   env.c.updatePending=(_id,patch)=>{patches.push(patch);Object.assign(env.item,patch);};
   env.c.requestRunNext=()=>{next++;};
   env.c.webviewApi.current.platformApply=async(...args)=>{args[4].onStart();if(stopAfter)env.stop();return{ok:false,stage:'failed',needsReview:true,reviewScope:'job',tabId:'detail',error:'结果未确认'};};
   const run=env.c.deliverNonBoss(env.item,env.item.job.url);env.gap.resolve(true);await run;
   check(env.item.status==='failed'&&env.item.deliveryNeedsReview&&env.item.retryable===false,'unknown Zhaopin job remains excluded from automatic retries');
   check(next===(stopAfter?0:1)&&env.closed.length===0,'unknown Zhaopin job advances only while running and keeps its owned tab');
+  check(logs.some(message=>message==='继续处理下一岗位')===!stopAfter,'Stop cannot be followed by a misleading continuation log');
 }
 {
   const effect=browser.effects.find(s=>s.includes('idleCloseMinutes')&&s.includes('setInterval'));assert.ok(effect);
