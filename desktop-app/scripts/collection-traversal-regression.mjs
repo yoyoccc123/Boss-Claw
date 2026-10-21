@@ -136,6 +136,12 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) for (cons
   check(resumed.data.collectionCheckpoints[platform].complete && (engine === 'visual' ? resumed.urls.length : resumed.searches.length) === expectedQueue.length - 1, `${platform}/${engine}: continue reaches the later directions/city without repeating completed combinations`);
 }
 for (const engine of ['visual', 'camoufox']) {
+  const splitConfig = { ...structuredClone(config), degrees: ['大专', '本科'] };
+  const splitQueue = T.buildPlatformSearchQueue('liepin', plan, splitConfig);
+  const split = await harness('liepin', engine, { config: splitConfig });
+  check(split.data.collectionCheckpoints.liepin.complete && !split.warnings.length, `${engine}: Liepin empty results continue through every degree, keyword and city`);
+  check(new Set(split.runs.filter(r => r.status === 'running').map(r => r.id)).size === splitQueue.length, `${engine}: degree-specific task records cannot overwrite one another`);
+  check(engine === 'visual' ? split.urls.length === splitQueue.length : split.searches.every(s => s.criteria.degrees.length === 1), `${engine}: each Liepin native search carries one supported education value`);
   const duplicates = await harness('wuba', engine, { duplicates: true });
   check(duplicates.data.collectionCheckpoints.wuba.complete && duplicates.analyses === 1, `${engine}: real repeated-result ingestion still advances across all directions and cities without reanalysis`);
   const result = await harness('wuba', engine, { config: migrationConfig, plan: migrationPlan, saved, mode: 'continue' });

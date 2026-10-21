@@ -117,10 +117,10 @@ const normalizeJobUrl = (url: string): string => {
 // 任务 id 由「平台 + 组合内容」稳定派生：同一组合重复采集只更新同一条任务，不会无限堆卡片；
 // 前缀 cr_ 用于把「采集任务」与「基于投递方向新建的任务」区分开（两者共用 taskRuns 数据源）。
 const COLLECT_RUN_PREFIX = 'cr_';
-const collectRunId = (platform: JobPlatform, item: { keyword?: string; location?: string; employmentType?: string }): string =>
+const collectRunId = (platform: JobPlatform, item: { keyword?: string; location?: string; employmentType?: string; criteria?: { degrees?: string[] } }): string =>
   `${COLLECT_RUN_PREFIX}${platform}_${[item.keyword, item.location, item.employmentType]
     .map((v) => String(v || '').trim().toLowerCase())
-    .join('_')}`;
+    .join('_')}${platform === 'liepin' && item.criteria?.degrees?.length === 1 ? `_edu-${item.criteria.degrees[0]}` : ''}`;
 const isCollectRunId = (id: string): boolean => String(id || '').startsWith(COLLECT_RUN_PREFIX);
 
 /**
@@ -1433,6 +1433,7 @@ export default function Workbench() {
     if (!collectAwaitingSeqRef.current || data?.seq !== collectAwaitingSeqRef.current) return;
     collectTerminalRef.current = data?.reason || (data?.error ? 'failed' : data?.loginRequired ? 'blocked' : data?.finalized ? 'failed' : 'completed');
     if (data?.error) addLog('warn', `本组采集未完成：${String(data.error).slice(0, 400)}`);
+    if (data?.empty && collectTerminalRef.current === 'completed') addLog('info', '平台明确返回暂无匹配岗位，本组已完成，继续下一个搜索组合');
     // 不采用 webview 回传的 processed（卡片 key 去重不稳定，会虚高如"5181"）；
     // 「已处理」以 batch 内实际入库/入眼的唯一岗位数（ingestedSeenRef.size）为准，见 runVisualCollect。
     const finish = collectDoneResolve.current;
@@ -1660,7 +1661,7 @@ export default function Workbench() {
     //   ② 遮罩状态只作参考，宽限 2s 后即使遮罩未收敛也按页面事实放行（并记一条诊断日志）。
     const probePage = async (tabId: string, expectedSearchUrl: string): Promise<any | null> => {
       try {
-        const st = await webviewApi.current?.pageStatus?.(tabId, platform === 'zhaopin' ? expectedSearchUrl : undefined);
+        const st = await webviewApi.current?.pageStatus?.(tabId, platform === 'zhaopin' || platform === 'liepin' ? expectedSearchUrl : undefined);
         return st && !st.error ? st : null;
       } catch {
         return null;
@@ -1783,7 +1784,9 @@ export default function Workbench() {
         }
         browseWaitSignature = '';
       }
-      addLog('info', `可视化采集「${item.keyword}」· ${item.location || '全国'} · 方向：${item.directionName || '随机推荐'} · ${item.employmentType || '不限'}（${qi + 1}/${queue.length}）`);
+      const degreeNote = platform === 'liepin' && (item as PlatformSearchQueueItem).criteria?.degrees?.length
+        ? ` · 学历：${(item as PlatformSearchQueueItem).criteria!.degrees!.join('/')}` : '';
+      addLog('info', `可视化采集「${item.keyword}」· ${item.location || '全国'} · 方向：${item.directionName || '随机推荐'} · ${item.employmentType || '不限'}${degreeNote}（${qi + 1}/${queue.length}）`);
       let tabId = collectTabId;
       if (!webviewApi.current?.hasTab(tabId)) {
         const t = webviewApi.current?.getFirstTabId?.() || webviewApi.current?.getActiveTabId?.();
@@ -1879,7 +1882,7 @@ export default function Workbench() {
       //   maxJobsPerRun（单次采集兜底上限，0 或缺失沿用 webview 内置 1000 防失控）。
       // 扫描预算只结束本组；每日合格入队目标仍由 checkCollectionGoal 负责停止整批采集。
       await visualCollectInTab(tabId, {
-        expectedSearchUrl: platform === 'wuba' || platform === 'zhaopin' ? item.url : undefined,
+        expectedSearchUrl: platform === 'wuba' || platform === 'zhaopin' || platform === 'liepin' ? item.url : undefined,
         settleMs: collectSpeedMs,
         listTimeoutMs: pageTimeoutMs,
         autoScroll: config.listAutoScroll !== false,

@@ -16,6 +16,7 @@
 """
 import re
 import time
+from urllib.parse import quote
 from pathlib import Path
 
 from .base import CollectorBase
@@ -103,7 +104,7 @@ def build_search_url(query: str, city: str, salary: str, page: int = 1,
         url += f"&salaryCode={sal}"
     q = str(query or '').strip()
     if q:
-        url += f"&key={q}"
+        url += f"&key={quote(q, safe='')}"
     for k, v in build_filter_params(PLATFORM, criteria).items():
         url += f"&{k}={v}"
     return url

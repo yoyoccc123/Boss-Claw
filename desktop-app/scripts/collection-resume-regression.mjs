@@ -163,6 +163,8 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
   const p = { Date, Math, Set, URL, PLATFORM: platform, ADAPTERS: { supportsInlineDetail: () => platform === 'boss' },
     WUBA: { readPageBlock: () => null, listState: () => ({ endReached: false }) },
     readZhaopinPageBlock: () => null,
+    LIEPIN_LIST: { explicitlyEmpty: doc => /暂无职位/.test(doc.body?.innerText || '') },
+    PLATFORM_LABEL: platform,
     location: { href: 'https://example.test/jobs' }, document: { readyState: 'complete' }, collectCtl: {},
     notify: (channel, data) => events.push({ channel, data }), collectNotify: (channel, data) => { events.push({ channel, data }); if (data.phase === 'done') reordered = true; },
     collectCards: () => reordered ? [...cards].reverse() : cards, cardIdentity: card => ({ title: card.id, company: 'company' }),
@@ -212,3 +214,4 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
 console.log(`PASS collection resume and withdrawal: ${checks} production policy/store/host/preload checks; no platform calls.`);
 await import('./collection-traversal-regression.mjs');
 await import('./zhaopin-list-regression.mjs');
+await import('./liepin-list-regression.mjs');

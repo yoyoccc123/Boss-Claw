@@ -21,6 +21,7 @@ BossClaw 隐身引擎 —— 「基础求职条件」跨平台筛选参数映射
   · eduLevel（ok，2026-10-01 用户实测逐值确认）：010 博士 / 030 硕士 / 040 本科 / 050 大专
     （用户点选链接逐一核对）；020 MBA·EMBA / 060 中专 / 070 中技 / 080 高中 / 090 初中
     为猎聘学历字典码，设置页无对应项故不参与。
+    原生页面为单选；多学历由前端采集队列拆分，不能使用 `$` 拼接。
   · workYearCode（partial，2026-10-01 用户实测）：区间式**单值**「起始$结束」——
     应届生 1 / 实习生 2 / 0$1 = 1年以内 / 1$3 = 1-3年 / 3$5 = 3-5年 / 10$999 = 10年以上
     为实测值；5$10 = 5-10年 按相邻区间边界规律推得（0$1 → 1$3 → 3$5 → 5$…）。
@@ -189,9 +190,11 @@ def _liepin_params(c: dict) -> dict:
         if k in LIEPIN_WORK_YEAR:
             out['workYearCode'] = LIEPIN_WORK_YEAR[k]
             break
-    edu = [LIEPIN_EDU[k] for k in c['degree'] if k in LIEPIN_EDU]
+    edu = list(dict.fromkeys(LIEPIN_EDU[k] for k in c['degree'] if k in LIEPIN_EDU))
+    if len(edu) > 1:
+        raise ValueError('猎聘学历筛选为单选，请按每个学历分别搜索')
     if edu:
-        out['eduLevel'] = MULTI_SEP['liepin'].join(edu)
+        out['eduLevel'] = edu[0]
     if c['scale'] in LIEPIN_SCALE:
         out['compScale'] = LIEPIN_SCALE[c['scale']]
     if c['company_type'] in LIEPIN_COMPANY_TYPE:

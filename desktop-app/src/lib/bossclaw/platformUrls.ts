@@ -106,7 +106,8 @@ export function buildLiepinSearchUrl(query: LiepinSearchQuery = {}): string {
   if (salary) extra.push(`salaryCode=${salary}`);
   const criteriaQs = appendLiepinCriteria(query.criteria);
   if (criteriaQs) extra.push(criteriaQs);
-  const qs = params.toString();
+  // Liepin's native search box decodes percent escapes but treats '+' literally.
+  const qs = params.toString().replace(/\+/g, '%20');
   return extra.length ? `${LIEPIN_BASE_URL}?${qs}&${extra.join('&')}` : `${LIEPIN_BASE_URL}?${qs}`;
 }
 
@@ -146,14 +147,16 @@ const LIEPIN_CRITERIA_FINANCING: Record<string, string> = {
 /**
  * 猎聘「基础求职条件」+ HR 活跃度 → URL 查询串（无匹配项返回 ''）。
  * 经验为区间式单值（`$` 是区间分隔而非多选分隔），多选无法拼接 → 只取第一个可映射项。
+ * 学历也是单选；队列会将多学历拆成独立搜索，直接传入多学历时明确报错。
  */
 export function appendLiepinCriteria(criteria: PlatformSearchCriteria | undefined | null): string {
   if (!criteria) return '';
   const parts: string[] = [];
   const exp = (criteria.experiences ?? []).map((x) => LIEPIN_CRITERIA_EXP[x]).find(Boolean);
   if (exp) parts.push(`workYearCode=${exp}`);
-  const edu = (criteria.degrees ?? []).map((x) => LIEPIN_CRITERIA_EDU[x]).filter(Boolean);
-  if (edu.length) parts.push(`eduLevel=${edu.join('$')}`);
+  const edu = [...new Set((criteria.degrees ?? []).map((x) => LIEPIN_CRITERIA_EDU[x]).filter(Boolean))];
+  if (edu.length > 1) throw new Error('猎聘学历筛选为单选，请按每个学历分别搜索');
+  if (edu.length) parts.push(`eduLevel=${edu[0]}`);
   const cs = criteria.companyScale ? LIEPIN_CRITERIA_SCALE[criteria.companyScale] : '';
   if (cs) parts.push(`compScale=${cs}`);
   const ct = criteria.companyType ? LIEPIN_CRITERIA_COMPANY_TYPE[criteria.companyType] : '';
@@ -497,6 +500,11 @@ export function buildPlatformSearchQueue(
   const itemCriteria = (directionName = '', keyword = ''): PlatformSearchCriteria => platform === 'wuba'
     ? { ...criteria, wubaSearchFilters: { ...criteria.wubaSearchFilters, category: resolveWubaCategory(criteria.wubaSearchFilters, directionName, keyword).value } }
     : criteria;
+  const variants = (c: PlatformSearchCriteria): PlatformSearchCriteria[] => {
+    if (platform !== 'liepin') return [c];
+    const degrees = [...new Set((c.degrees || []).filter(d => LIEPIN_CRITERIA_EDU[d]))];
+    return degrees.length > 1 ? degrees.map(degree => ({ ...c, degrees: [degree] })) : [c];
+  };
   const directions = selectedDirectionItems(directionPlan);
 
   const queue: PlatformSearchQueueItem[] = [];
@@ -508,20 +516,21 @@ export function buildPlatformSearchQueue(
     const categoryDirections = platform === 'wuba' && isWubaCategoryAutomatic(criteria.wubaSearchFilters) && directions.length ? directions : [null];
     for (const location of locations) {
       for (const direction of categoryDirections) {
-        const resolvedCriteria = itemCriteria(direction?.name);
-        for (const employmentType of employmentTypes) {
-          const url = buildPlatformSearchUrl(platform, {
-            city: location, salary: config.salary, page: 1, criteria: resolvedCriteria,
-          });
-          if (seen.has(url)) continue;
-          seen.add(url);
-          queue.push({
-            platform, url, keyword: '', location, employmentType, criteria: resolvedCriteria,
-            directionId: direction?.id || '',
-            directionName: direction?.name || RANDOM_COLLECT_LABEL,
-            directionPriority: direction?.priority || 0,
-            directionScore: direction?.score || 0,
-          });
+        for (const resolvedCriteria of variants(itemCriteria(direction?.name))) {
+          for (const employmentType of employmentTypes) {
+            const url = buildPlatformSearchUrl(platform, {
+              city: location, salary: config.salary, page: 1, criteria: resolvedCriteria,
+            });
+            if (seen.has(url)) continue;
+            seen.add(url);
+            queue.push({
+              platform, url, keyword: '', location, employmentType, criteria: resolvedCriteria,
+              directionId: direction?.id || '',
+              directionName: direction?.name || RANDOM_COLLECT_LABEL,
+              directionPriority: direction?.priority || 0,
+              directionScore: direction?.score || 0,
+            });
+          }
         }
       }
     }
@@ -531,20 +540,21 @@ export function buildPlatformSearchQueue(
   for (const location of locations) {
     for (const direction of directions) {
       for (const keyword of direction.keywords) {
-        const resolvedCriteria = itemCriteria(direction.name, keyword);
-        for (const employmentType of employmentTypes) {
-          const url = buildPlatformSearchUrl(platform, {
-            keyword, city: location, salary: config.salary, page: 1, criteria: resolvedCriteria,
-          });
-          if (seen.has(url)) continue;
-          seen.add(url);
-          queue.push({
-            platform, url, keyword, location, employmentType, criteria: resolvedCriteria,
-            directionId: direction.id,
-            directionName: direction.name,
-            directionPriority: direction.priority,
-            directionScore: direction.score,
-          });
+        for (const resolvedCriteria of variants(itemCriteria(direction.name, keyword))) {
+          for (const employmentType of employmentTypes) {
+            const url = buildPlatformSearchUrl(platform, {
+              keyword, city: location, salary: config.salary, page: 1, criteria: resolvedCriteria,
+            });
+            if (seen.has(url)) continue;
+            seen.add(url);
+            queue.push({
+              platform, url, keyword, location, employmentType, criteria: resolvedCriteria,
+              directionId: direction.id,
+              directionName: direction.name,
+              directionPriority: direction.priority,
+              directionScore: direction.score,
+            });
+          }
         }
       }
     }

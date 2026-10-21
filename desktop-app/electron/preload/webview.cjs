@@ -28,6 +28,7 @@ const { findTextSendButton } = require('./text-send-control.cjs');
 const ADAPTERS = require('./platform-adapters.cjs');
 const WUBA = require('./wuba.cjs');
 const ZHAOPIN_LIST = require('./zhaopin-list.cjs');
+const LIEPIN_LIST = require('./liepin-list.cjs');
 const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
 const { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl, readZhaopinAttachmentSelection } = require('./zhaopin-im.cjs');
 const OFFICE = require('./office-address.cjs');
@@ -2373,6 +2374,7 @@ async function scrollJobListLoadMore(processed, opts = {}) {
 const collectNotify = notify;
 
 function collectionListExplicitlyEmpty() {
+  if (PLATFORM === 'liepin') return LIEPIN_LIST.explicitlyEmpty(document, location.href);
   return /暂无(?:相关)?(?:职位|岗位)|未找到相关职位|没有找到(?:相关)?职位|没有符合条件的职位|抱歉[，,]?\s*没找到/.test(String(document.body?.innerText || ''));
 }
 async function visualCollect(opts = {}) {
@@ -2744,7 +2746,8 @@ function pageStatusData(expectedSearchUrl) {
     readyState: String(document.readyState || ''),
     bodyLen: bodyText.length,
     collectionBlocked, collectionLoading,
-    collectionScopeMatches: PLATFORM !== 'zhaopin' || !expectedSearchUrl || ZHAOPIN_LIST.searchScopeMatches(location.href, expectedSearchUrl),
+    collectionScopeMatches: !expectedSearchUrl || (PLATFORM === 'zhaopin' ? ZHAOPIN_LIST.searchScopeMatches(location.href, expectedSearchUrl)
+      : PLATFORM === 'liepin' ? LIEPIN_LIST.searchScopeMatches(location.href, expectedSearchUrl, document) : true),
     applyBlock: PLATFORM === 'wuba' ? WUBA.readPageBlock(document, location.href) : zhaopinBlock,
     zhaopinChatReady: PLATFORM === 'zhaopin' && readZhaopinChatReady(document, location.href),
     cards,
@@ -3125,7 +3128,8 @@ async function visualCollectListOnly(opts = {}) {
     notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'completed' });
     return true;
   };
-  const scopeReady = () => PLATFORM !== 'zhaopin' || !opts.expectedSearchUrl || ZHAOPIN_LIST.searchScopeMatches(location.href, opts.expectedSearchUrl);
+  const scopeReady = () => !opts.expectedSearchUrl || (PLATFORM === 'zhaopin' ? ZHAOPIN_LIST.searchScopeMatches(location.href, opts.expectedSearchUrl)
+    : PLATFORM === 'liepin' ? LIEPIN_LIST.searchScopeMatches(location.href, opts.expectedSearchUrl, document) : true);
   const zhaopinBlocked = () => {
     if (PLATFORM !== 'zhaopin') return false;
     const block = readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {});
@@ -3152,6 +3156,10 @@ async function visualCollectListOnly(opts = {}) {
     if (zhaopinBlocked()) return;
     if (wubaBlocked()) return;
     if (wubaSearchEnded(true)) return;
+    if (scopeReady() && collectionListExplicitlyEmpty() && !collectCards(true).length) {
+      notify('collect-done', { listUrl: location.href, platform: PLATFORM, processed: 0, total: 0, maxJobs, reason: 'completed', empty: true });
+      return;
+    }
     let cards = [];
     try { cards = scopeReady() ? collectCards(true) : []; } catch (e) {
       notify('collect-progress', { phase: 'collect-error', index: 0, total: 0, processed: 0, maxJobs, status: `列表查询异常：${String(e?.message || e).slice(0, 80)}` });
@@ -3176,7 +3184,7 @@ async function visualCollectListOnly(opts = {}) {
   // 主循环：逐卡滚动 + 高亮 + 回传（**不点击卡片** —— 见函数头注释）
   // 智联额外一步：入库前按 number 调平台详情接口补齐 JD（失败保留卡片文本兜底）。
   if (!stopped() && !scopeReady()) {
-    notify('collect-done', { listUrl: location.href, processed: 0, total: 0, maxJobs, reason: 'failed', error: '智联尚未进入目标城市、关键词或筛选条件，进度已保留' });
+    notify('collect-done', { listUrl: location.href, processed: 0, total: 0, maxJobs, reason: 'failed', error: `${PLATFORM_LABEL}尚未进入目标城市、关键词或筛选条件，进度已保留` });
     return;
   }
   if (!stopped() && !collectCards().length && !collectionListExplicitlyEmpty()
@@ -3188,7 +3196,7 @@ async function visualCollectListOnly(opts = {}) {
     if (zhaopinBlocked()) return;
     if (wubaBlocked()) return;
     if (!scopeReady()) {
-      notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'failed', error: '智联搜索条件在采集中发生变化，进度已保留' });
+      notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'failed', error: `${PLATFORM_LABEL}搜索条件在采集中发生变化，进度已保留` });
       return;
     }
     await waitWhilePaused();

@@ -94,7 +94,10 @@ try {
   has('硕士 → eduLevel=030', u({ criteria: { degrees: ['硕士'] } }), 'eduLevel=030');
   has('博士 → eduLevel=010', u({ criteria: { degrees: ['博士'] } }), 'eduLevel=010');
   has('大专 → eduLevel=050', u({ criteria: { degrees: ['大专'] } }), 'eduLevel=050');
-  has('硕士+本科 → eduLevel=030$040', u({ criteria: { degrees: ['硕士', '本科'] } }), 'eduLevel=030$040');
+  try { u({ criteria: { degrees: ['硕士', '本科'] } }); failures.push('多学历不得拼接成平台不支持的 eduLevel'); }
+  catch (error) { if (error.message.includes('单选')) pass++; else throw error; }
+  has('英文关键词空格按百分号编码', u({ keyword: 'Vibe Coding' }), 'key=Vibe%20Coding');
+  has('字面加号与空格区分', u({ keyword: 'C++ AI' }), 'key=C%2B%2B%20AI');
 
   // ---- 公司规模 compScale（实测 010~040；设置页跨档项不附加）----
   has('0-20人 → compScale=010（并入猎聘 1-49人）', u({ criteria: { companyScale: '0-20人' } }), 'compScale=010');

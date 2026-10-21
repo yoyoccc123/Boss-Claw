@@ -28,7 +28,7 @@ const bridge = vm.runInNewContext(main.variables.get('ZP_DETAIL_NAV_SCRIPT'), { 
 const functions = ['visible', 'textOf', 'rawLines', 'pickFromCard', 'zhaopinTitleFromCard', 'cardIdentity', 'cardJobTokens', 'collectCards',
   'collectionListExplicitlyEmpty', 'visualCollectListOnly', 'pageStatusData'];
 const setup = `const ADAPTERS=${JSON.stringify(A)},PLATFORM='zhaopin',PLATFORM_LIST_SELECTORS=ADAPTERS.PLATFORM_CARD_SELECTORS,FIELD_SELECTORS=ADAPTERS.PLATFORM_FIELD_SELECTORS.zhaopin,LINK_SELECTOR=ADAPTERS.PLATFORM_LINK_SELECTOR.zhaopin,LIST_ROOT_SELECTORS=ADAPTERS.PLATFORM_LIST_ROOT_SELECTORS.zhaopin;
-const detectPlatform=${A.detectPlatform.toString()};ADAPTERS.jobIdFromUrl=${A.jobIdFromUrl.toString()};
+const PLATFORM_LABEL='智联';const detectPlatform=${A.detectPlatform.toString()};ADAPTERS.jobIdFromUrl=${A.jobIdFromUrl.toString()};
 const ZHAOPIN_LIST=(()=>{const module={exports:{}};new Function('module',${JSON.stringify(fs.readFileSync(path.join(root, 'electron/preload/zhaopin-list.cjs'), 'utf8'))})(module);return module.exports;})();
 const readZhaopinPageBlock=(()=>{const module={exports:{}};new Function('module',${JSON.stringify(fs.readFileSync(path.join(root, 'electron/preload/zhaopin-page-block.cjs'), 'utf8'))})(module);return module.exports.readZhaopinPageBlock;})();
 const all=(s,scope=document)=>Array.from(scope.querySelectorAll(s)),$=s=>document.querySelector(s),cleanCompanyName=s=>String(s||''),looksLikeLocation=()=>false;

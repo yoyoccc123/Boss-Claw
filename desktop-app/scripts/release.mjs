@@ -114,6 +114,7 @@ try {
       const archive = path.join(packaged, 'resources/app.asar'), asar = require('@electron/asar');
       const requiredSources = ['electron/main.cjs', 'electron/preload/zhaopin-list.cjs', 'electron/boss-browse-budget.cjs', 'electron/preload/boss-page-block.cjs', 'electron/session-persistence.cjs', 'electron/single-instance.cjs', 'electron/browser-auth.cjs', 'electron/preload/webview.cjs', 'electron/preload/platform-adapters.cjs', 'electron/preload/wuba.cjs', 'electron/preload/boss-chat-context.cjs', 'electron/preload/text-send-control.cjs', 'electron/runtime-paths.cjs',
         ...P.files(path.join(project, 'dist')).map(file => path.relative(project, file))];
+      requiredSources.push('electron/preload/liepin-list.cjs');
       for (const relative of requiredSources) {
         const actual = asar.extractFile(archive, path.normalize(relative));
         if (crypto.createHash('sha256').update(actual).digest('hex') !== await P.sha(path.join(project, relative)))
