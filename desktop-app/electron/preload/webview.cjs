@@ -3817,7 +3817,7 @@ async function platformApplyOnce(args = {}) {
       if (judged && judged.indexOf('blocked:') === 0) {
         return fail('stop', { message: '智联投递被平台阻断：' + judged.slice(8) });
       }
-      return fail('failed', { needsReview: true, error: '投递按钮已点击但结果未确认；已暂停并保留页面，请核对平台记录后再重试' });
+      return fail('failed', { needsReview: true, reviewScope: 'job', error: '投递按钮已点击但结果未确认；该岗位已保留待核对，不会自动重投，继续处理下一岗位' });
     }
 
     if (platform === 'job51') {

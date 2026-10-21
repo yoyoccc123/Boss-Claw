@@ -415,6 +415,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   // 每个标签的「最近活跃时间戳」（激活 / 导航 / 切换标签时刷新）。仅 webview 模式生效；
   // 巡检不关激活标签、标签数 ≤1 不关；关闭逻辑复用 closeTab（含 webview destroy 与注册表清理）。
   const lastActivityRef = useRef<Record<string, number>>({});
+  const reviewTabIdsRef = useRef<Set<string>>(new Set());
   const touchTab = useCallback((id: string) => {
     lastActivityRef.current[id] = Date.now();
   }, []);
@@ -845,6 +846,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       delete registeredTabs.current[id];
     }
     delete lastActivityRef.current[id];
+    reviewTabIdsRef.current.delete(id);
     tabRefCallbacks.current.delete(id); // 释放稳定 ref 回调，避免映射表随开关标签无限增长
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
@@ -875,6 +877,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       for (const t of list) {
         if (t.id === activeIdRef.current) continue; // 不关当前激活标签
         if (t.kind === 'main') continue; // 采集岗位主标签固定化，永不自动关闭
+        if (reviewTabIdsRef.current.has(t.id)) continue; // 未确认结果保留到用户手动关闭。
         const last = lastActivityRef.current[t.id];
         if (last != null && now - last > thresholdMs) {
           closeTab(t.id);
@@ -956,7 +959,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   // 一旦该标记因任何原因未置位（详见 handleRegister 上方「身份稳定 ref 回调」的根因说明），
   // 就会把「页面 2s 内早已可用」误判成「详情页加载超时」——本次报告的智联投递失败即此。
   const platformApply = useCallback(
-    (url: string, platform: JobPlatform, job: any, greeting = '', control?: { canStart: () => boolean; onStart: () => void }): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean }> =>
+    (url: string, platform: JobPlatform, job: any, greeting = '', control?: { canStart: () => boolean; onStart: () => void }): Promise<{ ok: boolean; stage: string; external?: boolean; code?: number; message?: string; error?: string; tabId?: string; needsReview?: boolean; reviewScope?: 'job' }> =>
       new Promise((resolve) => {
         if (control && !control.canStart()) { resolve({ ok: false, stage: 'cancelled' }); return; }
         const tabId = openInNewTab(url, PLATFORM_META[platform]?.label || '岗位投递', 'detail');
@@ -978,11 +981,13 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           const timer = setTimeout(() => {
             if (apiResolvers.current.has(seq)) {
               apiResolvers.current.delete(seq);
+              reviewTabIdsRef.current.add(tabId);
               resolve({ ok: false, stage: 'failed', error: '投递请求已下发，但结果未在规定时间内确认；请核对平台投递记录后再重试', needsReview: true, tabId });
             }
           }, platform === 'liepin' ? 55000 : 26000);
           apiResolvers.current.set(seq, async (payload: any) => {
             clearTimeout(timer);
+            if (payload?.needsReview || payload?.stage === 'risk' || payload?.stage === 'login') reviewTabIdsRef.current.add(tabId);
             if (platform === 'wuba' && payload?.stage === 'resume_ready') {
               // Selecting a resume is a separate native submission boundary. Stop wins here.
               if (!aliveRef.current || !hasTab(tabId) || (control && !control.canStart())) {
@@ -1023,6 +1028,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             if (st && !st.error) {
               lastProbe = st;
               if (st.applyBlock?.kind === 'risk' || st.applyBlock?.kind === 'login') {
+                reviewTabIdsRef.current.add(tabId);
                 resolve({ ok: false, stage: st.applyBlock.kind, code: st.applyBlock.kind === 'risk' ? 35 : undefined, message: st.applyBlock.message, tabId });
                 return; // 验证页可能只有 iframe、正文为零；立即保留页面交人工，不下发投递。
               }
@@ -1040,6 +1046,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             }
           }
           if (cancelledBeforeStart()) return;
+          reviewTabIdsRef.current.add(tabId);
           resolve({
             ok: false,
             stage: 'failed',
@@ -1059,7 +1066,10 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   const zhaopinGreet = useCallback(async (job: any, greeting: string, control: { canStart: () => boolean; onStart: () => void }, existingTab?: string) => {
     if (!control.canStart()) return { ok: false, stage: 'cancelled' };
     const tabId = existingTab || openInNewTab(job.url, '智联招呼语', 'detail');
-    const failed = (error: string) => ({ ok: false, stage: 'failed', needsReview: true, sendAttempted: false, error, tabId });
+    const failed = (error: string) => {
+      reviewTabIdsRef.current.add(tabId);
+      return { ok: false, stage: 'failed', needsReview: true, sendAttempted: false, error, tabId };
+    };
     if (!tabId) return failed('未能创建智联沟通标签页');
     const cancelled = () => !control.canStart() || !hasTab(tabId) || !aliveRef.current;
     const waitReady = async (chat: boolean) => {
@@ -1077,6 +1087,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             if (key !== loginKey || loginSince === null) { loginKey = key; loginSince = Date.now(); }
             if (Date.now() - loginSince < 1500) { await sleep(400); continue; }
           }
+          reviewTabIdsRef.current.add(tabId);
           return { ok: false, stage: probe.applyBlock.kind, code: probe.applyBlock.kind === 'risk' ? 35 : undefined, message: probe.applyBlock.message, needsReview: true, sendAttempted: false, tabId };
         }
         loginSince = null; loginKey = '';

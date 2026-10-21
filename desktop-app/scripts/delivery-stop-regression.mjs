@@ -85,7 +85,7 @@ async function browserEnvironment({ready=false}={}) {
   const c={Promise,Date,setTimeout,clearTimeout,useCallback:fn=>fn,PLATFORM_META:{zhaopin:{label:'智联'}},
     openInNewTab:()=> 'detail',hasTab:()=>true,closeTabById:id=>closed.push(id),aliveRef:{current:true},APPLY_PAGE_READY_MS:30000,
     isPreloadReady:()=>ready,isLoading:()=>false,pageStatus:()=>ready?Promise.resolve({readyState:'complete',bodyLen:300,zhaopinApplyEntry:{kind:'ready'}}):probe.promise,sleep:()=>pause.promise,describeApplyProbe:()=>'',
-    seqRef:{current:0},apiResolvers:{current:new Map()},cmdOnce:()=>{throw Error('unexpected confirmation IPC');},sendInTab:(_tab,_channel,arg)=>sends.push(arg)};
+    seqRef:{current:0},apiResolvers:{current:new Map()},reviewTabIdsRef:{current:new Set()},cmdOnce:()=>{throw Error('unexpected confirmation IPC');},sendInTab:(_tab,_channel,arg)=>sends.push(arg)};
   vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browserApply};`,{loader:'tsx'})).code,c);
   const control={canStart:()=>allowed,onStart:()=>{c.started=true;}};
   return {c,control,pause,probe,sends,closed,stop:()=>{allowed=false;}};
@@ -108,6 +108,27 @@ async function browserEnvironment({ready=false}={}) {
   env.c.setTimeout=fn=>{timeout=fn;return 1;};env.c.clearTimeout=()=>{};
   const run=env.c.apply('https://example.invalid','zhaopin',{},'',env.control);env.pause.resolve();while(!env.sends.length)await flush();env.stop();timeout();const result=await run;
   check(result.needsReview&&env.closed.length===0,'platform result timeout after submission requires review and preserves the tab');
+  check(env.c.reviewTabIdsRef.current.has('detail'),'timed-out review tab is protected from idle cleanup');
+}
+// A completed unknown Zhaopin result isolates this job; Stop still wins over advancement.
+for(const stopAfter of [false,true]) {
+  const env=await environment();const patches=[];let next=0;
+  env.c.updatePending=(_id,patch)=>{patches.push(patch);Object.assign(env.item,patch);};
+  env.c.requestRunNext=()=>{next++;};
+  env.c.webviewApi.current.platformApply=async(...args)=>{args[4].onStart();if(stopAfter)env.stop();return{ok:false,stage:'failed',needsReview:true,reviewScope:'job',tabId:'detail',error:'结果未确认'};};
+  const run=env.c.deliverNonBoss(env.item,env.item.job.url);env.gap.resolve(true);await run;
+  check(env.item.status==='failed'&&env.item.deliveryNeedsReview&&env.item.retryable===false,'unknown Zhaopin job remains excluded from automatic retries');
+  check(next===(stopAfter?0:1)&&env.closed.length===0,'unknown Zhaopin job advances only while running and keeps its owned tab');
+}
+{
+  const effect=browser.effects.find(s=>s.includes('idleCloseMinutes')&&s.includes('setInterval'));assert.ok(effect);
+  let sweep;const closed=[];
+  const c={Date:{now:()=>300000},config0:{autoCloseIdleTabs:true,engineMode:'webview',idleCloseMinutes:1},
+    tabsRef:{current:[{id:'main',kind:'main'},{id:'review',kind:'detail'},{id:'old',kind:'detail'}]},activeIdRef:{current:'main'},
+    reviewTabIdsRef:{current:new Set(['review'])},lastActivityRef:{current:{main:0,review:0,old:0}},
+    closeTab:id=>closed.push(id),setInterval:fn=>{sweep=fn;return 1;},clearInterval:()=>{}};
+  vm.createContext(c);vm.runInContext((await transform(`(${effect})();`,{loader:'tsx'})).code,c);sweep();
+  check(closed.join(',')==='old','idle cleanup preserves the review tab while reclaiming ordinary old tabs');
 }
 {
   const env=await environment();const patches=[];env.c.updatePending=(_id,patch)=>patches.push(patch);

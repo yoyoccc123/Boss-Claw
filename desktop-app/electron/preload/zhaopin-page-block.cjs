@@ -16,7 +16,13 @@ function visible(el) {
     const view = el.ownerDocument.defaultView;
     for (let parent = el; parent && parent.nodeType === 1; parent = parent.parentElement) {
       const style = view.getComputedStyle(parent);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+      // Native Vue's enter frame can stay at opacity 0 while the guest is
+      // backgrounded. Its mounted workflow remains actionable by DOM; read
+      // verification panels in it too, before allowing any attachment action.
+      if (Number(style.opacity) === 0 && !(el.ownerDocument.visibilityState === 'hidden'
+        && parent.matches('.a-modal.a-modal--transition-enter.a-modal--transition-enter-active')
+        && parent.querySelector('.a-job-apply-workflow'))) return false;
     }
     const rect = el.getBoundingClientRect();
     return rect.width > 1 && rect.height > 1;

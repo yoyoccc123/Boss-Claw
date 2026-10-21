@@ -11,7 +11,12 @@ function visible(el) {
   if (!el || !el.isConnected) return false;
   for (let p = el; p?.nodeType === 1; p = p.parentElement) {
     const s = p.ownerDocument.defaultView.getComputedStyle(p);
-    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
+    if (s.display === 'none' || s.visibility === 'hidden') return false;
+    // Keep in sync with page-block visibility: only the native workflow's
+    // pending enter frame may be transparent in a background guest.
+    if (s.opacity === '0' && !(el.ownerDocument.visibilityState === 'hidden'
+      && p.matches('.a-modal.a-modal--transition-enter.a-modal--transition-enter-active')
+      && p.querySelector('.a-job-apply-workflow'))) return false;
   }
   const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0;
 }

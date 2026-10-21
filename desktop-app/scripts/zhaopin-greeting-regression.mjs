@@ -193,7 +193,7 @@ console.log(`PASS native chat binding: ${nativeChecks} production guest/origin/s
 let hostChecks=0;
 for(const stopAt of ['never','before-open','after-navigation','after-prepare','after-send']){
   let allowed=true,reads=0,sends=0,opens=0,started=0;
-  const context={Promise,URL,Date,useCallback:fn=>fn,aliveRef:{current:true},openInNewTab:()=> 'tab',hasTab:()=>true,sleep:async()=>{},
+  const context={Promise,URL,Date,useCallback:fn=>fn,aliveRef:{current:true},reviewTabIdsRef:{current:new Set()},openInNewTab:()=> 'tab',hasTab:()=>true,sleep:async()=>{},
     pageStatus:async()=>{reads++;if(stopAt==='before-open'&&reads===1)allowed=false;if(stopAt==='after-navigation'&&reads===2)allowed=false;return reads===1?{bodyLen:300,readyState:'complete',url:job.url}:{bodyLen:500,readyState:'complete',url:'https://i.zhaopin.com/im?sessionId=target',zhaopinChatReady:true};},
     cmdOnce:async(channel,args)=>{if(args.action==='open'){opens++;return{ok:true,defaultGreeting:platformDefault,nativeChatToken:'native-host-token'};}assert.equal(args.nativeChatToken,'native-host-token');if(args.action==='prepare'){if(stopAt==='after-prepare')allowed=false;return{ok:true,stage:'prepared',token:'t'};}sends++;if(stopAt==='after-send')allowed=false;return{ok:true,stage:'success',greetingConfirmed:true};}};
   vm.createContext(context);vm.runInContext((await transform(`globalThis.greet=${browser.vars.get('zhaopinGreet')};`,{loader:'tsx'})).code,context);
@@ -202,7 +202,7 @@ for(const stopAt of ['never','before-open','after-navigation','after-prepare','a
 }
 for(const mode of ['transient-detail','transient-chat','persistent-detail','persistent-chat','risk-during-login','stop-during-login']) {
   let tick=0,allowed=true,phase='detail',phaseReads=0,sends=0,opens=0;
-  const c={Promise,URL,Date:{now:()=>tick},useCallback:fn=>fn,aliveRef:{current:true},openInNewTab:()=> 'tab',hasTab:()=>true,
+  const c={Promise,URL,Date:{now:()=>tick},useCallback:fn=>fn,aliveRef:{current:true},reviewTabIdsRef:{current:new Set()},openInNewTab:()=> 'tab',hasTab:()=>true,
     sleep:async()=>{tick+=400;if(mode==='stop-during-login')allowed=false;},
     pageStatus:async()=>{phaseReads++;const here={bodyLen:500,readyState:'complete',url:phase==='detail'?job.url:'https://i.zhaopin.com/im?sessionId=target',zhaopinChatReady:phase==='chat'};
       const affected=mode.endsWith(phase)||mode.endsWith('login')&&phase==='detail';
@@ -219,7 +219,7 @@ console.log(`PASS Zhaopin greeting host: ${hostChecks} production navigation/Sto
 
 // Successful resume delivery survives a message failure, Stop, or exception. Supplement skips submission.
 let queueChecks=0;
-for(const outcome of ['success','cancelled','failed','risk','throws','supplement','identity-rejected']){
+for(const outcome of ['success','cancelled','failed','risk','login','throws','supplement','identity-rejected']){
   const item={id:'job',status:'approved_queue',job,deliveryGreeting:greeting,...(outcome==='supplement'?{resumeDeliveredAt:10,sentAt:10}:{})};
   let applies=0,greets=0,pauses=0,closed=0,next=0;const store={autoAssist:true};
   const c={Promise,Date,useDataStore:{getState:()=>({pending:[item]})},useAppStore:{getState:()=>store},deliveryEpochRef:{current:0},deliverySubmittedRef:{current:false},
@@ -231,10 +231,10 @@ for(const outcome of ['success','cancelled','failed','risk','throws','supplement
   vm.createContext(c);vm.runInContext((await transform(`globalThis.deliver=${wb.vars.get('deliverNonBoss')};`,{loader:'tsx'})).code,c);
   await c.deliver(item,job.url);
   assert.equal(item.status,'sent',outcome);assert.ok(item.resumeDeliveredAt);assert.equal(greets,1);assert.equal(applies,outcome==='supplement'?0:1);
-  if(['failed','risk','throws'].includes(outcome)){assert.equal(item.greetingStatus,'needs_review');assert.equal(closed,0);assert.equal(pauses,1);assert.equal(next,0);}
+  if(['failed','risk','login','throws'].includes(outcome)){assert.equal(item.greetingStatus,'needs_review');assert.equal(closed,0);const blocked=['risk','login'].includes(outcome);assert.equal(pauses,blocked?1:0);assert.equal(next,blocked?0:1);}
   if(outcome==='cancelled'){assert.equal(item.greetingStatus,'pending');assert.equal(closed,0);}
   if(outcome==='supplement')assert.equal(item.sentAt,10);
-  if(outcome==='identity-rejected'){assert.equal(item.greetingStatus,'pending');assert.equal(item.greetingSendAttempted,false);assert.equal(closed,0);assert.equal(pauses,1);}
+  if(outcome==='identity-rejected'){assert.equal(item.greetingStatus,'pending');assert.equal(item.greetingSendAttempted,false);assert.equal(closed,0);assert.equal(pauses,0);assert.equal(next,1);}
   queueChecks++;
 }
 console.log(`PASS Zhaopin greeting workbench: ${queueChecks} production result/supplement cases; no actual submission or message.`);

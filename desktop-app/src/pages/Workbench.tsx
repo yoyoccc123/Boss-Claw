@@ -2417,7 +2417,13 @@ export default function Workbench() {
       updatePending(candidate.id, { status: 'sent', greetingStatus: notSent ? 'pending' : 'needs_review', greetingSendAttempted: notSent ? false : chat.sendAttempted, error, retryable: false });
       addLog('warn', `智联：${nTitle}（${error}）`);
       setApplyStage(null); recomputeStats();
-      if (!stopped) pauseAssist(error);
+      if (!stopped) {
+        if (chat.stage === 'risk' || chat.stage === 'login') pauseAssist(error);
+        else {
+          addLog('warn', `该岗位招呼语已保留待核对，继续下一岗位：${nTitle}`);
+          if (useAppStore.getState().autoAssist) requestRunNext();
+        }
+      }
       return; // 已提交的简历永不作为失败重新投递；保留聊天页与草稿。
     }
     if (res.ok && res.stage === 'success') {
@@ -2475,6 +2481,11 @@ export default function Workbench() {
     addLog('error', `投递失败：${nTitle}（${errMsg}）`);
     if (res.needsReview) {
       setApplyStage(null); recomputeStats();
+      if (pf === 'zhaopin' && res.reviewScope === 'job') {
+        addLog('warn', `该岗位结果待核对，已保留页面且禁止自动重投，继续下一岗位：${nTitle}`);
+        if (useAppStore.getState().autoAssist) requestRunNext();
+        return;
+      }
       pauseAssist(errMsg);
       return; // 保留会话标签，不自动重试或继续下一条。
     }

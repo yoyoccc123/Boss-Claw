@@ -25,7 +25,15 @@ const challenge='<div class="geetest_panel" style="width:300px;height:180px">请
 const success="document.body.insertAdjacentHTML('beforeend','<div class=\"a-job-apply-success-message-panel\">简历投递成功</div>');";
 const attachmentPanel=(selected='online',extra='')=>`<div class="a-attachment-select"><div class="a-attachment-select__item ${selected==='online'?'resume-select':''}" id="online"><span class="file-online"></span>在线简历</div><div class="a-attachment-select__item ${selected==='attachment'?'resume-select':''}" id="attachment"><span class="file-pdf"></span>示例姓名.pdf</div>${extra}<a class="a-attachment-select__action-btn__delivery">投递简历</a></div>`;
 const attachmentAfter=panel=>`if(el.id==='apply')document.body.insertAdjacentHTML('beforeend',${JSON.stringify(panel)});else if(el.matches('.a-attachment-select__item')){document.querySelectorAll('.resume-select').forEach(e=>e.classList.remove('resume-select'));el.classList.add('resume-select');}else if(el.matches('.a-attachment-select__action-btn__delivery')){if(!document.querySelector('#attachment.resume-select'))throw Error('Online resume must never be submitted');${success}}`;
+const nativePanel='<div class="a-attachment-select"><div id="online" class="a-attachment-select__item a-attachment-select__item--online is-active"><span class="radio-checked"></span><span class="file-online"></span>在线简历</div><div id="attachment" class="a-attachment-select__item a-attachment-select__item--attachment"><span class="radio-default"></span><span class="file-pdf"></span>示例姓名.pdf</div><a class="a-attachment-select__action-btn__delivery">投递简历</a></div>';
+const pendingModal=content=>'<div class="a-modal a-modal--transition-enter a-modal--transition-enter-active" style="opacity:0"><div class="a-modal__content"><div class="a-dialog"><div class="a-job-apply-workflow"><header>请选择要投递的简历</header>'+content+'</div></div></div></div>';
+const nativeAfter=content=>`if(el.id==='apply')document.body.insertAdjacentHTML('beforeend',${JSON.stringify(content)});else if(el.id==='attachment'){document.querySelector('#online').classList.remove('is-active');document.querySelector('#online .radio-checked').className='radio-default';el.classList.add('is-active');el.querySelector('.radio-default').className='radio-checked';}else if(el.matches('.a-attachment-select__action-btn__delivery')){if(!document.querySelector('#attachment.is-active'))throw Error('Online resume must never be submitted');${success}}`;
 const cases=[
+  {name:'后台原生入场弹层选择PDF后提交',html:normal,visibility:'hidden',after:nativeAfter(pendingModal(nativePanel)),stage:'success',clicks:3},
+  {name:'后台原生入场弹层安全验证优先',html:normal,visibility:'hidden',after:nativeAfter(pendingModal(nativePanel+challenge)),stage:'risk',clicks:1},
+  {name:'原生入场弹层中隐藏附件仍不点',html:normal,visibility:'hidden',after:nativeAfter(pendingModal('<div style="display:none">'+nativePanel+'</div>')),stage:'failed',review:true,scope:'job',clicks:1},
+  {name:'普通透明弹层不当原生入场',html:normal,visibility:'hidden',after:nativeAfter(pendingModal(nativePanel).replace('a-modal--transition-enter a-modal--transition-enter-active','')),stage:'failed',review:true,scope:'job',clicks:1},
+  {name:'前台透明入场仍等待绘制',html:normal,visibility:'visible',after:nativeAfter(pendingModal(nativePanel)),stage:'failed',review:true,scope:'job',clicks:1},
   {name:'官方下线图片跳过而非暂停',html:offline,stage:'skip',entry:'unavailable',clicks:0},
   {name:'下线页安全验证仍优先暂停',html:offline+challenge,stage:'risk',entry:'risk',clicks:0},
   {name:'隐藏旧下线标记不误跳过',html:normal+'<div style="display:none">'+offline+'</div>',after:success,stage:'success',entry:'ready',clicks:1},
@@ -84,6 +92,7 @@ const cases=[
 const helper=readFileSync(join(root,'electron/preload/zhaopin-page-block.cjs'),'utf8');
 const names=['visible','textOf','findPlatformAction','externalApplyDetected','firstVisible','readZhaopinApplyEntry','platformApplyOnce','pageStatusData'];names.forEach(n=>assert.ok(preload.functions.has(n),n));
 const fixtureCode=fixture=>`(async()=>{const fixture=${JSON.stringify(fixture)};
+if(fixture.visibility)Object.defineProperty(document,'visibilityState',{get:()=>fixture.visibility});
 const readZhaopinPageBlock=(()=>{const module={exports:{}};${helper};return module.exports.readZhaopinPageBlock;})();
 const readBossPageBlock=${readBossPageBlock.toString()};
 const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};ADAPTERS.labelHit=${A.labelHit.toString()};ADAPTERS.labelExactHit=${A.labelExactHit.toString()};ADAPTERS.normLabelText=${A.normLabelText.toString()};ADAPTERS.classifyBlockedText=${A.classifyBlockedText.toString()};
@@ -107,7 +116,7 @@ const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 const processResult=spawnSync(process.env.BOSSCLAW_ELECTRON||require('electron'),[entry],{env,windowsHide:true,timeout:45000,encoding:'utf8'});
 assert.equal(processResult.status,0,processResult.error?.message||processResult.stderr);
 const reports=JSON.parse(readFileSync(reportFile,'utf8'));assert.ok(!reports.error,reports.error);
-for(let i=0;i<cases.length;i++){const expected=cases[i],actual=reports[i];assert.equal(actual.result?.stage,expected.stage,expected.name);assert.equal(actual.clicks,expected.clicks,expected.name+' click count');assert.equal(Boolean(actual.result?.needsReview),Boolean(expected.review),expected.name+' review flag');if(expected.entry)assert.equal(actual.entry,expected.entry,expected.name+' entry state');if('block' in expected)assert.equal(actual.probeBlock?.kind||null,expected.block,expected.name+' page status block');}
+for(let i=0;i<cases.length;i++){const expected=cases[i],actual=reports[i];assert.equal(actual.result?.stage,expected.stage,expected.name);assert.equal(actual.clicks,expected.clicks,expected.name+' click count');assert.equal(Boolean(actual.result?.needsReview),Boolean(expected.review),expected.name+' review flag');if(expected.scope)assert.equal(actual.result?.reviewScope,expected.scope,expected.name+' review scope');if(expected.entry)assert.equal(actual.entry,expected.entry,expected.name+' entry state');if('block' in expected)assert.equal(actual.probeBlock?.kind||null,expected.block,expected.name+' page status block');}
 const emptyFrameProbe=reports.find(r=>r.name==='跨域验证码框架');assert.equal(emptyFrameProbe.bodyLen,0);assert.equal(emptyFrameProbe.probeBlock?.kind,'risk');
 console.log(`PASS Zhaopin blocks: ${cases.length} real isolated DOM workflows; ${reportFile}`);
 
@@ -115,7 +124,9 @@ console.log(`PASS Zhaopin blocks: ${cases.length} real isolated DOM workflows; $
 const bundle=join(work,'safety.cjs');await build({stdin:{contents:"export * from './src/lib/bossclaw/safety';",loader:'ts',resolveDir:root},bundle:true,platform:'node',format:'cjs',outfile:bundle,tsconfig:join(root,'tsconfig.json'),logLevel:'silent'});
 const safety=require(bundle);
 let hostChecks=0;
-for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId:'verify'},{ok:false,stage:'login',message:'扫码登录',tabId:'verify'},{ok:false,stage:'failed',needsReview:true,error:'入口无法确认',tabId:'verify'},{ok:false,stage:'skip',message:'岗位已下线',tabId:'verify'}]) {
+for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId:'verify'},{ok:false,stage:'login',message:'扫码登录',tabId:'verify'},{ok:false,stage:'failed',needsReview:true,error:'入口无法确认',tabId:'verify'},{ok:false,stage:'skip',message:'岗位已下线',tabId:'verify'},
+  {ok:false,stage:'failed',needsReview:true,reviewScope:'job',error:'点击后结果不明',tabId:'verify'},
+  {ok:false,stage:'failed',needsReview:true,reviewScope:'job',error:'点击后停止',tabId:'verify',testStop:true}]) {
   const item={id:'actual-job',status:'approved_queue',deliveryNeedsReview:true,job:{platform:'zhaopin',title:'测试岗位'},deliveryGreeting:'测试岗位用的完整招呼语'},following={id:'next-job',status:'approved_queue'};
   const pending=[item,following],closed=[],pauses=[],state={autoAssist:true};let scheduled=0;
   const c={Promise,useCallback:fn=>fn,activeId:null,deliveryEpochRef:{current:0},deliverySubmittedRef:{current:false},
@@ -123,13 +134,14 @@ for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId
     updatePending:(id,patch)=>Object.assign(pending.find(p=>p.id===id),patch),awaitDeliveryGap:async()=>true,
     claimDelivery:()=>true,releaseDelivery:()=>{},platformLabel:p=>p,addLog:()=>{},setApplyStage:()=>{},recomputeStats:()=>{},
     pauseAssist:message=>{pauses.push(message);state.autoAssist=false;},requestRunNext:()=>{scheduled++;},
-    webviewApi:{current:{platformApply:async()=>result,closeTab:id=>closed.push(id)}},
+    webviewApi:{current:{platformApply:async()=>{if(result.testStop)state.autoAssist=false;return result;},closeTab:id=>closed.push(id)}},
     classifyRiskCode:safety.classifyRiskCode,resolveCooldownMs:safety.resolveCooldownMs};
   vm.createContext(c);
   for(const name of ['canContinueDelivery','handleRisk','deliverNonBoss'])vm.runInContext((await transform(`globalThis.${name}=${wb.vars.get(name)};`,{loader:'tsx'})).code,c);
   await c.deliverNonBoss(item,'https://example.invalid/job');
   const skipped=result.stage==='skip';
-  assert.equal(closed.length,skipped?1:0);assert.equal(pauses.length,skipped?0:1);assert.equal(scheduled,skipped?1:0);assert.equal(item.deliveryNeedsReview,!skipped);assert.equal(item.status,skipped?'skipped':'failed');assert.equal(following.status,'approved_queue');hostChecks++;
+  const isolated=result.reviewScope==='job';
+  assert.equal(closed.length,skipped?1:0);assert.equal(pauses.length,skipped||isolated?0:1);assert.equal(scheduled,(skipped||isolated)&&!result.testStop?1:0);assert.equal(item.deliveryNeedsReview,!skipped);assert.equal(item.status,skipped?'skipped':'failed');assert.equal(following.status,'approved_queue');if(isolated)assert.equal(item.retryable,false);hostChecks++;
 }
 // A verification iframe can have zero body text: the page probe still blocks without platform IPC.
 {
@@ -137,7 +149,7 @@ for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId
   const c={Promise,Date,setTimeout,clearTimeout,useCallback:fn=>fn,openInNewTab:()=> 'verify',hasTab:()=>true,closeTabById:id=>closed.push(id),
     PLATFORM_META:{zhaopin:{label:'智联'}},aliveRef:{current:true},APPLY_PAGE_READY_MS:30000,sleep:async()=>{},isPreloadReady:()=>false,isLoading:()=>true,
     pageStatus:async()=>({readyState:'complete',bodyLen:0,cards:0,applyBlock:{kind:'risk',message:'请完成人机验证'}}),
-    seqRef:{current:0},apiResolvers:{current:new Map()},sendInTab:()=>{dispatched++;},describeApplyProbe:()=>''};
+    seqRef:{current:0},apiResolvers:{current:new Map()},reviewTabIdsRef:{current:new Set()},sendInTab:()=>{dispatched++;},describeApplyProbe:()=>''};
   c.cmdOnce=async()=>{throw Error('Blocked frame must not execute a page command');};
   vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browser.vars.get('platformApply')};`,{loader:'tsx'})).code,c);
   const result=await c.apply('https://example.invalid','zhaopin',{});
@@ -152,7 +164,7 @@ for(const scenario of ['late-ready','offline','stop-late-ready','stop-offline','
     pageStatus:async()=>{probes++;if(probes===1||scenario==='unknown')return{readyState:'complete',bodyLen:900,zhaopinApplyEntry:{kind:'missing'}};
       if(scenario.startsWith('stop-'))allowed=false;
       return{readyState:'complete',bodyLen:900,zhaopinApplyEntry:entry,...(scenario.startsWith('late-')&&scenario!=='late-ready'?{applyBlock:{kind:scenario.slice(5),message:'人工处理'}}:{})};},
-    seqRef:{current:0},apiResolvers:{current:new Map()},sendInTab:(_id,_channel,args)=>{dispatched++;Promise.resolve().then(()=>c.apiResolvers.current.get(args.seq)({ok:true,stage:'success'}));},describeApplyProbe:()=>'',cmdOnce:()=>{throw Error('Unexpected confirmation');}};
+    seqRef:{current:0},apiResolvers:{current:new Map()},reviewTabIdsRef:{current:new Set()},sendInTab:(_id,_channel,args)=>{dispatched++;Promise.resolve().then(()=>c.apiResolvers.current.get(args.seq)({ok:true,stage:'success'}));},describeApplyProbe:()=>'',cmdOnce:()=>{throw Error('Unexpected confirmation');}};
   vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browser.vars.get('platformApply')};`,{loader:'tsx'})).code,c);
   const result=await c.apply('https://example.invalid','zhaopin',{},'',{canStart:()=>allowed,onStart:()=>{started++;}});
   const expected=scenario==='late-ready'?'success':scenario.startsWith('stop-')?'cancelled':scenario==='offline'?'skip':scenario==='unknown'?'failed':scenario.slice(5);
