@@ -19,11 +19,24 @@ function parse(file) {
 }
 const preload=parse('electron/preload/webview.cjs'),wb=parse('src/pages/Workbench.tsx'),browser=parse('src/components/BrowserView.tsx');
 const normal='<div class="summary-planes__action"><button id="apply">立即投递</button></div><div class="job-description">职位描述：Python开发实习</div>';
+// Captured native offline structure; all content and identifiers are synthetic.
+const offline='<div class="summary-planes"><h1 class="summary-planes__title">示例岗位</h1><div class="summary-planes__other"><img class="summary-planes__invalid-text" src="https://example.invalid/assets/ic-offline.fixture.png" width="180" height="60"></div><a>查看更多相似职位</a></div>';
 const challenge='<div class="geetest_panel" style="width:300px;height:180px">请拖动滑块完成人机验证</div>';
 const success="document.body.insertAdjacentHTML('beforeend','<div class=\"a-job-apply-success-message-panel\">简历投递成功</div>');";
 const attachmentPanel=(selected='online',extra='')=>`<div class="a-attachment-select"><div class="a-attachment-select__item ${selected==='online'?'resume-select':''}" id="online"><span class="file-online"></span>在线简历</div><div class="a-attachment-select__item ${selected==='attachment'?'resume-select':''}" id="attachment"><span class="file-pdf"></span>示例姓名.pdf</div>${extra}<a class="a-attachment-select__action-btn__delivery">投递简历</a></div>`;
 const attachmentAfter=panel=>`if(el.id==='apply')document.body.insertAdjacentHTML('beforeend',${JSON.stringify(panel)});else if(el.matches('.a-attachment-select__item')){document.querySelectorAll('.resume-select').forEach(e=>e.classList.remove('resume-select'));el.classList.add('resume-select');}else if(el.matches('.a-attachment-select__action-btn__delivery')){if(!document.querySelector('#attachment.resume-select'))throw Error('Online resume must never be submitted');${success}}`;
 const cases=[
+  {name:'官方下线图片跳过而非暂停',html:offline,stage:'skip',entry:'unavailable',clicks:0},
+  {name:'下线页安全验证仍优先暂停',html:offline+challenge,stage:'risk',entry:'risk',clicks:0},
+  {name:'隐藏旧下线标记不误跳过',html:normal+'<div style="display:none">'+offline+'</div>',after:success,stage:'success',entry:'ready',clicks:1},
+  {name:'下线标记与可用入口冲突保留核对',html:normal+offline,stage:'failed',review:true,entry:'missing',clicks:0},
+  {name:'下线标记与已投递入口冲突保留核对',html:normal.replace('立即投递','已投递')+offline,stage:'failed',review:true,entry:'missing',clicks:0},
+  {name:'其他区域的下线图片不误跳过',html:normal+offline.replace('class="summary-planes"','class="recommendation"'),after:success,stage:'success',entry:'ready',clicks:1},
+  {name:'不同区域的标题不能为失效图片背书',html:offline.replace('<h1 class="summary-planes__title">示例岗位</h1>','')+'<h1 class="summary-planes__title">另一岗位</h1>',stage:'failed',review:true,entry:'missing',clicks:0},
+  {name:'岗位正文中下线说明不误跳过',html:normal+'<div class="job-description">负责处理职位已下线等状态</div>',after:success,stage:'success',clicks:1},
+  {name:'详情外图片不能标记岗位下线',html:offline,href:'https://www.zhaopin.com/',stage:'failed',review:true,entry:'missing',clicks:0},
+  {name:'已投递入口状态',html:normal.replace('立即投递','已投递'),stage:'success',entry:'already',clicks:0},
+  {name:'继续沟通入口状态',html:normal.replace('立即投递','继续沟通'),stage:'success',entry:'already',clicks:0},
   {name:'详情进入时验证码',html:challenge,stage:'risk',clicks:0},
   {name:'验证遮罩覆盖正常按钮',html:normal+challenge,stage:'risk',clicks:0},
   {name:'验证优先于已投递按钮',html:normal.replace('立即投递','已投递')+challenge,stage:'risk',clicks:0},
@@ -63,13 +76,13 @@ const cases=[
   {name:'旧成功提示不能替代附件请求证据',html:normal,after:success,noAttachmentRequest:true,stage:'failed',review:true,clicks:1},
 ];
 const helper=readFileSync(join(root,'electron/preload/zhaopin-page-block.cjs'),'utf8');
-const names=['visible','textOf','findPlatformAction','externalApplyDetected','firstVisible','platformApplyOnce','pageStatusData'];names.forEach(n=>assert.ok(preload.functions.has(n),n));
+const names=['visible','textOf','findPlatformAction','externalApplyDetected','firstVisible','readZhaopinApplyEntry','platformApplyOnce','pageStatusData'];names.forEach(n=>assert.ok(preload.functions.has(n),n));
 const fixtureCode=fixture=>`(async()=>{const fixture=${JSON.stringify(fixture)};
 const readZhaopinPageBlock=(()=>{const module={exports:{}};${helper};return module.exports.readZhaopinPageBlock;})();
 const readBossPageBlock=${readBossPageBlock.toString()};
 const ADAPTERS=${JSON.stringify({PLATFORM_APPLY_SPEC:A.PLATFORM_APPLY_SPEC})};ADAPTERS.labelHit=${A.labelHit.toString()};ADAPTERS.labelExactHit=${A.labelExactHit.toString()};ADAPTERS.normLabelText=${A.normLabelText.toString()};ADAPTERS.classifyBlockedText=${A.classifyBlockedText.toString()};
 const normLabelText=ADAPTERS.normLabelText,labelHit=ADAPTERS.labelHit,PLATFORM_APPLY_SPEC=ADAPTERS.PLATFORM_APPLY_SPEC;
-const PLATFORM='zhaopin',location={href:fixture.href||window.location.href},PLATFORM_NORM=ADAPTERS.normLabelText;
+const PLATFORM='zhaopin',location={href:fixture.href||'https://www.zhaopin.com/jobdetail/CC000000001J000000001.htm'},PLATFORM_NORM=ADAPTERS.normLabelText;
 const {readZhaopinChatReady,readZhaopinAttachmentSelection}=(()=>{const module={exports:{}};${imHelper};return module.exports;})();
 const ipcRenderer={invoke:async(channel,payload)=>{if(channel!=='jc:zhaopin-attachment-policy')throw Error('Unexpected IPC');if(fixture.policyUnavailable)return{ok:false,message:'fixture guard unavailable'};return{ok:true,blocked:payload.action==='state'&&!!fixture.policyBlocked,allowedRequests:fixture.noAttachmentRequest?0:1,message:fixture.policyBlocked?'已阻止智联在线简历投递':''};}};
 const all=(s,scope=document)=>Array.from(scope.querySelectorAll(s)),events=[],clicks=[];
@@ -78,8 +91,8 @@ const notify=(channel,payload)=>events.push({channel,payload});
 const jitterDelay=async()=>{},waitFor=async fn=>{for(let i=0;i<4;i++){const value=await fn();if(value)return value;}return null;};
 const clickElement=async el=>{clicks.push(el.textContent.trim());${fixture.after||''}};
 ${names.map(n=>preload.functions.get(n)).join('\n')}
-await platformApplyOnce({seq:'case',platform:'zhaopin',externalApplyHints:fixture.external||[]});
-const probe=pageStatusData();return {name:fixture.name,result:events.find(e=>e.channel==='platform-apply-result')?.payload,clicks:clicks.length,probeBlock:probe.applyBlock,bodyLen:probe.bodyLen};})()`;
+const before=pageStatusData();await platformApplyOnce({seq:'case',platform:'zhaopin',externalApplyHints:fixture.external||[]});
+const probe=pageStatusData();return {name:fixture.name,result:events.find(e=>e.channel==='platform-apply-result')?.payload,clicks:clicks.length,entry:before.zhaopinApplyEntry?.kind,probeBlock:probe.applyBlock,bodyLen:probe.bodyLen};})()`;
 cases.forEach(fixture=>new vm.Script(fixtureCode(fixture)));
 const entry=join(work,'main.cjs'),reportFile=join(work,'dom-report.json');
 for(let i=0;i<cases.length;i++)writeFileSync(join(work,'fixture-'+i+'.html'),'<meta charset="utf-8"><style>body{font:16px sans-serif}button,input{min-height:30px}iframe{display:block}</style>'+cases[i].html);
@@ -88,7 +101,7 @@ const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
 const processResult=spawnSync(process.env.BOSSCLAW_ELECTRON||require('electron'),[entry],{env,windowsHide:true,timeout:45000,encoding:'utf8'});
 assert.equal(processResult.status,0,processResult.error?.message||processResult.stderr);
 const reports=JSON.parse(readFileSync(reportFile,'utf8'));assert.ok(!reports.error,reports.error);
-for(let i=0;i<cases.length;i++){const expected=cases[i],actual=reports[i];assert.equal(actual.result?.stage,expected.stage,expected.name);assert.equal(actual.clicks,expected.clicks,expected.name+' click count');assert.equal(Boolean(actual.result?.needsReview),Boolean(expected.review),expected.name+' review flag');}
+for(let i=0;i<cases.length;i++){const expected=cases[i],actual=reports[i];assert.equal(actual.result?.stage,expected.stage,expected.name);assert.equal(actual.clicks,expected.clicks,expected.name+' click count');assert.equal(Boolean(actual.result?.needsReview),Boolean(expected.review),expected.name+' review flag');if(expected.entry)assert.equal(actual.entry,expected.entry,expected.name+' entry state');}
 const emptyFrameProbe=reports.find(r=>r.name==='跨域验证码框架');assert.equal(emptyFrameProbe.bodyLen,0);assert.equal(emptyFrameProbe.probeBlock?.kind,'risk');
 console.log(`PASS Zhaopin blocks: ${cases.length} real isolated DOM workflows; ${reportFile}`);
 
@@ -96,8 +109,8 @@ console.log(`PASS Zhaopin blocks: ${cases.length} real isolated DOM workflows; $
 const bundle=join(work,'safety.cjs');await build({stdin:{contents:"export * from './src/lib/bossclaw/safety';",loader:'ts',resolveDir:root},bundle:true,platform:'node',format:'cjs',outfile:bundle,tsconfig:join(root,'tsconfig.json'),logLevel:'silent'});
 const safety=require(bundle);
 let hostChecks=0;
-for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId:'verify'},{ok:false,stage:'login',message:'扫码登录',tabId:'verify'},{ok:false,stage:'failed',needsReview:true,error:'入口无法确认',tabId:'verify'}]) {
-  const item={id:'actual-job',status:'approved_queue',job:{platform:'zhaopin',title:'测试岗位'},deliveryGreeting:'测试岗位用的完整招呼语'},following={id:'next-job',status:'approved_queue'};
+for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId:'verify'},{ok:false,stage:'login',message:'扫码登录',tabId:'verify'},{ok:false,stage:'failed',needsReview:true,error:'入口无法确认',tabId:'verify'},{ok:false,stage:'skip',message:'岗位已下线',tabId:'verify'}]) {
+  const item={id:'actual-job',status:'approved_queue',deliveryNeedsReview:true,job:{platform:'zhaopin',title:'测试岗位'},deliveryGreeting:'测试岗位用的完整招呼语'},following={id:'next-job',status:'approved_queue'};
   const pending=[item,following],closed=[],pauses=[],state={autoAssist:true};let scheduled=0;
   const c={Promise,useCallback:fn=>fn,activeId:null,deliveryEpochRef:{current:0},deliverySubmittedRef:{current:false},
     useAppStore:{getState:()=>state},useDataStore:{getState:()=>({pending})},useSettingsStore:{getState:()=>({config:{}})},
@@ -109,7 +122,8 @@ for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId
   vm.createContext(c);
   for(const name of ['canContinueDelivery','handleRisk','deliverNonBoss'])vm.runInContext((await transform(`globalThis.${name}=${wb.vars.get(name)};`,{loader:'tsx'})).code,c);
   await c.deliverNonBoss(item,'https://example.invalid/job');
-  assert.equal(closed.length,0);assert.equal(pauses.length,1);assert.equal(scheduled,0);assert.equal(item.deliveryNeedsReview,true);assert.equal(following.status,'approved_queue');hostChecks++;
+  const skipped=result.stage==='skip';
+  assert.equal(closed.length,skipped?1:0);assert.equal(pauses.length,skipped?0:1);assert.equal(scheduled,skipped?1:0);assert.equal(item.deliveryNeedsReview,!skipped);assert.equal(item.status,skipped?'skipped':'failed');assert.equal(following.status,'approved_queue');hostChecks++;
 }
 // A verification iframe can have zero body text: the page probe still blocks without platform IPC.
 {
@@ -122,5 +136,23 @@ for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId
   vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browser.vars.get('platformApply')};`,{loader:'tsx'})).code,c);
   const result=await c.apply('https://example.invalid','zhaopin',{});
   assert.equal(result.stage,'risk');assert.equal(dispatched,0);assert.equal(closed.length,0);hostChecks++;
+}
+// Real host readiness loop: no apply IPC while the widget is still mounting.
+for(const scenario of ['late-ready','offline','stop-late-ready','stop-offline','late-risk','late-login','unknown']) {
+  let tick=0,probes=0,allowed=true,started=0,dispatched=0;const closed=[];
+  const entry=scenario.includes('offline')?{kind:'unavailable',message:'岗位已下线'}:{kind:'ready'};
+  const c={Promise,Date:{now:()=>tick},setTimeout,clearTimeout,useCallback:fn=>fn,openInNewTab:()=> 'entry',hasTab:()=>true,closeTabById:id=>closed.push(id),
+    PLATFORM_META:{zhaopin:{label:'智联'}},aliveRef:{current:true},APPLY_PAGE_READY_MS:1200,sleep:async()=>{tick+=300;},isPreloadReady:()=>true,isLoading:()=>false,
+    pageStatus:async()=>{probes++;if(probes===1||scenario==='unknown')return{readyState:'complete',bodyLen:900,zhaopinApplyEntry:{kind:'missing'}};
+      if(scenario.startsWith('stop-'))allowed=false;
+      return{readyState:'complete',bodyLen:900,zhaopinApplyEntry:entry,...(scenario.startsWith('late-')&&scenario!=='late-ready'?{applyBlock:{kind:scenario.slice(5),message:'人工处理'}}:{})};},
+    seqRef:{current:0},apiResolvers:{current:new Map()},sendInTab:(_id,_channel,args)=>{dispatched++;Promise.resolve().then(()=>c.apiResolvers.current.get(args.seq)({ok:true,stage:'success'}));},describeApplyProbe:()=>'',cmdOnce:()=>{throw Error('Unexpected confirmation');}};
+  vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browser.vars.get('platformApply')};`,{loader:'tsx'})).code,c);
+  const result=await c.apply('https://example.invalid','zhaopin',{},'',{canStart:()=>allowed,onStart:()=>{started++;}});
+  const expected=scenario==='late-ready'?'success':scenario.startsWith('stop-')?'cancelled':scenario==='offline'?'skip':scenario==='unknown'?'failed':scenario.slice(5);
+  assert.equal(result.stage,expected,scenario);assert.ok(probes>=2,scenario+' must await the action probe despite ready preload');
+  assert.equal(dispatched,scenario==='late-ready'?1:0,scenario+' outbound count');assert.equal(started,dispatched,scenario+' submission boundary');
+  assert.equal(closed.length,scenario.startsWith('stop-')?1:0,scenario+' tab preservation');
+  if(scenario==='unknown')assert.equal(result.needsReview,true);hostChecks++;
 }
 console.log(`PASS Zhaopin blocks host: ${hostChecks} production-function pause/preserve/queue checks; outbound boundaries are stubs.`);

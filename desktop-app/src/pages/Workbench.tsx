@@ -2442,7 +2442,7 @@ export default function Workbench() {
     }
     if (res.stage === 'skip') {
       // 「已投递/已沟通」不是失败：按跳过收口（与 external 同口径），避免重复打扰同一 HR 也避免误报失败
-      updatePending(candidate.id, { status: 'skipped', error: res.message || '该岗位此前已投递/已沟通，跳过' });
+      updatePending(candidate.id, { status: 'skipped', error: res.message || '该岗位此前已投递/已沟通，跳过', deliveryNeedsReview: false, retryable: false });
       addLog('warn', `跳过：${nTitle}（${res.message || '该岗位此前已投递/已沟通'}）`);
       if (res.tabId) webviewApi.current?.closeTab(res.tabId);
       setApplyStage(null); recomputeStats();

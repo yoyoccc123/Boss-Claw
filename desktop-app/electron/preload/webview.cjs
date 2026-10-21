@@ -2735,6 +2735,7 @@ function pageStatusData(expectedSearchUrl) {
   });
   const bossBlock = readBossPageBlock(location.href, bodyText);
   if (bossBlock) void reportBossRestriction(location.href, bodyText);
+  const zhaopinEntry = PLATFORM === 'zhaopin' ? readZhaopinApplyEntry() : null;
   const zhaopinBlock = PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null;
   const collectionBlocked = bossBlock?.message || (zhaopinBlock?.kind === 'risk' ? zhaopinBlock.message : '') || (/\/verify\.|\/captcha(?:\/|\?|$)/i.test(location.href)
     || visibleDialogs.some(e => /确认您是|安全验证|完成验证|请先验证|滑动验证|拖动滑块/.test(textOf(e)))
@@ -2748,7 +2749,9 @@ function pageStatusData(expectedSearchUrl) {
     collectionBlocked, collectionLoading,
     collectionScopeMatches: !expectedSearchUrl || (PLATFORM === 'zhaopin' ? ZHAOPIN_LIST.searchScopeMatches(location.href, expectedSearchUrl)
       : PLATFORM === 'liepin' ? LIEPIN_LIST.searchScopeMatches(location.href, expectedSearchUrl, document) : true),
-    applyBlock: PLATFORM === 'wuba' ? WUBA.readPageBlock(document, location.href) : zhaopinBlock,
+    applyBlock: PLATFORM === 'wuba' ? WUBA.readPageBlock(document, location.href)
+      : ['risk', 'login'].includes(zhaopinEntry?.kind) ? zhaopinEntry : zhaopinBlock,
+    zhaopinApplyEntry: zhaopinEntry,
     zhaopinChatReady: PLATFORM === 'zhaopin' && readZhaopinChatReady(document, location.href),
     cards,
     counts,
@@ -3387,6 +3390,36 @@ function firstVisible(selectors) {
   return null;
 }
 
+// Read only: a rendered document is not evidence that its apply widget is ready.
+// The offline stamp is an image on the live page, so text-only checks miss it.
+function readZhaopinApplyEntry() {
+  const spec = (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {};
+  const block = readZhaopinPageBlock(document, location.href, spec, { missingAction: true });
+  if (block) return block;
+  let detailPage = false;
+  try {
+    const url = new URL(location.href);
+    detailPage = url.protocol === 'https:' && /(^|\.)zhaopin\.com$/i.test(url.hostname)
+      && /^\/jobdetail\/[^/]+\.html?$/i.test(url.pathname);
+  } catch {}
+  if (!detailPage) return { kind: 'missing' };
+  const selectors = spec.buttonSelectors || ['button', 'a'];
+  const already = findPlatformAction(spec.appliedSelectors || selectors, spec.appliedLabels || ['已投递'])
+    || all('button, a, [role="button"]').some(el => visible(el) && ADAPTERS.labelExactHit(textOf(el), spec.appliedLabels || ['已投递']))
+    || findPlatformAction(spec.continueChatSelectors || ['.summary-planes__action button'], spec.continueChatLabels || ['继续沟通']);
+  const button = findPlatformAction(selectors, spec.applyLabels || ['投递']);
+  const offline = all('.summary-planes').some(summary =>
+    all('.summary-planes__title', summary).some(el => el.closest('.summary-planes') === summary && visible(el))
+    && all('.summary-planes__other img.summary-planes__invalid-text', summary)
+      .some(el => el.closest('.summary-planes') === summary && visible(el) && /\/ic-offline[.-]/i.test(el.getAttribute('src') || '')));
+  if (offline) {
+    // Contradictory UI may be a stale mount. Neither apply nor skip on that evidence.
+    if (button || already) return { kind: 'missing' };
+    return { kind: 'unavailable', message: '智联该岗位已下线，未提交简历，已跳过并继续下一岗位' };
+  }
+  return { kind: already ? 'already' : button ? 'ready' : 'missing' };
+}
+
 // 智联原生「继续沟通」入口会整页导航，宿主必须等新页面 preload 后再填发文案。
 
 let wubaPrepared = null;
@@ -3677,6 +3710,10 @@ async function platformApplyOnce(args = {}) {
     if (platform === 'zhaopin') {
       // 选择器 / 文案口径集中在适配表（PLATFORM_APPLY_SPEC.zhaopin，真机详情页源码 + 投递组件 bundle）
       const spec = (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {};
+      const entry = readZhaopinApplyEntry();
+      if (entry.kind === 'risk' || entry.kind === 'login') return fail(entry.kind, { code: entry.kind === 'risk' ? 35 : undefined, message: entry.message });
+      if (entry.kind === 'unavailable') return fail('skip', { message: entry.message });
+      if (entry.kind === 'missing') return fail('failed', { needsReview: true, error: '智联页面没有可用的投递入口，可能需要验证、仍在加载或已跳转；已暂停并保留页面，请人工核对后再重试' });
       const pageBlock = (missingAction = false) => readZhaopinPageBlock(document, location.href, spec, { missingAction });
       const btnSelectors = spec.buttonSelectors || ['button', 'a'];
       const bodyText = () => PLATFORM_NORM(document.body ? document.body.innerText : '');

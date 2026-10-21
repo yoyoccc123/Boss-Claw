@@ -84,6 +84,7 @@ const describeApplyProbe = (st: any): string => {
     `正文 ${Number(st.bodyLen) || 0} 字`,
   ];
   if (Number.isFinite(Number(st.cards))) parts.push(`列表卡片 ${st.cards}`);
+  if (st.zhaopinApplyEntry?.kind) parts.push(`智联投递入口 ${st.zhaopinApplyEntry.kind}`);
   if (st.loginWall) parts.push('命中登录特征');
   return '，' + parts.join('，');
 };
@@ -1016,7 +1017,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             if (!aliveRef.current) break;
             preloadFlag = isPreloadReady(tabId);
             overlay = isLoading(tabId);
-            if (preloadFlag && !overlay) { start(); return; } // 快路径：宿主标记齐全，不额外探测
+            if (platform !== 'zhaopin' && preloadFlag && !overlay) { start(); return; }
             const st = await pageStatus(tabId);
             if (cancelledBeforeStart()) return;
             if (st && !st.error) {
@@ -1025,9 +1026,15 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
                 resolve({ ok: false, stage: st.applyBlock.kind, code: st.applyBlock.kind === 'risk' ? 35 : undefined, message: st.applyBlock.message, tabId });
                 return; // 验证页可能只有 iframe、正文为零；立即保留页面交人工，不下发投递。
               }
+              if (platform === 'zhaopin' && st.zhaopinApplyEntry?.kind === 'unavailable') {
+                resolve({ ok: false, stage: 'skip', message: st.zhaopinApplyEntry.message, tabId });
+                return; // 官方下线标记，未下发投递请求；宿主跳过后继续队列。
+              }
               // 探测有响应 ⇒ preload 已注入（比宿主标记更可靠）；文档已解析（非 loading）且正文成形
               const usable = String(st.readyState || '') !== 'loading'
-                && (Number(st.bodyLen) > 200 || Number(st.cards) > 0);
+                && (platform === 'zhaopin'
+                  ? ['ready', 'already'].includes(st.zhaopinApplyEntry?.kind)
+                  : (Number(st.bodyLen) > 200 || Number(st.cards) > 0));
               // 页面已可用但遮罩状态没收敛：宽限 2s 后按页面事实放行（遮罩只是观感，不影响页内 DOM 动作）
               if (usable && (!overlay || Date.now() - startedAt > 2000)) { start(); return; }
             }

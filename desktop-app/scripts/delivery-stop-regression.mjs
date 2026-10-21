@@ -84,7 +84,7 @@ async function browserEnvironment({ready=false}={}) {
   let allowed=true;const pause=deferred(),probe=deferred(),sends=[],closed=[];
   const c={Promise,Date,setTimeout,clearTimeout,useCallback:fn=>fn,PLATFORM_META:{zhaopin:{label:'智联'}},
     openInNewTab:()=> 'detail',hasTab:()=>true,closeTabById:id=>closed.push(id),aliveRef:{current:true},APPLY_PAGE_READY_MS:30000,
-    isPreloadReady:()=>ready,isLoading:()=>false,pageStatus:()=>probe.promise,sleep:()=>pause.promise,describeApplyProbe:()=>'',
+    isPreloadReady:()=>ready,isLoading:()=>false,pageStatus:()=>ready?Promise.resolve({readyState:'complete',bodyLen:300,zhaopinApplyEntry:{kind:'ready'}}):probe.promise,sleep:()=>pause.promise,describeApplyProbe:()=>'',
     seqRef:{current:0},apiResolvers:{current:new Map()},cmdOnce:()=>{throw Error('unexpected confirmation IPC');},sendInTab:(_tab,_channel,arg)=>sends.push(arg)};
   vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browserApply};`,{loader:'tsx'})).code,c);
   const control={canStart:()=>allowed,onStart:()=>{c.started=true;}};

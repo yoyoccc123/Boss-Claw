@@ -26,7 +26,7 @@ function parse(file) {
 const main = parse('electron/main.cjs'), preload = parse('electron/preload/webview.cjs');
 const bridge = vm.runInNewContext(main.variables.get('ZP_DETAIL_NAV_SCRIPT'), { require: createRequire(path.join(root, 'electron/main.cjs')) });
 const functions = ['visible', 'textOf', 'rawLines', 'pickFromCard', 'zhaopinTitleFromCard', 'cardIdentity', 'cardJobTokens', 'collectCards',
-  'collectionListExplicitlyEmpty', 'visualCollectListOnly', 'pageStatusData'];
+  'collectionListExplicitlyEmpty', 'visualCollectListOnly', 'findPlatformAction', 'readZhaopinApplyEntry', 'pageStatusData'];
 const setup = `const ADAPTERS=${JSON.stringify(A)},PLATFORM='zhaopin',PLATFORM_LIST_SELECTORS=ADAPTERS.PLATFORM_CARD_SELECTORS,FIELD_SELECTORS=ADAPTERS.PLATFORM_FIELD_SELECTORS.zhaopin,LINK_SELECTOR=ADAPTERS.PLATFORM_LINK_SELECTOR.zhaopin,LIST_ROOT_SELECTORS=ADAPTERS.PLATFORM_LIST_ROOT_SELECTORS.zhaopin;
 const PLATFORM_LABEL='智联';const detectPlatform=${A.detectPlatform.toString()};ADAPTERS.jobIdFromUrl=${A.jobIdFromUrl.toString()};
 const ZHAOPIN_LIST=(()=>{const module={exports:{}};new Function('module',${JSON.stringify(fs.readFileSync(path.join(root, 'electron/preload/zhaopin-list.cjs'), 'utf8'))})(module);return module.exports;})();
