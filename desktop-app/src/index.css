@@ -5231,6 +5231,21 @@ html[data-theme='dark'] .skill-chip-gap:hover {
   gap: 10px;
 }
 
+.safety-pacing-settings .settings-section-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.safety-pacing-settings .settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.safety-pacing-delivery {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 /* 作息 / 批次休息：单列整行（理由见 AutoChat.tsx 内注释：侧栏固定 420px，并排两列必折行）。 */
 .sic-rows {
   display: grid;

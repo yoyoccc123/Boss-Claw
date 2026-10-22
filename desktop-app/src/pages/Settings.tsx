@@ -66,7 +66,7 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { useSettingsStore, PROVIDER_DEFAULTS } from '@/store/useSettingsStore';
-import BossBrowseLimitSettings from '@/components/BossBrowseLimitSettings';
+import SafetyPacingSettings from '@/components/SafetyPacingSettings';
 import { WUBA_CATEGORY_TREE, WUBA_NATIVE_FILTERS, isWubaCategoryAutomatic, resolveWubaCategory, wubaCategoryLabel, wubaCategoryPath } from '@/lib/bossclaw/wubaSearch';
 import { selectedDirectionItems } from '@/lib/bossclaw/directions';
 import { useAppStore, ThemeMode } from '@/store/useAppStore';
@@ -1132,8 +1132,7 @@ export default function Settings({ isVisible = true }: { isVisible?: boolean }) 
       ),
       children: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <BossBrowseLimitSettings policy={config.bossBrowseLimit ?? { windowMinutes: 30, maxViews: 30 }}
-            onApply={value => setConfig({ bossBrowseLimit: value })} />
+          <SafetyPacingSettings />
           <div className="settings-section-card">
             <div className="settings-section-header">
               <div className="settings-section-header__title">

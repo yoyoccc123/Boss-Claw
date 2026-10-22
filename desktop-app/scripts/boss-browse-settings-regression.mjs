@@ -18,8 +18,8 @@ function scan(n) {
   ts.forEachChild(n, scan);
 } scan(ast);
 assert.ok(configureHandler, 'production browse IPC handler found');
-await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import{ConfigProvider}from'antd';import{getTheme}from'./src/theme';import Settings from './src/pages/Settings';import{useSettingsStore}from'./src/store/useSettingsStore';import{useAppStore}from'./src/store/useAppStore';import'./src/index.css';import'./src/index.polish.css';import'antd/dist/reset.css';
-const t:any=window;t.settings=useSettingsStore;if(!localStorage.getItem('bossclaw-settings-v2'))useSettingsStore.getState().setConfig({bossBrowseLimit:{windowMinutes:30,maxViews:100}});useAppStore.getState().setSettingsTab('criteria');createRoot(document.getElementById('root')!).render(<ConfigProvider theme={getTheme('light')}><Settings isVisible={false}/></ConfigProvider>);`, resolveDir: root, loader: 'tsx' },
+await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import{ConfigProvider}from'antd';import{getTheme}from'./src/theme';import Settings from './src/pages/Settings';import SafetyPacingSettings from './src/components/SafetyPacingSettings';import{useSettingsStore}from'./src/store/useSettingsStore';import{useAppStore}from'./src/store/useAppStore';import'./src/index.css';import'./src/index.polish.css';import'antd/dist/reset.css';
+const t:any=window;t.settings=useSettingsStore;if(!localStorage.getItem('bossclaw-settings-v2')){const cfg=useSettingsStore.getState().config;useSettingsStore.getState().setConfig({bossBrowseLimit:{windowMinutes:30,maxViews:100},betweenJobsSeconds:15,maxActionsPerMinute:8,autoCooldownMinutes:30,activeHours:{...cfg.activeHours,enabled:false},batchRest:{...cfg.batchRest,enabled:false}});}useAppStore.getState().setSettingsTab('criteria');const root=createRoot(document.getElementById('root')!);t.showNarrowPacing=()=>root.render(<ConfigProvider theme={getTheme('light')}><div style={{width:420,padding:16}}><SafetyPacingSettings/></div></ConfigProvider>);root.render(<ConfigProvider theme={getTheme('light')}><Settings isVisible={false}/></ConfigProvider>);`, resolveDir: root, loader: 'tsx' },
   tsconfig: path.join(root, 'tsconfig.json'), bundle: true, platform: 'browser', format: 'iife', outfile: path.join(fixture, 'ui.js'), logLevel: 'silent' });
 fs.writeFileSync(path.join(fixture, 'ui.html'), '<meta charset="utf-8"><link rel="stylesheet" href="ui.css"><div id="root"></div><script src="ui.js"></script>');
 fs.writeFileSync(path.join(fixture, 'preload.cjs'), `const{contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('electron',{bossBrowse:(action,payload)=>ipcRenderer.invoke('jc:boss-browse',action,payload)});contextBridge.exposeInMainWorld('fixture',{events:()=>ipcRenderer.invoke('fixture:events'),failNext:()=>ipcRenderer.invoke('fixture:fail-next')});`);
@@ -28,7 +28,7 @@ const runChecks = async function (reloaded) {
   const wait = async (fn, label) => { const end = Date.now() + 8000; while (!fn()) { if (Date.now() > end) throw Error(label); await new Promise(r => setTimeout(r, 30)); } };
   const card = () => document.querySelector('[data-testid="boss-browse-limit-settings"]');
   await wait(card, 'actual Settings browse card rendered');
-  const minutes = () => document.getElementById('boss-browse-minutes'), views = () => document.getElementById('boss-browse-views');
+  const minutes = () => card().querySelector('input[aria-label="BOSS 浏览计数周期（分钟）"]'), views = () => card().querySelector('input[aria-label="周期内最多查看岗位数"]');
   const button = () => [...card().querySelectorAll('button')].find(e => e.textContent.includes('应用浏览限额'));
   const policy = () => window.settings.getState().config.bossBrowseLimit;
   const status = () => window.electron.bossBrowse('status');
@@ -43,10 +43,36 @@ const runChecks = async function (reloaded) {
       'custom period and quota survive a real renderer reload and Zustand hydration');
     check(card().textContent.includes('当前生效：每 10 分钟最多查看 120 个岗位'), 'reloaded UI shows saved custom policy instead of a fixed 30-minute default');
     check((await status()).maxViews === 120 && (await status()).count === 100, 'native history and effective policy survive renderer reload');
+    window.showNarrowPacing();
+    await wait(()=>document.querySelector('[data-testid="safety-pacing-settings"]')?.getBoundingClientRect().width<=420,
+      'shared pacing card rendered at the AutoChat side-column width');
+    const combined=document.querySelector('[data-testid="safety-pacing-settings"]');
+    const cfg=window.settings.getState().config;
+    check(minutes().value==='10'&&views().value==='120'&&cfg.betweenJobsSeconds===20&&cfg.maxActionsPerMinute===7
+      &&cfg.autoCooldownMinutes===45&&!cfg.activeHours.enabled&&!cfg.batchRest.enabled,
+      'the AutoChat-sized shared card restores the same browse and delivery settings with both switches still off');
+    const bounds=combined.getBoundingClientRect();
+    check([...combined.querySelectorAll('input,.stat-input-card,.sic-unit')].every(el=>{
+      const r=el.getBoundingClientRect();return !r.width||(r.left>=bounds.left&&r.right<=bounds.right+1);
+    }),'narrow shared card keeps all number fields, units and rest controls within its border');
+    check([...combined.querySelectorAll('label[for]')].every(label=>combined.contains(document.getElementById(label.htmlFor))),
+      'reused browse inputs retain unique IDs and connected accessible labels');
     return results;
   }
   check(document.querySelector('.ant-tabs-tabpane-active .settings-section-card') === card(), 'browse settings are the first card in Settings / job preferences');
+  const combined=document.querySelector('[data-testid="safety-pacing-settings"]');
+  check(combined.contains(card())&&combined.textContent.includes('投递与沟通节奏'), 'Settings groups browse and delivery controls in one shared card with separate scope labels');
   check(minutes().value === '30' && views().value === '100' && button().disabled, 'existing 100/30 user choice is displayed without resetting to defaults');
+  const deliveryInput=label=>combined.querySelector(`input[aria-label="${label}"]`);
+  const cfg=()=>window.settings.getState().config;
+  check(deliveryInput('投递岗位间隔（秒）').value==='15'&&deliveryInput('投递与沟通每分钟动作数').value==='8'
+    &&deliveryInput('投递与沟通风控冷却（分钟）').value==='30'&&!cfg().activeHours.enabled&&!cfg().batchRest.enabled,
+    'grouping preserves the existing delivery values and disabled hours/rest switches');
+  await input(deliveryInput('投递岗位间隔（秒）'),'20');await input(deliveryInput('投递与沟通每分钟动作数'),'7');
+  await input(deliveryInput('投递与沟通风控冷却（分钟）'),'45');
+  check(cfg().betweenJobsSeconds===20&&cfg().maxActionsPerMinute===7&&cfg().autoCooldownMinutes===45
+    &&policy().windowMinutes===30&&policy().maxViews===100&&(await status()).count===100&&(await window.fixture.events()).length===0,
+    'editing delivery pacing never changes browse policy, history or native policy events');
   check(card().textContent.includes('等待本轮全部记录到期再继续') && card().textContent.includes('本轮最后一次查看时间加上计数周期'),
     'actual Settings explains whole-batch recovery while keeping both custom controls');
   await input(minutes(), '');
@@ -61,6 +87,8 @@ const runChecks = async function (reloaded) {
   check(!longer.ok && longer.windowMinutes === 45 && longer.maxViews === 60 && longer.count === 100,
     'actual Apply updates both native parameters together while retaining every view');
   check(longer.retryAt === 1792483200000 + 45 * 60000, 'custom longer period replaces the old active wait deadline');
+  check(cfg().betweenJobsSeconds===20&&cfg().maxActionsPerMinute===7&&cfg().autoCooldownMinutes===45
+    &&!cfg().activeHours.enabled&&!cfg().batchRest.enabled,'applying browse policy preserves all independent delivery pacing and switch values');
   check(card().textContent.includes('当前生效：每 45 分钟最多查看 60 个岗位') && button().disabled,
     'successful Apply displays the effective policy and clears the dirty draft');
   let events = await window.fixture.events();

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Button, InputNumber, Space, Typography, message } from 'antd';
 import { SafetyCertificateOutlined } from '@ant-design/icons';
 import { electronApi } from '@/lib/electronApi';
@@ -6,6 +6,7 @@ import { electronApi } from '@/lib/electronApi';
 type Policy = { windowMinutes: number; maxViews: number };
 
 export default function BossBrowseLimitSettings({ policy, onApply }: { policy: Policy; onApply: (value: Policy) => void }) {
+  const minutesId = useId(), viewsId = useId();
   const [minutes, setMinutes] = useState<number | null>(policy.windowMinutes);
   const [views, setViews] = useState<number | null>(policy.maxViews);
   const [saving, setSaving] = useState(false);
@@ -28,13 +29,14 @@ export default function BossBrowseLimitSettings({ policy, onApply }: { policy: P
     <div className="settings-section-header"><div className="settings-section-header__title">
       <div className="section-icon-box"><SafetyCertificateOutlined /></div>BOSS 浏览频率限制
     </div></div>
+    <Typography.Paragraph type="secondary">适用于 BOSS 岗位采集和打开详情；浏览上限与投递、沟通节奏分别配置。</Typography.Paragraph>
     <Typography.Paragraph>当前生效：每 <strong>{policy.windowMinutes}</strong> 分钟最多查看 <strong>{policy.maxViews}</strong> 个岗位</Typography.Paragraph>
     <div className="settings-grid">
-      <div className="sg-item"><label className="field-label" htmlFor="boss-browse-minutes">BOSS 浏览计数周期（分钟）</label>
-        <InputNumber id="boss-browse-minutes" aria-label="BOSS 浏览计数周期（分钟）" min={1} max={1440} precision={0} disabled={saving}
+      <div className="sg-item"><label className="field-label" htmlFor={minutesId}>BOSS 浏览计数周期（分钟）</label>
+        <InputNumber id={minutesId} aria-label="BOSS 浏览计数周期（分钟）" min={1} max={1440} precision={0} disabled={saving}
           value={minutes} onChange={setMinutes} style={{ width: '100%' }} /></div>
-      <div className="sg-item"><label className="field-label" htmlFor="boss-browse-views">周期内最多查看岗位数</label>
-        <InputNumber id="boss-browse-views" aria-label="周期内最多查看岗位数" min={1} max={1000} precision={0} disabled={saving}
+      <div className="sg-item"><label className="field-label" htmlFor={viewsId}>周期内最多查看岗位数</label>
+        <InputNumber id={viewsId} aria-label="周期内最多查看岗位数" min={1} max={1000} precision={0} disabled={saving}
           value={views} onChange={setViews} style={{ width: '100%' }} /></div>
     </div>
     <Space style={{ marginTop: 12 }}><Button type="primary" loading={saving} disabled={!valid || !changed} onClick={apply}>应用浏览限额</Button>
