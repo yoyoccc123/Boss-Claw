@@ -84,6 +84,8 @@ export interface AppConfig {
   sendResumeImage: boolean;
   sendOnlineResume: boolean;
   betweenJobsSeconds: number;
+  /** Independent random waits for collection and the built-in browser delivery steps. */
+  randomWaits?: import('./randomWait').RandomWaitSettings;
   /**
    * 活跃时段（模拟真人作息）：时段外**自动暂停投递**。
    * 服务端的操作时间戳统计是账号维度的长期特征，**无法靠指纹补丁掩盖** —— 详见 activityWindow.ts。

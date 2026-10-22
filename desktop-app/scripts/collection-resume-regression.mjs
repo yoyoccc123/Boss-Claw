@@ -6,6 +6,7 @@ import { build, transform } from 'esbuild';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const compiled = await build({ stdin: { contents: [
   "export * from './src/lib/bossclaw/collectionResume';",
@@ -155,6 +156,7 @@ host.collectBatchGenerationRef.current++;
 releaseAnalysis({ score: 20, decision: 'reject' }); await stale;
 check(host.checkpointContextRef.current.checkpoint.processedKeys.length === 0, 'stopping during shared analysis prevents late acknowledgments');
 const preload = ts.createSourceFile('webview.cjs', readFileSync(join(root, 'electron/preload/webview.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+const pacing = createRequire(import.meta.url)(join(root, 'electron/preload/random-wait.cjs'));
 const functions = new Map();
 const visitP = n => { if (ts.isFunctionDeclaration(n) && n.name) functions.set(n.name.text, n.getText(preload)); ts.forEachChild(n, visitP); }; visitP(preload);
 for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
@@ -174,7 +176,7 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
     resetJdFillState: () => {}, reportJdFillSummary: () => {}, reportBossRestriction: async () => null, ensureCollectStyle: () => {}, loginWallDetected: () => false,
     LINK_SELECTOR: 'a', textOf: card => card.id };
   vm.createContext(p);
-  for (const name of ['collectionListExplicitlyEmpty', 'stableFallbackJobId', 'collectCardKey', 'visualCollectListOnly', 'visualCollect']) vm.runInContext(functions.get(name), p);
+  for (const name of ['collectionRandomWait', 'collectionListExplicitlyEmpty', 'stableFallbackJobId', 'collectCardKey', 'visualCollectListOnly', 'visualCollect']) vm.runInContext(functions.get(name), p);
   await p.visualCollect({ seq: 'reorder', maxJobs: 5, autoScroll: false });
   check(events.filter(e => e.data.phase === 'done').map(e => e.data.job.title).join() === 'A,B', `${platform}: reordering cards cannot skip the second job`);
   check(events.some(e => e.channel === 'collect-done' && e.data.reason === 'completed'), `${platform}: completion carries a definitive reason`);
@@ -210,6 +212,22 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
   release(); await oldLoop;
   check(!events.some(e => e.data.seq === 'old-loop' && e.data.phase === 'done'), `${platform}: restarting cannot revive a stopped old preload loop`);
   check(events.some(e => e.data.seq === 'old-loop' && e.data.reason === 'stopped'), `${platform}: old loop reports interruption rather than completion`);
+  for (const stopAt of [0, 1, 2]) {
+    events.length = 0; reordered = false;
+    let waits = 0, opened = 0;
+    p.openCardDetail = p.enrichJobDetail = async () => { opened++; };
+    p.sleep = async () => {};
+    p.randomWait = { ...pacing, sampleWaitMs: range => range.minSeconds * 1000,
+      waitInterruptibly: async (_ms, { stopped }) => { if (++waits === stopAt) p.collectCtl.stopped = true; return !stopped(); } };
+    await p.visualCollect({ seq: 'paced-' + stopAt, maxJobs: 2, autoScroll: false, randomWaits: pacing.DEFAULT_RANDOM_WAITS });
+    if (!stopAt) {
+      check(events.filter(e => e.data.phase === 'done').length === 2 && opened === 2, `${platform}: actual collector still processes both jobs with random pauses`);
+      check(events.filter(e => e.data.phase === 'random-wait').length >= 4, `${platform}: both between-job and within-job waits report their sampled duration`);
+    } else {
+      check(opened === 0 && !events.some(e => e.data.phase === 'done'), `${platform}: Stop during random ${stopAt === 1 ? 'job' : 'step'} wait prevents detail access and checkpoint acknowledgement`);
+      check(events.some(e => e.data.reason === 'stopped'), `${platform}: interrupted random wait retains an incomplete checkpoint`);
+    }
+  }
 }
 console.log(`PASS collection resume and withdrawal: ${checks} production policy/store/host/preload checks; no platform calls.`);
 await import('./collection-traversal-regression.mjs');

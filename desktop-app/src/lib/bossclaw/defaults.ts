@@ -2,6 +2,7 @@ import type { AppConfig, Profile, ProfileDraft, DirectionPlan, Stats, Workflow }
 import { PLATFORM_DEFAULT_DAILY_TARGET } from './platforms';
 import { PROVIDER_DEFAULTS, DEFAULT_PROVIDER, DEFAULT_MODEL_NAME } from './providerPresets';
 import { DEFAULT_CONTEXT_WINDOW } from './contextBudget';
+import { DEFAULT_RANDOM_WAITS } from './randomWait';
 
 // 对齐 job-claw-main\source\src\common.js 的 DEFAULTS
 export const DEFAULT_CONFIG: AppConfig = {
@@ -44,6 +45,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   sendResumeImage: true,
   sendOnlineResume: false,
   betweenJobsSeconds: 20,
+  randomWaits: DEFAULT_RANDOM_WAITS,
   // 活跃时段（模拟真人作息）：时段外自动暂停投递。
   // 依据：操作时间戳分布是**服务端可见的账号级长期统计**，指纹补丁掩盖不了「24 小时无睡眠」；
   // 且「每天精确同一分钟开始/结束」本身也是机器特征，故默认带每日 ±25 分钟确定性抖动。

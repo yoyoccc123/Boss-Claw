@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const compiled = await build({ stdin: { contents: `export * from './src/lib/bossclaw/collectionResume';export * from './src/lib/bossclaw/collectionGoal';export * from './src/lib/bossclaw/searchUrl';export * from './src/lib/bossclaw/platformUrls';export {DEFAULT_CONFIG} from './src/lib/bossclaw/defaults';`, resolveDir: root, loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+const compiled = await build({ stdin: { contents: `export * from './src/lib/bossclaw/randomWait';export * from './src/lib/bossclaw/collectionResume';export * from './src/lib/bossclaw/collectionGoal';export * from './src/lib/bossclaw/searchUrl';export * from './src/lib/bossclaw/platformUrls';export {DEFAULT_CONFIG} from './src/lib/bossclaw/defaults';`, resolveDir: root, loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
 const env = { module: { exports: {} }, console, Date, URL, URLSearchParams, localStorage: { getItem: () => null } };
 vm.createContext(env); vm.runInContext(compiled.outputFiles[0].text, env); const T = env.module.exports;
 let checks = 0;

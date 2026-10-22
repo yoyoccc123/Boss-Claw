@@ -10,6 +10,8 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import vm from 'node:vm';
 const require = createRequire(import.meta.url), root = dirname(dirname(fileURLToPath(import.meta.url)));
+const pacingContext={normalizeRandomWaits:require(join(root,'electron/preload/random-wait.cjs')).normalizeRandomWaits,
+  useSettingsStore:{getState:()=>({config:{}})},setInterval,clearInterval};
 const fixture = mkdtempSync(join(tmpdir(), 'bossclaw-wuba-'));
 let checks = 0;
 const check = (v, label) => { assert.ok(v, label); checks++; };
@@ -76,7 +78,7 @@ const findHost = n => { if (ts.isVariableDeclaration(n) && n.name.getText(browse
 const hostJs = (await transform('globalThis.apply=' + hostExpression, { loader: 'tsx' })).code;
 for (const scenario of ['run', 'stopped', 'closed']) {
   const commands = []; let active = true, open = true;
-  const host = { useCallback: f => f, aliveRef: { current: true }, seqRef: { current: 0 }, apiResolvers: { current: new Map() },
+  const host = { ...pacingContext, useCallback: f => f, aliveRef: { current: true }, seqRef: { current: 0 }, apiResolvers: { current: new Map() },
     openInNewTab: () => '58tab', hasTab: () => open, closeTabById: () => {}, PLATFORM_META: T.PLATFORM_META,
     isPreloadReady: () => true, isLoading: () => false, pageStatus: async () => ({}), sleep: async () => {},
     APPLY_PAGE_READY_MS: 25000, Date, setTimeout, clearTimeout,

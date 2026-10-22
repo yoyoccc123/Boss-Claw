@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 const require=createRequire(import.meta.url),root=dirname(dirname(fileURLToPath(import.meta.url))),work=mkdtempSync(join(tmpdir(),'bossclaw-zhaopin-block-'));
 const A=require(join(root,'electron/preload/platform-adapters.cjs'));
+const pacingContext={normalizeRandomWaits:require(join(root,'electron/preload/random-wait.cjs')).normalizeRandomWaits,
+  useSettingsStore:{getState:()=>({config:{}})},setInterval,clearInterval};
 const {readBossPageBlock}=require(join(root,'electron/preload/boss-page-block.cjs'));
 const imHelper=readFileSync(join(root,'electron/preload/zhaopin-im.cjs'),'utf8');
 function parse(file) {
@@ -159,7 +161,7 @@ for(const result of [{ok:false,stage:'risk',code:35,message:'人机验证',tabId
 for(const scenario of ['late-ready','offline','stop-late-ready','stop-offline','late-risk','late-login','unknown']) {
   let tick=0,probes=0,allowed=true,started=0,dispatched=0;const closed=[];
   const entry=scenario.includes('offline')?{kind:'unavailable',message:'岗位已下线'}:{kind:'ready'};
-  const c={Promise,Date:{now:()=>tick},setTimeout,clearTimeout,useCallback:fn=>fn,openInNewTab:()=> 'entry',hasTab:()=>true,closeTabById:id=>closed.push(id),
+  const c={...pacingContext,Promise,Date:{now:()=>tick},setTimeout,clearTimeout,useCallback:fn=>fn,openInNewTab:()=> 'entry',hasTab:()=>true,closeTabById:id=>closed.push(id),
     PLATFORM_META:{zhaopin:{label:'智联'}},aliveRef:{current:true},APPLY_PAGE_READY_MS:1200,sleep:async()=>{tick+=300;},isPreloadReady:()=>true,isLoading:()=>false,
     pageStatus:async()=>{probes++;if(probes===1||scenario==='unknown')return{readyState:'complete',bodyLen:900,zhaopinApplyEntry:{kind:'missing'}};
       if(scenario.startsWith('stop-'))allowed=false;

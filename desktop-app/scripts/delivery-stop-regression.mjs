@@ -6,6 +6,7 @@ import { transform } from 'esbuild';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 const root=dirname(dirname(fileURLToPath(import.meta.url)));
 function parse(file) {
   const source=ts.createSourceFile(file,readFileSync(join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -17,6 +18,7 @@ function parse(file) {
   };visit(source);return {vars,effects};
 }
 const wb=parse('src/pages/Workbench.tsx'),browser=parse('src/components/BrowserView.tsx');
+const pacing=createRequire(import.meta.url)(join(root,'electron/preload/random-wait.cjs'));
 const code=async name=>(await transform(`globalThis.${name}=${wb.vars.get(name)};`,{loader:'tsx'})).code;
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{promise,resolve};};
 const flush=()=>new Promise(r=>setImmediate(r));
@@ -27,21 +29,21 @@ async function environment(platform='zhaopin') {
   let listener;
   const item={id:'one',status:'approved_queue',job:{platform,title:'测试岗位',url:'https://example.invalid/jobdetail/one'},deliveryGreeting:'测试岗位需要发送的招呼文字',analysis:{}};
   const pending=[item],state={autoAssist:true};
-  const gap=deferred(),sent=[],delivered=[],released=[],closed=[];
-  const c={Promise,Date,setTimeout,clearTimeout,console,
-    deliveryEpochRef:{current:0},deliverySubmittedRef:{current:false},domWaitRef:{current:null},activeTabRef:{current:null},runNextQueued:{current:true},
+  const gap=deferred(),sent=[],delivered=[],claimed=[],released=[],closed=[];
+  const c={Promise,Date,setTimeout,clearTimeout,console,normalizeRandomWaits:pacing.normalizeRandomWaits,
+    deliveryEpochRef:{current:0},deliveryPacingTokenRef:{current:''},deliverySubmittedRef:{current:false},domWaitRef:{current:null},activeTabRef:{current:null},runNextQueued:{current:true},
     useAppStore:{getState:()=>state,subscribe:fn=>{listener=fn;return()=>{};}},
     useDataStore:{getState:()=>({pending,greetings:[]})},
     useSettingsStore:{getState:()=>({config:{camoufox:{enabled:true,prefer:true,os:'windows'},commStuckTimeoutSec:30}})},
     updatePending:()=>{throw new Error('Cancelled work must not mutate queue state');},
     setActiveId:id=>{c.activeId=id;},activeId:'one',setApplyStage:stage=>{c.applyStage=stage;},applyStage:'queued',
-    recomputeStats:()=>{},addLog:()=>{},pauseAssist:()=>{},claimDelivery:()=>true,releaseDelivery:id=>released.push(id),
+    recomputeStats:()=>{},addLog:()=>{},pauseAssist:()=>{},claimDelivery:id=>{claimed.push(id);return true;},releaseDelivery:id=>released.push(id),
     platformLabel:p=>p,awaitBossBrowseForDelivery:async()=>true,awaitDeliveryGap:()=>gap.promise,requestRunNext:()=>{throw new Error('Stopped work must not schedule another job');},
     handleDelivered:id=>delivered.push(id),extractEncryptJobId:()=> 'one',camoufoxStatus:async()=>({ready:true}),
     camoufoxSend:async()=>{sent.push('camoufox');return{ok:true,sent:true};},
     sleep:async()=>{await flush();},
     webviewApi:{current:{openInNewTab:()=> 'detail',closeTab:id=>closed.push(id),isPreloadReady:()=>true,isLoading:()=>false,
-      pageStatus:async()=>({url:'https://example.invalid/detail'}),sendInTab:()=>sent.push('boss'),
+      pageStatus:async()=>({url:'https://example.invalid/detail'}),sendInTab:(_tab,channel)=>{if(channel==='start-apply')sent.push('boss');},
       platformApply:async(...args)=>{args[4]?.onStart();sent.push('platform');return{ok:true,stage:'success',tabId:'detail'};}}},
   };
   vm.createContext(c);
@@ -49,7 +51,7 @@ async function environment(platform='zhaopin') {
   vm.runInContext((await transform(`(${subscription})();`,{loader:'tsx'})).code,c);
   const stop=()=>{const previous={...state};state.autoAssist=false;listener(state,previous);};
   const restart=()=>{const previous={...state};state.autoAssist=true;listener(state,previous);};
-  return {c,item,pending,gap,sent,delivered,released,closed,stop,restart};
+  return {c,item,pending,gap,sent,delivered,claimed,released,closed,stop,restart};
 }
 for(const name of ['deliverNonBoss','deliverCamoufox','deliverBossDom']) {
   const env=await environment(name==='deliverNonBoss'?'zhaopin':'boss');
@@ -57,7 +59,7 @@ for(const name of ['deliverNonBoss','deliverCamoufox','deliverBossDom']) {
   check(env.c.activeId===null&&env.c.applyStage===null,'stopping an unsent task clears active UI immediately');
   env.gap.resolve(true);await run;await flush();
   check(env.sent.length===0,`${name}: stopping in the gap prevents outbound dispatch`);
-  check(env.item.status==='approved_queue'&&env.released.length===1,`${name}: queue retained and claim released`);
+  check(env.item.status==='approved_queue'&&env.released.length===env.claimed.length,`${name}: queue retained with no outstanding claim after Stop`);
 }
 {
   const env=await environment();const run=env.c.deliverNonBoss(env.item,env.item.job.url);env.stop();env.restart();env.gap.resolve(true);await run;
@@ -82,7 +84,7 @@ for(const name of ['deliverNonBoss','deliverCamoufox','deliverBossDom']) {
 const browserApply=browser.vars.get('platformApply');assert.ok(browserApply);
 async function browserEnvironment({ready=false}={}) {
   let allowed=true;const pause=deferred(),probe=deferred(),sends=[],closed=[];
-  const c={Promise,Date,setTimeout,clearTimeout,useCallback:fn=>fn,PLATFORM_META:{zhaopin:{label:'智联'}},
+  const c={Promise,Date,setTimeout,clearTimeout,setInterval,clearInterval,normalizeRandomWaits:pacing.normalizeRandomWaits,useSettingsStore:{getState:()=>({config:{}})},useCallback:fn=>fn,PLATFORM_META:{zhaopin:{label:'智联'}},
     openInNewTab:()=> 'detail',hasTab:()=>true,closeTabById:id=>closed.push(id),aliveRef:{current:true},APPLY_PAGE_READY_MS:30000,
     isPreloadReady:()=>ready,isLoading:()=>false,pageStatus:()=>ready?Promise.resolve({readyState:'complete',bodyLen:300,zhaopinApplyEntry:{kind:'ready'}}):probe.promise,sleep:()=>pause.promise,describeApplyProbe:()=>'',
     seqRef:{current:0},apiResolvers:{current:new Map()},reviewTabIdsRef:{current:new Set()},cmdOnce:()=>{throw Error('unexpected confirmation IPC');},sendInTab:(_tab,_channel,arg)=>sends.push(arg)};

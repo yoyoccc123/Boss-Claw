@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url), root = dirname(dirname(fileURLToPath(import.meta.url)));
+const pacing = require(join(root, 'electron/preload/random-wait.cjs'));
 const { readBossChatContext, buildBossChatProbeScript, clickBossChatContact, buildBossChatContactClickScript, buildBossTextSendClickScript, dispatchBossChatInput } = require(join(root, 'electron/preload/boss-chat-context.cjs'));
 const { isTextSendControl, findTextSendButton, readTextSendTarget } = require(join(root, 'electron/preload/text-send-control.cjs'));
 let checks = 0;
@@ -134,8 +135,15 @@ async function flow(mode) {
     if (mode === 'no-open' || (mode === 'retry' && counts.contacts === 1)) return;
     select();
   }; }
-  let clock = 0, receiptAt = Infinity; class Clock extends Date { static now() { return clock; } }
-  const tick = async ms => { clock += ms; if (clock >= receiptAt) { receiptAt = Infinity; f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); } };
+  let clock = 0, receiptAt = Infinity, waitActionAt = Infinity; const cancelledApplyTokens = new Set();
+  class Clock extends Date { static now() { return clock; } }
+  const tick = async ms => { clock += ms;
+    if (clock >= waitActionAt) {
+      waitActionAt = Infinity;
+      if (mode === 'random-wait-stop') cancelledApplyTokens.add('test-token');
+      if (mode === 'random-wait-reply') f.record.messages.push({ type: 1, fromId: 'hr-native-A', text: '请介绍一下你的经历', received: true, mid: 99 });
+    }
+    if (clock >= receiptAt) { receiptAt = Infinity; f.record.messages.push({ type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); } };
   const button = f.send;
   const c = { Date: Clock, URL, document: f.doc, location: { href, pathname: '/web/geek/chat' },
     pageStatusData: () => ({ collectionBlocked: mode === 'blocked' }), normalizeChatText: t => String(t).replace(/\s+/g, ' ').trim(),
@@ -143,7 +151,8 @@ async function flow(mode) {
     buildBossChatContactClickScript, buildBossTextSendClickScript,
     webFrame: { executeJavaScript: async script => vm.runInNewContext(script, { document: f.doc, location: { href }, URL }) },
     chatInput: () => f.selected === null ? null : f.input,
-    notify: (_, data) => stages.push(data), sleep: tick, jitterDelay: tick,
+    cancelledApplyTokens, randomWait: { ...pacing, waitInterruptibly: (ms, options) => pacing.waitInterruptibly(ms, { ...options, now: () => clock, sleep: tick }) },
+    notify: (_, data) => { stages.push(data); if (data.stage === 'random_wait' && data.label === '发送招呼语前') waitActionAt = clock + 100; }, sleep: tick, jitterDelay: tick,
     humanClickElement: async (element, options) => { if (element === button) { if(mode==='reply-during-click') throw Error('BOSS_HR_REPLIED'); counts.sends++; if(mode==='click-timeout')throw Error('input timeout'); if(mode==='delayed')receiptAt=clock+12000; else if (mode !== 'no-receipt') f.record.messages.push(['live-status','read-status','loading-history','partial-history','failed-status'].includes(mode)
       ? {type:1,bodyType:1,fromId:'self',text:greeting,status:mode==='read-status'?2:mode==='failed-status'?4:1,received:false,mid:43}
       : { type: 1, fromId: 'self', text: greeting, received: true, mid: 43 }); if(mode==='loading-history')f.record.__vue__.$data.loading=true; if(mode==='partial-history')f.record.messages.push(undefined); if(mode==='editor-gone')f.input.isConnected=false; if(mode==='wrong-after-send')f.select(1); return true; } throw Error('Contact selection must not depend on a foreground native-input acknowledgment'); },
@@ -160,11 +169,14 @@ async function flow(mode) {
     const clicked = await c.humanClickElement(button);
     return { ok: clicked, sendAttempted: true, clickObserved: true };
   };
-  vm.createContext(c); for (const name of ['waitFor', 'bossChatContactClick', 'selectBossChatContact', 'domApplyOnce']) vm.runInContext(functions.get(name), c);
-  await c.domApplyOnce({ job, greeting }); return { f, stages, counts };
+  vm.createContext(c); for (const name of ['deliveryStepWait', 'waitFor', 'bossChatContactClick', 'selectBossChatContact', 'domApplyOnce']) vm.runInContext(functions.get(name), c);
+  await c.domApplyOnce({ job, greeting, pacingToken: 'test-token', randomWaits: mode.startsWith('random-wait') ? pacing.DEFAULT_RANDOM_WAITS : undefined }); return { f, stages, counts };
 }
-for (const mode of ['new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open', 'delayed', 'editor-gone', 'wrong-after-send', 'click-timeout', 'live-status', 'read-status', 'loading-history', 'partial-history', 'failed-status', 'receipt-probe-error', 'lost-click', 'noop-handler']) {
+for (const mode of ['random-wait-new', 'random-wait-stop', 'random-wait-reply', 'new', 'prior', 'pending', 'conversation', 'reply-after-prior', 'reply-before-fill', 'reply-after-fill', 'reply-during-click', 'changed', 'no-receipt', 'blocked', 'retry', 'no-open', 'delayed', 'editor-gone', 'wrong-after-send', 'click-timeout', 'live-status', 'read-status', 'loading-history', 'partial-history', 'failed-status', 'receipt-probe-error', 'lost-click', 'noop-handler']) {
   const r = await flow(mode), last = r.stages.at(-1);
+  if (mode === 'random-wait-new') check(r.counts.sends === 1 && last.stage === 'verify_result' && r.stages.filter(s => s.stage === 'random_wait' && s.waitMs >= 1000 && s.waitMs <= 3000).length === 3, 'actual BOSS apply pauses before open, fill and send without breaking receipt confirmation');
+  if (mode === 'random-wait-stop') check(r.counts.sends === 0 && last.stage === 'cancelled' && r.f.input.innerText === greeting, 'Stop during BOSS step pause preserves the draft and prevents sending');
+  if (mode === 'random-wait-reply') check(r.counts.sends === 0 && last.stage === 'skipped', 'HR reply arriving during a step pause cancels the send');
   if (mode === 'new') { check(r.counts.contacts === 1 && r.counts.sends === 1 && last.stage === 'verify_result', 'actual preload selects the contact then sends workbench text once'); check(r.f.input.innerText === greeting, 'workbench text is preserved'); }
   if (mode === 'prior') check(r.counts.inputs === 0 && r.counts.sends === 0 && last.stage === 'verify_result', 'verified identical greeting is not sent twice');
   if (mode === 'pending') check(r.counts.sends === 0 && last.stage === 'failed' && last.needsReview, 'unknown previous receipt is retained for review');

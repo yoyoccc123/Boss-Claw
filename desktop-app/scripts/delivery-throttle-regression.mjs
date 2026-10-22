@@ -352,6 +352,7 @@ const CAP = T.SAFETY_LIMITS.MAX_ACTIONS_PER_MINUTE;
 }
 
 cleanup();
+await import('./random-wait-regression.mjs');
 
 console.log('[投递节流回归] 通过 ' + pass + ' 项，失败 ' + fails.length + ' 项');
 if (fails.length) {

@@ -43,6 +43,11 @@ const runChecks = async function (reloaded) {
       'custom period and quota survive a real renderer reload and Zustand hydration');
     check(card().textContent.includes('当前生效：每 10 分钟最多查看 120 个岗位'), 'reloaded UI shows saved custom policy instead of a fixed 30-minute default');
     check((await status()).maxViews === 120 && (await status()).count === 100, 'native history and effective policy survive renderer reload');
+    const savedWaits=window.settings.getState().config.randomWaits;
+    check(savedWaits.collectionJob.minSeconds===4&&savedWaits.collectionJob.maxSeconds===9
+      &&savedWaits.collectionStep.minSeconds===1.2&&savedWaits.collectionStep.maxSeconds===2.6
+      &&savedWaits.deliveryStep.minSeconds===2&&savedWaits.deliveryStep.maxSeconds===4,
+      'all three independent random ranges survive reload');
     window.showNarrowPacing();
     await wait(()=>document.querySelector('[data-testid="safety-pacing-settings"]')?.getBoundingClientRect().width<=420,
       'shared pacing card rendered at the AutoChat side-column width');
@@ -65,6 +70,18 @@ const runChecks = async function (reloaded) {
   check(minutes().value === '30' && views().value === '100' && button().disabled, 'existing 100/30 user choice is displayed without resetting to defaults');
   const deliveryInput=label=>combined.querySelector(`input[aria-label="${label}"]`);
   const cfg=()=>window.settings.getState().config;
+  const waitInput=(label,bound)=>deliveryInput(`${label}${bound}秒数`);
+  check(Number(waitInput('采集岗位间等待','最少').value)===3&&Number(waitInput('采集岗位间等待','最多').value)===7
+    &&Number(waitInput('采集步骤间等待','最少').value)===0.8&&Number(waitInput('投递步骤间等待','最少').value)===1,
+    'Settings exposes collection job, collection step and delivery step ranges with their own defaults');
+  await input(waitInput('采集岗位间等待','最少'),'4');await input(waitInput('采集岗位间等待','最多'),'9');
+  await input(waitInput('采集步骤间等待','最少'),'1.2');await input(waitInput('采集步骤间等待','最多'),'2.6');
+  check(cfg().randomWaits.collectionJob.maxSeconds===9&&cfg().randomWaits.collectionStep.minSeconds===1.2
+    &&cfg().randomWaits.deliveryStep.minSeconds===1&&policy().windowMinutes===30&&(await status()).count===100,
+    'collection pauses do not modify delivery pauses or browse quota/history');
+  await input(waitInput('投递步骤间等待','最少'),'2');await input(waitInput('投递步骤间等待','最多'),'4');
+  check(cfg().randomWaits.deliveryStep.maxSeconds===4&&cfg().randomWaits.collectionJob.maxSeconds===9
+    &&cfg().randomWaits.collectionStep.maxSeconds===2.6,'editing delivery step range preserves both collection ranges');
   check(deliveryInput('投递岗位间隔（秒）').value==='15'&&deliveryInput('投递与沟通每分钟动作数').value==='8'
     &&deliveryInput('投递与沟通风控冷却（分钟）').value==='30'&&!cfg().activeHours.enabled&&!cfg().batchRest.enabled,
     'grouping preserves the existing delivery values and disabled hours/rest switches');

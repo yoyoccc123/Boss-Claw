@@ -358,6 +358,7 @@ check(await deliveryContext.awaitBossBrowseForDelivery(1) && lateReplies === 2 &
 let opened = 0;
 const candidate = { id: 'one', deliveryGreeting: '合成招呼语', job: { platform: 'boss', title: '合成岗位' } };
 Object.assign(deliveryContext, { deliveryEpochRef: { current: 1 },
+  awaitDeliveryGap: async () => true,
   useDataStore: { getState: () => ({ pending: [candidate], greetings: [] }) },
   webviewApi: { current: { openInNewTab: () => { opened++; } } },
   claimDelivery: () => { throw Error('No admission: must not claim or open'); },

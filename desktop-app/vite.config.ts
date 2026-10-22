@@ -5,7 +5,15 @@ import path from 'node:path';
 // 渲染进程构建配置：开发用 Vite dev server（Electron 加载 localhost），
 // 生产打包输出到 dist/，Electron 加载 file://dist/index.html。
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    name: 'shared-random-wait-policy',
+    // The same dependency-free source runs as CJS in the guest preload and ESM
+    // in both Vite dev and production renderers.
+    transform(source, id) {
+      if (!id.replace(/\\/g, '/').endsWith('/electron/preload/random-wait.cjs')) return;
+      return source.replace('module.exports = {', 'export {');
+    },
+  }],
   base: './',
   build: {
     outDir: 'dist',

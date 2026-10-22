@@ -5,17 +5,47 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import { isLockedOut, cooldownRemaining, SAFETY_LIMITS } from '@/lib/bossclaw/safety';
 import { DEFAULT_ACTIVE_HOURS, DEFAULT_BATCH_REST } from '@/lib/bossclaw/activityWindow';
 import BossBrowseLimitSettings from './BossBrowseLimitSettings';
+import { normalizeRandomWaits, type WaitRange } from '@/lib/bossclaw/randomWait';
+
+function RandomWaitRange({ label, value, max, onChange }: {
+  label: string; value: WaitRange; max: number; onChange: (range: WaitRange) => void;
+}) {
+  return <div className="stat-input-card">
+    <span className="sic-label">{label}</span>
+    <div className="sic-input-wrap">
+      <InputNumber aria-label={`${label}最少秒数`} min={0} max={max} step={0.1} precision={1}
+        value={value.minSeconds} style={{ width: 90 }}
+        onChange={n => { const minSeconds = n ?? value.minSeconds; onChange({ minSeconds, maxSeconds: Math.max(minSeconds, value.maxSeconds) }); }} />
+      <span className="sic-unit">至</span>
+      <InputNumber aria-label={`${label}最多秒数`} min={0} max={max} step={0.1} precision={1}
+        value={value.maxSeconds} style={{ width: 90 }}
+        onChange={n => { const maxSeconds = n ?? value.maxSeconds; onChange({ minSeconds: Math.min(value.minSeconds, maxSeconds), maxSeconds }); }} />
+      <span className="sic-unit">秒</span>
+    </div>
+  </div>;
+}
 
 /** Shared presentation only: browse and delivery gates keep their existing policies. */
 export default function SafetyPacingSettings() {
   const config = useSettingsStore(s => s.config);
   const setConfig = useSettingsStore(s => s.setConfig);
   const activeHoursCfg = config.activeHours ?? DEFAULT_ACTIVE_HOURS;
+  const randomWaits = normalizeRandomWaits(config.randomWaits);
+  const changeWait = (key: keyof typeof randomWaits, range: WaitRange) =>
+    setConfig({ randomWaits: { ...normalizeRandomWaits(useSettingsStore.getState().config.randomWaits), [key]: range } });
   const activeHoursPerDay = ((activeHoursCfg.endHour - activeHoursCfg.startHour + 24) % 24) || 24;
   return <Card size="small" className="setting-card safety-pacing-settings" data-testid="safety-pacing-settings"
     title={<><LockOutlined style={{ color: 'var(--brand)', marginRight: 6 }} />访问与投递节奏</>}>
     <BossBrowseLimitSettings policy={config.bossBrowseLimit ?? { windowMinutes: 30, maxViews: 30 }}
       onApply={value => setConfig({ bossBrowseLimit: value })} />
+    <section className="safety-pacing-delivery" aria-label="采集随机等待">
+      <Typography.Title level={5} style={{ margin: '0 0 12px', fontSize: 15 }}>采集随机等待</Typography.Title>
+      <Typography.Paragraph type="secondary">内置浏览器每个岗位、各操作步骤分别抽取等待时间；暂停或停止可打断等待。范围设为 0 至 0 可关闭。</Typography.Paragraph>
+      <div className="sic-rows">
+        <RandomWaitRange label="采集岗位间等待" value={randomWaits.collectionJob} max={300} onChange={range => changeWait('collectionJob', range)} />
+        <RandomWaitRange label="采集步骤间等待" value={randomWaits.collectionStep} max={15} onChange={range => changeWait('collectionStep', range)} />
+      </div>
+    </section>
     <section className="safety-pacing-delivery" aria-label="投递与沟通节奏">
       <Typography.Title level={5} style={{ margin: '0 0 12px', fontSize: 15 }}>投递与沟通节奏</Typography.Title>
       {isLockedOut(config) && (
@@ -94,6 +124,11 @@ export default function SafetyPacingSettings() {
           </div>
         </div>
       </div>
+
+      <div className="sic-rows">
+        <RandomWaitRange label="投递步骤间等待" value={randomWaits.deliveryStep} max={15} onChange={range => changeWait('deliveryStep', range)} />
+      </div>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 10 }}>步骤等待用于工作台内置浏览器打开沟通、填写文案和发送之前。岗位间隔以设定值为基准随机浮动，已有浏览限额和批次休息仍分别生效。</Typography.Paragraph>
 
       <div className="sic-rows">
         <div className="stat-input-card">

@@ -29,6 +29,7 @@ import {
 import { useAppStore } from '@/store/useAppStore';
 import { rememberedNewTabPlatform } from '@/lib/bossclaw/platformSelection';
 import { useSettingsStore } from '@/store/useSettingsStore';
+import { normalizeRandomWaits, sampleWaitMs, waitInterruptibly } from '@/lib/bossclaw/randomWait';
 import electronApi from '@/lib/electronApi';
 import { PLATFORM_META, PLATFORM_IDS, PLATFORM_CHIP_PALETTE, platformEnabled, resolvePlatform, type JobPlatform } from '@/lib/bossclaw/platforms';
 import { isWhitelistedUrl, whitelistSitesOf, WHITELIST_GROUPS, type BrowserSite as BrowserWhitelistSite } from '@/lib/bossclaw/browserWhitelist';
@@ -982,29 +983,40 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
         const start = () => {
           if (cancelledBeforeStart()) return;
           const seq = String((seqRef.current += 1));
+          const pacingToken = `platform:${tabId}:${seq}`;
+          const randomWaits = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits);
+          const cancelWatch = control ? setInterval(() => {
+            if (control.canStart() && aliveRef.current && hasTab(tabId)) return;
+            sendInTab(tabId, 'apply-control', { action: 'stop', pacingToken });
+            clearInterval(cancelWatch);
+          }, 100) : undefined;
           const timer = setTimeout(() => {
+            clearInterval(cancelWatch);
+            sendInTab(tabId, 'apply-control', { action: 'stop', pacingToken });
             if (apiResolvers.current.has(seq)) {
               apiResolvers.current.delete(seq);
               reviewTabIdsRef.current.add(tabId);
               resolve({ ok: false, stage: 'failed', error: '投递请求已下发，但结果未在规定时间内确认；请核对平台投递记录后再重试', needsReview: true, tabId });
             }
-          }, platform === 'liepin' ? 55000 : 26000);
+          }, (platform === 'liepin' ? 55000 : 26000) + randomWaits.deliveryStep.maxSeconds * 4000);
           apiResolvers.current.set(seq, async (payload: any) => {
             clearTimeout(timer);
             if (payload?.needsReview || payload?.stage === 'risk' || payload?.stage === 'login') reviewTabIdsRef.current.add(tabId);
             if (platform === 'wuba' && payload?.stage === 'resume_ready') {
               // Selecting a resume is a separate native submission boundary. Stop wins here.
               if (!aliveRef.current || !hasTab(tabId) || (control && !control.canStart())) {
+                clearInterval(cancelWatch);
                 resolve({ ok: false, stage: 'cancelled', tabId }); return;
               }
               try {
-                const result = await cmdOnce('platform-apply', { platform, job, phase: 'confirm', token: payload.token }, 18000, tabId);
+                const result = await cmdOnce('platform-apply', { platform, job, phase: 'confirm', token: payload.token, randomWaits, pacingToken }, 18000 + randomWaits.deliveryStep.maxSeconds * 1000, tabId);
                 resolve({ ...result, tabId });
               } catch {
                 resolve({ ok: false, stage: 'failed', needsReview: true, error: '58提交结果未确认，请核对平台记录', tabId });
-              }
+              } finally { clearInterval(cancelWatch); }
               return;
             }
+            clearInterval(cancelWatch);
             resolve({ ...(payload || {}), tabId });
           });
           control?.onStart();
@@ -1013,6 +1025,8 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
             platform,
             job,
             greeting,
+            randomWaits,
+            pacingToken,
             externalApplyHints: PLATFORM_META[platform]?.externalApplyHints || [],
           });
         };
@@ -1109,7 +1123,14 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       }
       return failed(chat ? '智联未能确认目标聊天页，工作台招呼语未发送' : '智联沟通详情页未就绪，未发送');
     };
+    const pauseStep = async (label: string) => {
+      const range = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits).deliveryStep;
+      const ms = sampleWaitMs(range);
+      if (ms) callbacksRef.current.onApplyStage?.('random_wait', { message: `${label}：随机等待 ${(ms / 1000).toFixed(1)} 秒`, waitMs: ms }, tabId);
+      return waitInterruptibly(ms, { stopped: cancelled });
+    };
     const loaded = await waitReady(false); if (!loaded.ok) return loaded;
+    if (!await pauseStep('打开智联沟通前')) return { ok: false, stage: 'cancelled', tabId };
     if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
     const opened = await cmdOnce('zhaopin-chat', { action: 'open', job, greeting }, 8000, tabId);
     if (!opened?.ok) return { ...failed(opened?.error || opened?.message || '智联继续沟通未确认'), ...opened, tabId };
@@ -1118,10 +1139,12 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     if (!sessionId) return failed('智联会话编号未确认，未发送');
     if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
     const args = { job, greeting, sessionId, nativeChatToken: opened.nativeChatToken, defaultGreeting: opened.defaultGreeting || '' };
+    if (!await pauseStep('填写智联文案前')) return { ok: false, stage: 'cancelled', tabId };
     const prepared = await cmdOnce('zhaopin-chat', { ...args, action: 'prepare' }, 10000, tabId);
     if (prepared?.ok && prepared.stage !== 'prepared') return { ...prepared, tabId };
     if (!prepared?.ok) return { ...failed(prepared?.error || prepared?.message || '智联文案准备未确认'), ...prepared, tabId };
     if (cancelled()) return { ok: false, stage: 'cancelled', tabId };
+    if (!await pauseStep('发送智联文案前')) return { ok: false, stage: 'cancelled', tabId };
     control.onStart();
     const sent = await cmdOnce('zhaopin-chat', { ...args, action: 'send', token: prepared.token }, 18000, tabId);
     return sent?.ok ? { ...sent, tabId } : { ...failed(sent?.error || sent?.message || '智联招呼语发送结果未确认，请人工核对'), sendAttempted: true, ...sent, tabId };

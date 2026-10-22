@@ -23,6 +23,7 @@
 const { ipcRenderer, webFrame } = require('electron');
 const { buildBossChatProbeScript, buildBossChatContactClickScript, buildBossTextSendClickScript } = require('./boss-chat-context.cjs');
 const { findTextSendButton } = require('./text-send-control.cjs');
+const randomWait = require('./random-wait.cjs');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
@@ -49,6 +50,29 @@ try { console.log('BOSS-CLAW-PRELOAD-INJECTED url=' + location.href); } catch {}
 
 // ===== 基础工具 =====
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const cancelledApplyTokens = new Set();
+async function deliveryStepWait(args, label) {
+  const token = String(args?.pacingToken || '');
+  const stopped = () => Boolean(token && cancelledApplyTokens.has(token));
+  if (stopped()) throw Error('DELIVERY_CANCELLED');
+  if (!args?.randomWaits) return;
+  const range = randomWait.normalizeRandomWaits(args.randomWaits).deliveryStep;
+  const ms = randomWait.sampleWaitMs(range);
+  if (ms) notify('apply-stage', { stage: 'random_wait', waitMs: ms, label,
+    message: `${label}：随机等待 ${(ms / 1000).toFixed(1)} 秒`, pacingToken: token });
+  if (!await randomWait.waitInterruptibly(ms, { stopped })) throw Error('DELIVERY_CANCELLED');
+}
+
+function collectionRandomWait(opts, stopped, notify) {
+  return async (key, label, progress = {}) => {
+    const policy = randomWait.normalizeRandomWaits(collectCtl.randomWaits || opts.randomWaits);
+    const ms = randomWait.sampleWaitMs(policy[key]);
+    if (ms) notify('collect-progress', { ...progress, phase: 'random-wait', waitMs: ms,
+      status: `${label}：随机等待 ${(ms / 1000).toFixed(1)} 秒` });
+    return randomWait.waitInterruptibly(ms, { stopped, paused: () => collectCtl.paused });
+  };
+}
 
 function notify(channel, data) {
   try { ipcRenderer.sendToHost(channel, data); } catch {}
@@ -1439,7 +1463,8 @@ async function domApply(arg) {
   }
 }
 
-async function domApplyOnce({ job = {}, greeting = '' } = {}) {
+async function domApplyOnce(args = {}) {
+  const { job = {}, greeting = '' } = args;
   const safeGreeting = String(greeting || '').replace(/\s+/g, ' ').trim();
   let sendAttempted = false;
   let sendClick = null;
@@ -1451,6 +1476,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     // A friend relation alone does not prove that the workbench greeting has been sent.
     // Inspect the selected conversation before deciding whether this is an existing discussion.
     notify('apply-stage', { stage: 'open_chat', label: '打开沟通窗口' });
+    if (args.randomWaits) await deliveryStepWait(args, '打开沟通前');
     let input = chatInput();
     let verifiedContext = null;
     // 已进入聊天页但输入框未就绪（渲染慢）：给足等待，不立即失败
@@ -1482,6 +1508,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     }
 
     notify('apply-stage', { stage: 'fill_message', label: '填写招呼语' });
+    if (args.randomWaits) await deliveryStepWait(args, '填写招呼语前');
     // 仅编辑区内清空/聚焦（严禁整页 selectAll）；随后可信 insertText 插入。
     input.scrollIntoView({ block: 'center' });
     // 先把光标真实移过去再输入：否则序列是「点按钮 → 鼠标不动 → 文字凭空出现」，
@@ -1506,7 +1533,8 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
       notify('apply-stage', { stage: 'failed', error: `真实输入写入失败：${ins?.error || '编辑器未保留输入内容'}，已暂停` });
       return;
     }
-    await jitterDelay(120);
+    if (args.randomWaits) await deliveryStepWait(args, '发送招呼语前');
+    else await jitterDelay(120);
 
     notify('apply-stage', { stage: 'send_message', label: '发送招呼语' });
     // 兜底：通知框架输入框内容已变化。弹窗（.startchat-content）发送按钮是
@@ -1597,6 +1625,7 @@ async function domApplyOnce({ job = {}, greeting = '' } = {}) {
     notify('apply-stage', { stage: 'verify_result', label: '确认投递结果', ok: true });
   } catch (error) {
     const errorText = String(error?.message || error);
+    if (errorText === 'DELIVERY_CANCELLED') { notify('apply-stage', { stage: 'cancelled', sendAttempted }); return; }
     if (errorText === 'BOSS_HR_REPLIED') { notify('apply-stage', { stage: 'skipped', reason: 'HR 已回复，已跳过投递和招呼语发送' }); return; }
     if (/安全验证|验证码|频繁|限速|登录|封禁|异常/.test(errorText)) {
       notify('apply-stage', { stage: 'risk', code: null, message: errorText, sendAttempted, needsReview: sendAttempted });
@@ -2340,17 +2369,20 @@ function hasUncollectedCards(processed) {
 //   atBottom=true → 确实到底且无新卡，主循环停止（grew=false）
 async function scrollJobListLoadMore(processed, opts = {}) {
   const settleMs = Math.max(400, Number(opts.settleMs) || 1200);
+  const stopped = opts.stopped || (() => collectCtl.stopped);
+  const pace = opts.randomWaits ? collectionRandomWait(opts, stopped, (channel, data) => collectNotify(channel, { ...data, seq: opts.seq })) : null;
   const scroller = findListScroller();
   const stepRatio = 0.8;
   const maxSteps = 6;
   let lastTop = scroller ? scroller.scrollTop : window.scrollY;
   for (let i = 0; i < maxSteps; i += 1) {
-    if (collectCtl.stopped) return { grew: false, atBottom: true };
+    if (stopped()) return { grew: false, atBottom: true };
     const curTop = scroller ? scroller.scrollTop : window.scrollY;
     const client = scroller ? scroller.clientHeight : innerHeight;
     const total = scroller ? scroller.scrollHeight : document.documentElement.scrollHeight;
     const next = Math.min(curTop + Math.round(client * stepRatio), Math.max(0, total - client));
     if (next <= curTop + 5) break; // 已滚到物理底部，跳出做最终确认
+    if (pace && !await pace('collectionStep', '下拉加载前')) return { grew: false, atBottom: false };
     // 即时滚动（不用 smooth：smooth 是异步动画，会与下面的位置判定竞争）
     if (scroller) scroller.scrollTop = next;
     else window.scrollTo(0, next);
@@ -2389,7 +2421,9 @@ async function visualCollect(opts = {}) {
   collectCtl.stopped = false;
   const token = opts.seq || Symbol('collect');
   collectCtl.token = token;
+  collectCtl.randomWaits = opts.randomWaits;
   const stopped = () => collectCtl.stopped || collectCtl.token !== token;
+  const pace = opts.randomWaits ? collectionRandomWait(opts, stopped, notify) : null;
   collectCtl.settleMs = Math.max(400, Number(opts.settleMs) || 1200);
   // 审查 #10：采集节奏（ms/步）必须**每步实时读取** —— collect-control 的 speed（加速/减速）
   // 写的是 collectCtl.settleMs，而原实现把它在采集开始时捕获为函数内局部常量，
@@ -2534,7 +2568,7 @@ async function visualCollect(opts = {}) {
         break;
       }
       scrollRoundsUsed += 1;
-      const { grew, atBottom } = await scrollJobListLoadMore(processed, { settleMs: settleMsNow() });
+      const { grew, atBottom } = await scrollJobListLoadMore(processed, { settleMs: settleMsNow(), randomWaits: opts.randomWaits, seq: opts.seq, stopped });
       if (atBottom) {
         // 已滚到列表物理底部且无新卡 → 本搜索组合加载完毕，直接停止
         notify('collect-progress', { phase: 'list-bottom', index, total: cards.length, processed: processedCount, maxJobs, status: '已滚动到列表底部，加载完毕' });
@@ -2553,6 +2587,7 @@ async function visualCollect(opts = {}) {
     index += 1;
     const key = collectCardKey(card);
     if (!key || processed.has(key)) continue;
+    if (pace && !await pace('collectionJob', '采集岗位间', { index, total: cards.length, title: cardIdentity(card).title })) break;
     processed.add(key);
     const identity = cardIdentity(card);
     // 诊断：每张卡片的去重 key 与身份立即回传（让 React 能确认 select 命中且 key 提取成功）
@@ -2569,6 +2604,7 @@ async function visualCollect(opts = {}) {
     if (stopped()) break;
     await waitWhilePaused();
     if (processedCount >= maxJobs) break;
+    if (pace && !await pace('collectionStep', '打开详情前', { index, total: cards.length, title: identity.title })) break;
     // 2) 点击展开详情
     const permit = await waitForBossBrowse(stopped, (phase, state) => notify('collect-progress', {
       phase, index, total: cards.length, title: identity.title, company: identity.company,
@@ -2589,6 +2625,7 @@ async function visualCollect(opts = {}) {
     await openCardDetail(card);
     await sleep(Math.max(500, Math.round(settleMsNow() * 0.6)));
     if (stopped()) break;
+    if (pace && !await pace('collectionStep', '读取岗位前', { index, total: cards.length, title: identity.title })) break;
     // 3) 提取岗位信息并回传
     const job = extractJobDetail(card);
     if (await reportBossRestriction()) { terminalReason = 'blocked'; break; }
@@ -2606,6 +2643,7 @@ async function visualCollect(opts = {}) {
       _jid = _jid.replace(/\.html$/i, '').trim();
       const _hasIns = (job.welfare || []).some((w) => /五险|六险|三险|公积金/.test(String(w)));
       if (_jid && !_hasIns) {
+        if (pace && !await pace('collectionStep', '读取岗位补充信息前', { index, total: cards.length, title: job.title })) break;
         const c = await zpFetch(`/wapi/zpgeek/job/card.json?encryptJobId=${encodeURIComponent(_jid)}`, { timeoutMs: 8000, browseAdmitted: true });
         if (c && c.code === 0 && c.zpData) {
           const wl = Array.isArray(c.zpData.welfareList) ? c.zpData.welfareList.map(String) : [];
@@ -2617,6 +2655,7 @@ async function visualCollect(opts = {}) {
       // card.json 仍缺社保信号（API 风控/空壳/jobId 缺失）→ 直接从岗位详情页源码（meta description）补全，
       // 与「加入任务」解析详情页源码同口径，保证采集卡片也能显示五险一金等福利标签。
       if (!(job.welfare || []).some((w) => /五险|六险|三险|公积金/.test(String(w)))) {
+        if (pace && !await pace('collectionStep', '读取详情页补充信息前', { index, total: cards.length, title: job.title })) break;
         const src = await fetchDetailSourceWelfare(job.url, true);
         if (src.length) {
           job.welfare = [...new Set([...(job.welfare || []), ...src])].slice(0, 16);
@@ -2631,7 +2670,7 @@ async function visualCollect(opts = {}) {
     }
     processedCount += 1;
     notify('collect-progress', { phase: 'done', cardKey: key, index, total: cards.length, processed: processedCount, maxJobs, title: job.title, company: job.company, status: '完成', job });
-    await sleep(settleMsNow());
+    if (!pace) await sleep(settleMsNow());
   }
   notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs,
     reason: stopped() ? 'stopped' : processedCount >= maxJobs ? 'limit' : loginWallDetected() ? 'blocked' : terminalReason });
@@ -3090,7 +3129,9 @@ async function visualCollectListOnly(opts = {}) {
   collectCtl.stopped = false;
   const token = opts.seq || Symbol('collect');
   collectCtl.token = token;
+  collectCtl.randomWaits = opts.randomWaits;
   const stopped = () => collectCtl.stopped || collectCtl.token !== token;
+  const pace = opts.randomWaits ? collectionRandomWait(opts, stopped, notify) : null;
   collectCtl.settleMs = Math.max(400, Number(opts.settleMs) || 1200);
   // 审查 #10：采集节奏（ms/步）必须**每步实时读取** —— collect-control 的 speed（加速/减速）
   // 写的是 collectCtl.settleMs，而原实现把它在采集开始时捕获为函数内局部常量，
@@ -3228,7 +3269,7 @@ async function visualCollectListOnly(opts = {}) {
         break;
       }
       scrollRoundsUsed += 1;
-      const { grew, atBottom } = await scrollJobListLoadMore(processed, { settleMs: settleMsNow() });
+      const { grew, atBottom } = await scrollJobListLoadMore(processed, { settleMs: settleMsNow(), randomWaits: opts.randomWaits, seq: opts.seq, stopped });
       if (atBottom) {
         notify('collect-progress', { phase: 'list-bottom', index: 0, total: cards.length, processed: processedCount, maxJobs, status: '已滚动到列表底部，加载完毕' });
         break;
@@ -3243,6 +3284,7 @@ async function visualCollectListOnly(opts = {}) {
     }
     const card = pending[0];
     const key = collectCardKey(card);
+    if (pace && !await pace('collectionJob', '采集岗位间', { index: processedCount + 1, total: cards.length, title: cardIdentity(card).title })) break;
     processed.add(key);
     const identity = cardIdentity(card);
     await smoothScrollIntoView(card);
@@ -3253,15 +3295,16 @@ async function visualCollectListOnly(opts = {}) {
     await waitWhilePaused();
     if (stopped()) break;
     if (zhaopinBlocked() || wubaBlocked()) return;
+    if (pace && !await pace('collectionStep', '读取岗位详情前', { index: processedCount + 1, total: cards.length, title: identity.title })) break;
     const job = extractJobFromCardOnly(card);
     if (!job) continue; // A native recommendation boundary can arrive after a card was selected.
     // 补齐详情 JD / 技能 / 福利 / HR（智联经 JSON 详情接口、猎聘经同源详情页 HTML；
     // 其它平台能力表未声明 → 直接返回 false）
     await enrichJobDetail(job);
-    if (PLATFORM === 'wuba' && stopped()) break;
+    if (stopped()) break;
     processedCount += 1;
     notify('collect-progress', { phase: 'done', cardKey: key, index: processedCount, total: cards.length, processed: processedCount, maxJobs, title: job.title, company: job.company, status: '完成', job });
-    await sleep(settleMsNow());
+    if (!pace) await sleep(settleMsNow());
   }
   reportJdFillSummary();
   notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs,
@@ -3270,6 +3313,11 @@ async function visualCollectListOnly(opts = {}) {
 
 
 // ===== IPC 通道注册 =====
+ipcRenderer.on('apply-control', (_event, arg) => {
+  if (arg?.action !== 'stop' || typeof arg.pacingToken !== 'string' || !arg.pacingToken) return;
+  cancelledApplyTokens.add(arg.pacingToken);
+  if (cancelledApplyTokens.size > 100) cancelledApplyTokens.delete(cancelledApplyTokens.values().next().value);
+});
 ipcRenderer.on('job-office-address', async (_event, arg) => {
   const seq = arg?.seq;
   try {
@@ -3311,6 +3359,7 @@ ipcRenderer.on('collect-control', (_e, arg) => {
   if (action === 'pause') collectCtl.paused = true;
   else if (action === 'resume') collectCtl.paused = false;
   else if (action === 'stop') { collectCtl.stopped = true; collectCtl.paused = false; }
+  else if (action === 'pacing') collectCtl.randomWaits = randomWait.normalizeRandomWaits(arg?.randomWaits);
   else if (action === 'speed') {
     const ms = Number((arg && arg.settleMs) || 0);
     if (ms >= 300) collectCtl.settleMs = Math.min(5000, ms);
@@ -3426,6 +3475,10 @@ function readZhaopinApplyEntry() {
 
 let wubaPrepared = null;
 async function wubaApplyStep(args = {}) {
+  if (args.randomWaits) {
+    try { await deliveryStepWait(args, args.phase === 'confirm' ? '确认58简历前' : '打开58申请前'); }
+    catch (e) { if (e.message === 'DELIVERY_CANCELLED') return { ok: false, stage: 'cancelled' }; throw e; }
+  }
   const failure = (error, extra = {}) => ({ ok: false, stage: 'failed', error, needsReview: true, ...extra });
   const blocked = b => ({ ok: false, stage: b.kind === 'resume' ? 'failed' : b.kind, message: b.message,
     needsReview: true, code: b.kind === 'risk' ? 35 : undefined, external: b.kind === 'external' });
@@ -3493,6 +3546,7 @@ async function platformApplyOnce(args = {}) {
       notify('platform-apply-result', { seq, ...result });
       return;
     }
+    if (args.randomWaits) await deliveryStepWait(args, '岗位投递操作前');
     // 非终态进度（沿用 platforms.ts stageLabels），终态只经 platform-apply-result 回传
     if (platform === 'liepin') {
       notify('apply-stage', { stage: 'open_chat', label: '打开沟通窗口', platform });
@@ -3656,6 +3710,7 @@ async function platformApplyOnce(args = {}) {
         selection.removeAllRanges(); selection.addRange(range);
       }
       notify('apply-stage', { stage: 'fill_message', label: '填写猎聘招呼语', platform });
+      if (args.randomWaits) await deliveryStepWait(args, '填写猎聘文案前');
       if (riskHit()) return fail('risk', { code: 35, message: '猎聘输入前出现安全验证，已暂停' });
       if (!currentTarget()) return fail('failed', { needsReview: true, error: '猎聘目标会话已变化，已停止发送，请人工核对' });
       const inserted = await trustedInput('insertText', safeGreeting);
@@ -3693,9 +3748,19 @@ async function platformApplyOnce(args = {}) {
       if (written.matching.length || written.incoming.length || written.nonDefaultOutgoing.length) {
         return fail('failed', { needsReview: true, error: '填写期间会话出现当前文案或实际沟通消息，已保留草稿，请人工核对' });
       }
-      const messageBefore = new Set(written.matching);
+      if (args.randomWaits) await deliveryStepWait(args, '发送猎聘文案前');
+      // Recheck after the pause: HR may have replied or the selection changed.
+      const freshTarget = currentTarget();
+      if (!freshTarget) return fail('failed', { needsReview: true, error: '等待期间猎聘会话已变化，未发送' });
+      const freshState = readLiepinDeliveryState(freshTarget, safeGreeting);
+      if (freshState.incoming.length || freshState.matching.length || freshState.nonDefaultOutgoing.length)
+        return fail('skip', { message: '等待期间已出现回复或实际沟通，已跳过发送' });
+      if (freshState.editorText !== safeGreeting || !freshState.sendButton)
+        return fail('failed', { needsReview: true, error: '等待期间猎聘草稿或发送按钮已变化，未发送' });
+      if (riskHit()) return fail('risk', { code: 35, message: '猎聘发送前出现安全验证，已暂停' });
+      const messageBefore = new Set(freshState.matching);
       notify('apply-stage', { stage: 'send_message', label: '发送猎聘招呼语', platform });
-      await clickElement(written.sendButton);
+      await clickElement(freshState.sendButton);
       notify('apply-stage', { stage: 'verify_message', label: '确认猎聘文字消息', platform });
       const sent = await waitFor(() => {
         if (riskHit()) return 'risk';
@@ -3845,6 +3910,7 @@ async function platformApplyOnce(args = {}) {
 
     return fail('failed', { error: `暂不支持的平台：${platform}` });
   } catch (e) {
+    if (e?.message === 'DELIVERY_CANCELLED') return fail('cancelled');
     return fail('failed', { error: String((e && e.message) || e) });
   }
 }
@@ -4048,11 +4114,11 @@ setTimeout(() => { safeReport('nav'); safeReport('login'); }, 4000);
 
 // 自身 IPC 监听兜底：底层事件回调抛错会污染 ipcRenderer 的事件循环，把每个 listener 包一层
 const ipcChannels = PLATFORM === 'boss'
-  ? ['boss-api', 'extract-job', 'start-apply', 'open-chat', 'visual-collect', 'collect-control', 'webview-command', 'page-read', 'page-status', 'prefill-greeting', 'ui-eval',
+  ? ['boss-api', 'extract-job', 'start-apply', 'apply-control', 'open-chat', 'visual-collect', 'collect-control', 'webview-command', 'page-read', 'page-status', 'prefill-greeting', 'ui-eval',
      'spa-back', 'spa-forward', 'force-resize']
   // 非 BOSS 平台自 2026-09-15 起也支持「可视化采集（列表级）」→ 这两个通道必须注册，
   // 否则宿主 sendInTab('visual-collect') 无监听器、collect-done 永不回传，界面会静默卡到兜底超时（最长 15min）。
-  : ['extract-job', 'platform-apply', 'zhaopin-chat', 'visual-collect', 'collect-control', 'webview-command', 'page-read', 'page-status', 'prefill-greeting', 'ui-eval',
+  : ['extract-job', 'platform-apply', 'apply-control', 'zhaopin-chat', 'visual-collect', 'collect-control', 'webview-command', 'page-read', 'page-status', 'prefill-greeting', 'ui-eval',
      'spa-back', 'spa-forward', 'force-resize'];
 ipcChannels.forEach((channel) => {
   const orig = ipcRenderer.listeners(channel).slice();

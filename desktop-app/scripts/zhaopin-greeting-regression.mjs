@@ -11,6 +11,9 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 const require=createRequire(import.meta.url), root=dirname(dirname(fileURLToPath(import.meta.url))), work=mkdtempSync(join(tmpdir(),'bossclaw-zhaopin-greeting-'));
+const pacing=require(join(root,'electron/preload/random-wait.cjs'));
+const pacingContext={normalizeRandomWaits:pacing.normalizeRandomWaits,sampleWaitMs:()=>0,
+  waitInterruptibly:async(_ms,{stopped})=>!stopped(),useSettingsStore:{getState:()=>({config:{}})},callbacksRef:{current:{}}};
 function parse(file) {
   const source=ts.createSourceFile(file,readFileSync(join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions=new Map(),vars=new Map();
   const visit=n=>{if(ts.isFunctionDeclaration(n)&&n.name)functions.set(n.name.text,n.getText(source));if(ts.isVariableDeclaration(n)&&ts.isIdentifier(n.name)&&n.initializer)vars.set(n.name.text,n.initializer.getText(source));ts.forEachChild(n,visit);};visit(source);return{functions,vars};
@@ -191,9 +194,25 @@ console.log(`PASS native chat binding: ${nativeChecks} production guest/origin/s
 
 // Host navigation and Stop boundaries: run actual production BrowserView function.
 let hostChecks=0;
+for (const stopAt of [0,1,2,3]) {
+  let allowed=true,phase=0,pauseNumber=0,tick=0,sends=0;const notices=[];
+  const c={...pacingContext,Promise,URL,Date:{now:()=>tick},useCallback:fn=>fn,aliveRef:{current:true},reviewTabIdsRef:{current:new Set()},
+    openInNewTab:()=> 'paced-tab',hasTab:()=>true,sleep:async()=>{},sampleWaitMs:()=>1000,
+    callbacksRef:{current:{onApplyStage:(stage,data)=>notices.push({stage,...data})}},
+    waitInterruptibly:async(ms,opts)=>{pauseNumber++;return pacing.waitInterruptibly(ms,{...opts,now:()=>tick,
+      sleep:async n=>{tick+=n;if(pauseNumber===stopAt)allowed=false;}});},
+    pageStatus:async()=>({readyState:'complete',bodyLen:500,url:phase? 'https://i.zhaopin.com/im?sessionId=target':job.url,zhaopinChatReady:phase>0}),
+    cmdOnce:async(_channel,args)=>{if(args.action==='open'){phase=1;return{ok:true,nativeChatToken:'bound'};}
+      if(args.action==='prepare')return{ok:true,stage:'prepared',token:'prepared'};sends++;return{ok:true,stage:'success',greetingConfirmed:true};}};
+  vm.createContext(c);vm.runInContext((await transform(`globalThis.greet=${browser.vars.get('zhaopinGreet')};`,{loader:'tsx'})).code,c);
+  const result=await c.greet(job,greeting,{canStart:()=>allowed,onStart:()=>{}});
+  assert.equal(sends,stopAt?0:1);assert.equal(result.stage,stopAt?'cancelled':'success');
+  assert.equal(notices.length,stopAt||3);assert.ok(notices.every(n=>n.stage==='random_wait'&&n.waitMs===1000));
+  hostChecks++;
+}
 for(const stopAt of ['never','before-open','after-navigation','after-prepare','after-send']){
   let allowed=true,reads=0,sends=0,opens=0,started=0;
-  const context={Promise,URL,Date,useCallback:fn=>fn,aliveRef:{current:true},reviewTabIdsRef:{current:new Set()},openInNewTab:()=> 'tab',hasTab:()=>true,sleep:async()=>{},
+  const context={...pacingContext,Promise,URL,Date,useCallback:fn=>fn,aliveRef:{current:true},reviewTabIdsRef:{current:new Set()},openInNewTab:()=> 'tab',hasTab:()=>true,sleep:async()=>{},
     pageStatus:async()=>{reads++;if(stopAt==='before-open'&&reads===1)allowed=false;if(stopAt==='after-navigation'&&reads===2)allowed=false;return reads===1?{bodyLen:300,readyState:'complete',url:job.url}:{bodyLen:500,readyState:'complete',url:'https://i.zhaopin.com/im?sessionId=target',zhaopinChatReady:true};},
     cmdOnce:async(channel,args)=>{if(args.action==='open'){opens++;return{ok:true,defaultGreeting:platformDefault,nativeChatToken:'native-host-token'};}assert.equal(args.nativeChatToken,'native-host-token');if(args.action==='prepare'){if(stopAt==='after-prepare')allowed=false;return{ok:true,stage:'prepared',token:'t'};}sends++;if(stopAt==='after-send')allowed=false;return{ok:true,stage:'success',greetingConfirmed:true};}};
   vm.createContext(context);vm.runInContext((await transform(`globalThis.greet=${browser.vars.get('zhaopinGreet')};`,{loader:'tsx'})).code,context);
@@ -202,7 +221,7 @@ for(const stopAt of ['never','before-open','after-navigation','after-prepare','a
 }
 for(const mode of ['transient-detail','transient-chat','persistent-detail','persistent-chat','risk-during-login','stop-during-login']) {
   let tick=0,allowed=true,phase='detail',phaseReads=0,sends=0,opens=0;
-  const c={Promise,URL,Date:{now:()=>tick},useCallback:fn=>fn,aliveRef:{current:true},reviewTabIdsRef:{current:new Set()},openInNewTab:()=> 'tab',hasTab:()=>true,
+  const c={...pacingContext,Promise,URL,Date:{now:()=>tick},useCallback:fn=>fn,aliveRef:{current:true},reviewTabIdsRef:{current:new Set()},openInNewTab:()=> 'tab',hasTab:()=>true,
     sleep:async()=>{tick+=400;if(mode==='stop-during-login')allowed=false;},
     pageStatus:async()=>{phaseReads++;const here={bodyLen:500,readyState:'complete',url:phase==='detail'?job.url:'https://i.zhaopin.com/im?sessionId=target',zhaopinChatReady:phase==='chat'};
       const affected=mode.endsWith(phase)||mode.endsWith('login')&&phase==='detail';

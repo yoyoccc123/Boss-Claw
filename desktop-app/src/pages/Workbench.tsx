@@ -52,6 +52,7 @@ import {
   cooldownRemaining, classifyRiskCode, humanDelayMs, SAFETY_LIMITS, resolveCooldownMs, nextCooldownUntil,
 } from '@/lib/bossclaw/safety';
 import { sharedPacer, markDelivered, resetDeliveredSinceRest } from '@/lib/bossclaw/deliveryThrottle';
+import { normalizeRandomWaits } from '@/lib/bossclaw/randomWait';
 // 活跃时段 / 批次休息（**唯一权威**，详见模块头注释）：
 // 操作时间戳是**服务端可见的账号级长期统计**，指纹补丁掩盖不了「24 小时无睡眠」「连续上百次不中断」
 import { isWithinActiveWindow, nextActiveStartMs, formatActiveWindow, batchRestDelayMs } from '@/lib/bossclaw/activityWindow';
@@ -326,6 +327,7 @@ export default function Workbench() {
   const runNextLock = useRef(false);
   const runNextQueued = useRef(false);
   const deliveryEpochRef = useRef(0);
+  const deliveryPacingTokenRef = useRef('');
   // 已下发的当前请求继续核对结果；尚在等待的任务停止后不得下发或补发。
   const deliverySubmittedRef = useRef(false);
   const canContinueDelivery = (epoch: number) => epoch === deliveryEpochRef.current && useAppStore.getState().autoAssist;
@@ -333,6 +335,9 @@ export default function Workbench() {
     if (!previous.autoAssist || state.autoAssist) return;
     deliveryEpochRef.current++;
     runNextQueued.current = false;
+    if (activeTabRef.current && deliveryPacingTokenRef.current) {
+      webviewApi.current?.sendInTab(activeTabRef.current, 'apply-control', { action: 'stop', pacingToken: deliveryPacingTokenRef.current });
+    }
     if (!deliverySubmittedRef.current) {
       domWaitRef.current?.('cancelled', {}, activeTabRef.current || undefined);
       if (activeTabRef.current) {
@@ -979,12 +984,7 @@ export default function Workbench() {
   };
 
   // ===== 投递节流：拆成「预检」+「间隔等待」两段 =====
-  // 拆分动机（09-17 实测）：岗位间隔节流（betweenJobsSeconds，默认 20s）原本发生在**打开标签页之前**，
-  // 而 BOSS 岗位详情页实际只需 ~0.7s 加载（diag：ATTACH → DOM-READY）。结果是每次投递前有 13~27s
-  // 完全空转、界面毫无反应，用户感知为「打开新岗位很慢」。
-  // 现在把间隔等待与「打开页面 + 等页面就绪」并行：页面立刻开始加载并显示，
-  // **投递动作（点击立即沟通 / 发送招呼语）之间的时间间隔完全不变**，风控特征不变 —— 只是用原本空转的
-  // 等待时间把加载盖掉。预检（冷却/每日上限）仍必须在打开页面之前，避免白开一个页面。
+  // 每个后续岗位先完整等待抽到的间隔，再打开页面；加载与回执核对不抵扣间隔。
 
   /** 预检：冷却期 / 每日上限 / 限速器预算校准。纯检查，不做长等待。返回 false 表示已暂停（内部已 pauseAssist）。 */
   const precheckDelivery = (): boolean => {
@@ -1018,14 +1018,7 @@ export default function Workbench() {
     return true;
   };
 
-  /**
-   * 等待「限速器预算 + 岗位间隔」。
-   * ⚠️ **三条投递路径都必须调用本函数**（BOSS DOM / 非 BOSS DOM / Camoufox）——它是唯一的
-   * 岗位间隔落点，漏掉任何一条就等于该路径失去节流保护。BOSS DOM 路径把它与页面加载并行
-   * （见 runNext 的 Promise.all），其余两条路径按串行等待。
-   * ⚠️ 安全语义不变：等的仍是两次投递动作之间的间隔，`lastDeliveryAt` 仍在**即将执行投递动作时**刷新，
-   * 因此点击/发送的时序与串行版本一致。**禁止**把它改成「不等」或缩短间隔。
-   */
+  /** BOSS 浏览预算与岗位间等待独立；到期后重新申请，停止立即退出。 */
   const awaitBossBrowseForDelivery = async (epoch: number, action: 'status' | 'reserve' = 'reserve'): Promise<boolean> => {
     let waitSignature = '';
     while (canContinueDelivery(epoch)) {
@@ -1077,14 +1070,15 @@ export default function Workbench() {
     await sharedPacer(cfg.maxActionsPerMinute).waitForSlot();
     if (!canContinueDelivery(epoch)) return false;
     const baseSec = Math.max(Number(cfg.betweenJobsSeconds) || SAFETY_LIMITS.MIN_BETWEEN_JOBS_MS / 1000, SAFETY_LIMITS.MIN_BETWEEN_JOBS_MS / 1000);
-    const gapMs = humanDelayMs(baseSec * 1000, 0.35);
-    const elapsed = Date.now() - lastDeliveryAt.current;
-    const wait = Math.max(0, gapMs - elapsed);
+    const gapMs = Math.max(SAFETY_LIMITS.MIN_BETWEEN_JOBS_MS, humanDelayMs(baseSec * 1000, 0.35));
+    // Every subsequent job gets its full sampled pause. Receipt checking and
+    // page-loading time no longer consume that pause.
+    const wait = lastDeliveryAt.current > 0 ? gapMs : 0;
     if (wait > 0) {
       // 必须显式告知「在等什么、等多久」：岗位页现在是立刻打开的，若不说明，界面看起来就是「停住了」，
       // 用户容易以为卡死而手动重复点投递 —— 那才是真正会触发风控的高频操作。
       const waitSec = Math.ceil(wait / 1000);
-      addLog('info', `为降低风控风险，本岗位将等待 ${waitSec} 秒后投递（岗位间隔约 ${Math.round(gapMs / 1000)}s，距上次投递已过 ${Math.round(elapsed / 1000)}s）。页面已在后台加载完成，期间请勿手动重复投递`);
+      addLog('info', `投递岗位间随机等待 ${waitSec} 秒（基准 ${baseSec} 秒）；加载和回执核对不会抵扣本次等待，可随时停止`);
       if (!await waitWhileRunning(wait)) return false;
       addLog('info', `等待结束（${waitSec}s），继续投递本岗位`);
     }
@@ -1368,6 +1362,11 @@ export default function Workbench() {
       addLog('info', String(data.status || 'BOSS 详情查看已计数'));
     } else if (data?.phase === 'browse-blocked') {
       addLog('warn', String(data.status || 'BOSS 自动浏览已停止'));
+    } else if (data?.phase === 'random-wait') {
+      // A bounded, intentional pause may outlast the normal idle allowance.
+      const delay = Math.min(300000, Math.max(0, Number(data.waitMs) || 0));
+      collectDeadlineRef.current = Math.max(collectDeadlineRef.current, Date.now() + delay + collectTimeoutMsRef.current);
+      addLog('info', String(data.status || '采集随机等待'));
     }
     if (data?.phase === 'list-bottom' && collectAwaitingSeqRef.current) {
       const seq = collectAwaitingSeqRef.current;
@@ -1500,6 +1499,13 @@ export default function Workbench() {
       collectDoneResolve.current?.();
     }
   }, []);
+
+  useEffect(() => {
+    if (!visualActiveRef.current || !visualTabRef.current) return;
+    webviewApi.current?.sendInTab(visualTabRef.current, 'collect-control', {
+      action: 'pacing', randomWaits: normalizeRandomWaits(config.randomWaits),
+    });
+  }, [config.randomWaits, visualCollecting]);
 
   // 可视化采集的可中断等待（每 250ms 检查一次，停止后尽快退出）
   const visualWait = async (ms: number) => {
@@ -1891,6 +1897,7 @@ export default function Workbench() {
       await visualCollectInTab(tabId, {
         expectedSearchUrl: platform === 'wuba' || platform === 'zhaopin' || platform === 'liepin' ? item.url : undefined,
         settleMs: collectSpeedMs,
+        randomWaits: normalizeRandomWaits(useSettingsStore.getState().config.randomWaits),
         listTimeoutMs: pageTimeoutMs,
         autoScroll: config.listAutoScroll !== false,
         scrollRounds: Number(config.listScrollRounds) > 0 ? Number(config.listScrollRounds) : 0,
@@ -2641,6 +2648,7 @@ export default function Workbench() {
       if (finalGreeting && liveCandidate) updatePending(liveCandidate.id, { deliveryGreeting: finalGreeting });
     }
     if (!finalGreeting) { pauseAssist('招呼语为空，无法投递，请补充后再试'); return; }
+    if (!await awaitDeliveryGap(epoch) || !canContinueDelivery(epoch)) return;
     if (!await awaitBossBrowseForDelivery(epoch) || !canContinueDelivery(epoch)) return;
 
     // 共享占位锁：与后台「自动沟通」互斥，避免对同一岗位重复投递
@@ -2686,12 +2694,18 @@ export default function Workbench() {
         // 兜底超时：先于看门狗（commStuckTimeoutSec，默认 60s）收敛，避免与超时看门狗双重处理
         const stuckSec = Math.max(30, Number(useSettingsStore.getState().config.commStuckTimeoutSec) || 60);
         domWaitRef.current = settle;
-        // 页面加载（waitDomReady）与投递节奏（awaitDeliveryGap）并行，随后才下发 start-apply（domApply）。
-        const payload = { job: candidate.job, greeting: finalGreeting };
+        // 岗位间隔已完成；页面就绪后下发带步骤等待范围和取消令牌的命令。
+        const pacingToken = `${candidate.id}:${epoch}:${Date.now()}`;
+        deliveryPacingTokenRef.current = pacingToken;
+        const randomWaits = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits);
+        const payload = { job: candidate.job, greeting: finalGreeting, randomWaits, pacingToken };
         const sendOnce = () => {
           if (settled || !canContinueDelivery(epoch)) return;
           // The rate-limit wait is not time spent awaiting a send receipt.
-          if (!timerRef) timerRef = setTimeout(() => settle('timeout', { error: `DOM 沟通投递超时（${stuckSec - 5}s）` }), (stuckSec - 5) * 1000);
+          if (!timerRef) timerRef = setTimeout(() => {
+            webviewApi.current?.sendInTab(domTab, 'apply-control', { action: 'stop', pacingToken });
+            settle('timeout', { error: `DOM 沟通投递超时（${stuckSec - 5}s + 步骤等待）` });
+          }, (stuckSec - 5 + randomWaits.deliveryStep.maxSeconds * 3) * 1000);
           deliverySubmittedRef.current = true;
           webviewApi.current?.sendInTab?.(domTab, 'start-apply', payload);
         };
@@ -2721,11 +2735,9 @@ export default function Workbench() {
               await sleep(250);
             }
           };
-          // 并行：页面加载（通常 <1s） + 岗位间隔节流（13~27s）。
-          // 串行版本是「先等节流 → 再开页面」，用户要盯着空转的十几秒；并行后页面几乎立刻打开，
-          // 而 start-apply（点击立即沟通）仍要等节流结束才下发 —— 投递动作的时序完全不变。
-          const [allowed] = await Promise.all([awaitDeliveryGap(epoch), waitDomReady()]);
-          if (!allowed || !canContinueDelivery(epoch)) { settle('cancelled', {}); return; }
+          // The full random job gap already elapsed before opening this tab.
+          await waitDomReady();
+          if (!canContinueDelivery(epoch)) { settle('cancelled', {}); return; }
           if (!webviewApi.current) return;
           sendOnce();
           // 「继续沟通/立即沟通」的沟通入口常整页跳转到聊天页（app.zhipin.com / /web/geek/chat），导航会使 preload 重注入、
@@ -2926,7 +2938,9 @@ export default function Workbench() {
     const stuckId = activeId;
     const item = useDataStore.getState().pending.find((p) => p.id === stuckId);
     const title = item?.job?.title || '岗位';
-    const sec = Math.max(10, Number(useSettingsStore.getState().config.commStuckTimeoutSec) || 60);
+    const timing = useSettingsStore.getState().config;
+    const sec = Math.max(10, Number(timing.commStuckTimeoutSec) || 60)
+      + normalizeRandomWaits(timing.randomWaits).deliveryStep.maxSeconds * 3;
     addLog('info', `已进入沟通阶段「${taskStageMetaFor(item?.job?.platform, applyStage).label}」，看门狗启动：若 ${sec} 秒内无进展将跳过该岗位转投下一个`);
     commStuckTimerRef.current = setTimeout(() => {
       const cur = useDataStore.getState().pending.find((p) => p.id === stuckId);
@@ -2956,6 +2970,12 @@ export default function Workbench() {
     // 这些外来事件会被当成当前岗位的进度（日志里冒出上一个岗位的标题，甚至把阶段写错）。
     // 同一次投递内整页跳转（job_detail → 聊天页）tabId 不变，故正常流程不受影响。
     if (tabId && activeTabRef.current && tabId !== activeTabRef.current) return;
+
+    if (stage === 'cancelled') { domWaitRef.current?.('cancelled', data, tabId); return; }
+    if (stage === 'random_wait') {
+      addLog('info', `${active.job?.title || '岗位'}：${String(data.message || '步骤随机等待')}`);
+      return;
+    }
 
     if (stage === 'risk') {
       if (domWaitRef.current) { domWaitRef.current('risk', { ...data, code: data?.code, message: data?.message || '' }, tabId); return; }
