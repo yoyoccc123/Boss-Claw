@@ -47,6 +47,8 @@ const runChecks = async function (reloaded) {
   }
   check(document.querySelector('.ant-tabs-tabpane-active .settings-section-card') === card(), 'browse settings are the first card in Settings / job preferences');
   check(minutes().value === '30' && views().value === '100' && button().disabled, 'existing 100/30 user choice is displayed without resetting to defaults');
+  check(card().textContent.includes('等待本轮全部记录到期再继续') && card().textContent.includes('本轮最后一次查看时间加上计数周期'),
+    'actual Settings explains whole-batch recovery while keeping both custom controls');
   await input(minutes(), '');
   check(minutes().value === '' && button().disabled && policy().windowMinutes === 30 && (await status()).windowMinutes === 30,
     'clearing an input preserves an unfinished draft and never applies a transient default');

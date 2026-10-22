@@ -40,7 +40,8 @@ export default function BossBrowseLimitSettings({ policy, onApply }: { policy: P
     <Space style={{ marginTop: 12 }}><Button type="primary" loading={saving} disabled={!valid || !changed} onClick={apply}>应用浏览限额</Button>
       <Typography.Text type="secondary">修改两项后点击应用，无需重启。</Typography.Text></Space>
     <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-      按最近一个周期内的浏览记录累计，到期逐条释放名额。修改周期或次数会重新计算当前等待时间，历史计数保留。
+      按最近一个周期内的浏览记录累计。达到上限后，等待本轮全部记录到期再继续，期间不使用逐条释放的名额。
+      恢复时间为本轮最后一次查看时间加上计数周期。修改周期或次数会重新计算等待时间，历史计数保留。
       计数跨城市、方向和重启共用；平台要求的访问限制和验证仍按平台提示处理。
     </Typography.Paragraph>
   </div>;

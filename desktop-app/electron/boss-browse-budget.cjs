@@ -36,12 +36,18 @@ function createBossBrowseBudget(file, { clock = Date.now, write = null } = {}) {
     const policy = state.policy, windowMs = policy.windowMinutes * 60_000;
     const times = state.attempts.filter(t => t > now - windowMs);
     const blocked = !!state.restriction && state.restriction.until > now;
-    const capUntil = times.length >= policy.maxViews ? times[times.length - policy.maxViews] + windowMs : 0;
+    // Once the last admission filled the window, keep the whole batch closed until its
+    // newest record expires. Deriving this from durable history also preserves the wait
+    // across restart, even after the oldest records have already expired.
+    const atLastView = state.attempts.filter(t => t > state.lastNow - windowMs && t <= state.lastNow);
+    const capUntil = atLastView.length >= policy.maxViews && state.lastNow + windowMs > now ? state.lastNow + windowMs : 0;
+    const draining = capUntil > now;
     const retryAt = Math.max(capUntil, blocked ? state.restriction.until : 0);
     const error = storageError || (now < state.lastNow ? '系统时间早于已保存的浏览记录，已停止自动访问，请校准时间' : '');
     return { ok: !error && !blocked && retryAt <= now, blocked, error, retryAt,
-      count: times.length, ...policy, code: blocked ? state.restriction.code : undefined,
-      message: error || (blocked ? state.restriction.message : retryAt > now ? `BOSS 浏览频率限制：每 ${policy.windowMinutes} 分钟最多 ${policy.maxViews} 次，当前 ${times.length} 次` : '') };
+      count: times.length, ...policy, draining, quotaResetAt: draining ? capUntil : 0,
+      code: blocked ? state.restriction.code : undefined,
+      message: error || (blocked ? state.restriction.message : draining ? `BOSS 浏览频率限制：每 ${policy.windowMinutes} 分钟最多 ${policy.maxViews} 次，当前 ${times.length} 次；本轮已达上限，等待全部名额到期后再继续` : '') };
   }
   function configure(policy) {
     const next = normalizePolicy(policy);
@@ -65,8 +71,8 @@ function createBossBrowseBudget(file, { clock = Date.now, write = null } = {}) {
     if (!save()) return status();
     const after = status(now), remainingViews = Math.max(0, after.maxViews - after.count);
     const release = expiredSinceLastView ? `；较上次查看，旧记录到期释放 ${expiredSinceLastView} 个名额` : '';
-    const next = remainingViews === 0 && after.retryAt > now
-      ? `，下一名额 ${new Date(after.retryAt).toLocaleTimeString('zh-CN', { hour12: false })} 释放` : '';
+    const next = after.draining
+      ? `；本轮已达上限，等待至 ${new Date(after.quotaResetAt).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })} 全部名额到期后再继续` : '';
     return { ...after, ok: true, admittedAt: now, countBefore: current.count, expiredSinceLastView, remainingViews,
       admissionMessage: `BOSS 已允许本次查看：近 ${after.windowMinutes} 分钟 ${current.count} → ${after.count}/${after.maxViews} 次（本次 +1）${release}；剩余 ${remainingViews} 个名额${next}` };
   }

@@ -52,10 +52,18 @@ check(staggered.reserve().ok, 'first staggered quota item is admitted');
 now += 20000;
 check(staggered.reserve().ok, 'a second view need not wait for half the configured period');
 now = windowStart + 59999;
-check(!staggered.reserve().ok && staggered.status().retryAt === windowStart + 60000, 'full quota waits for the oldest relevant record');
+check(!staggered.reserve().ok && staggered.status().retryAt === windowStart + 80000, 'full quota waits for the newest record to expire');
 now += 1;
-check(staggered.reserve().ok && staggered.status().count === 2 && staggered.status().retryAt === windowStart + 80000,
-  'each expired record releases one slot without resetting the whole window');
+check(!staggered.reserve().ok && staggered.status().count === 1 && staggered.status().retryAt === windowStart + 80000,
+  'expiry of the first record cannot admit another view while this batch drains');
+const partialRestart = createBossBrowseBudget(path.join(temp, 'staggered.json'), { clock: () => now });
+check(!partialRestart.reserve().ok && partialRestart.status().draining && partialRestart.status().quotaResetAt === windowStart + 80000,
+  'restart after partial expiry reconstructs the same full-batch wait from durable history');
+now=windowStart+79999;
+check(!partialRestart.reserve().ok,'the final old record must fully expire, without an early one-slot admission');
+now+=1;
+check(partialRestart.status().count===0 && partialRestart.status().retryAt===0 && partialRestart.reserve().count===1,
+  'the exact final expiry starts a fresh batch with all old records expired');
 let writes = 0;
 const adjustable = createBossBrowseBudget(path.join(temp, 'adjustable.json'), { clock: () => now, write: () => { writes++; } });
 adjustable.configure({ maxViews: 2, windowMinutes: 10 }); adjustable.reserve(); adjustable.reserve();
@@ -81,32 +89,33 @@ check(createBossBrowseBudget(policyFile, { clock: () => now }).status().count ==
   && JSON.parse(fs.readFileSync(policyFile)).policy.maxViews === 30,
   'failed policy persistence leaves the previous durable history and settings intact');
 
-// Reproduce the reported repeated 100/100 messages: one old slot expires before
-// each new view, so every admission must explain 99 -> 100 instead of a bare cap.
+// Reproduce the reported rolling 100/100 case. Once full, neither the first expired
+// record nor a restart may reopen the quota before the last old record expires.
 const receiptStart = Date.parse('2026-10-20T18:46:41+08:00');
 let receiptClock = receiptStart;
 const receiptFile = path.join(temp, 'rolling-receipt.json');
 let receipts = createBossBrowseBudget(receiptFile, { clock: () => receiptClock });
 receipts.configure({ maxViews: 100, windowMinutes: 30 });
-for (let i = 0; i < 100; i++) { receiptClock = receiptStart + i * 6000; receipts.reserve(); }
+let lastFullReceipt;
+for (let i = 0; i < 100; i++) { receiptClock = receiptStart + i * 6000; lastFullReceipt=receipts.reserve(); }
 check(!receipts.reserve().ok && !receipts.reserve().admissionMessage, 'a denied view never produces an allowed-view receipt');
 receipts = createBossBrowseBudget(receiptFile, { clock: () => receiptClock });
-let lastFullReceipt;
+const fullResetAt=receiptStart+99*6000+30*60000;
+check(lastFullReceipt.ok && lastFullReceipt.countBefore===99 && lastFullReceipt.count===100 && lastFullReceipt.remainingViews===0
+  && lastFullReceipt.retryAt===fullResetAt && lastFullReceipt.admissionMessage.includes('全部名额到期后再继续')
+  && !lastFullReceipt.admissionMessage.includes('下一名额'), 'the final allowed view announces the complete batch expiry rather than the next slot');
 for (let i = 0; i < 2; i++) {
   receiptClock = receiptStart + 30 * 60000 + i * 6000;
-  const admitted = receipts.reserve();
-  lastFullReceipt = admitted;
-  check(admitted.ok && admitted.countBefore === 99 && admitted.count === 100 && admitted.remainingViews === 0
-    && admitted.expiredSinceLastView === 1 && admitted.retryAt === receiptClock + 6000,
-    'restarted rolling budget reports one released slot, before/after counts and next expiry for each 100/100 admission');
-  check(admitted.admissionMessage.includes('99 → 100/100') && admitted.admissionMessage.includes('本次 +1')
-    && admitted.admissionMessage.includes('旧记录到期释放 1 个名额') && admitted.admissionMessage.includes('下一名额'),
-    'a full-looking admission explains old-slot expiry and the exact new view rather than implying an over-limit send');
+  const denied=receipts.reserve();
+  check(!denied.ok && denied.count===99-i && denied.retryAt===fullResetAt && !denied.admissionMessage,
+    'partial expiry cannot produce another 99-to-100 admission or shorten the full-batch wait');
+  receipts=createBossBrowseBudget(receiptFile,{clock:()=>receiptClock});
+  check(!receipts.status().ok && receipts.status().retryAt===fullResetAt, 'reopening midway through the drain never resets the cooldown');
 }
-receiptClock += 31 * 60000;
+receiptClock=fullResetAt;
 const drained = receipts.reserve();
 check(drained.countBefore === 0 && drained.count === 1 && drained.expiredSinceLastView === 100 && drained.remainingViews === 99
-  && !drained.admissionMessage.includes('下一名额'), 'fully expired history reports a fresh count and available quota without a false wait');
+  && !drained.draining && !drained.admissionMessage.includes('本轮已达上限'), 'full expiry starts at 0-to-1 with all quota available, without another rolling single-slot wait');
 
 now = Date.parse('2026-10-18T22:08:39+08:00');
 const restrictedUrl = 'https://www.zhipin.com/web/passport/zp/403.html?callbackUrl=%2Fweb%2Fgeek%2Fjobs';
@@ -190,6 +199,11 @@ n = await nativeCase(); n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.r
 await n.c.visualCollect({ seq: 'auto-resume', maxJobs: 1, autoScroll: false });
 check(n.events.some(e => e.data.phase === 'browse-wait') && n.clicks() === 1 && n.b.status().count === 1 && n.c.Date.now() >= 100000 + 30 * 60000,
   'actual collector waits locally then resumes the same card once, without extra navigation');
+check(n.events.some(e=>e.data.phase==='done'&&e.data.job), 'the admitted last view still finishes extracting its job while subsequent views are held');
+n = await nativeCase();n.b.configure({maxViews:2,windowMinutes:1});n.b.reserve();n.advance(20000);n.b.reserve();
+await n.c.visualCollect({seq:'full-batch-drain',maxJobs:1,autoScroll:false});
+check(n.clicks()===1 && n.c.Date.now()>=180000 && n.events.find(e=>e.data.phase==='browse-wait').data.retryAt===180000,
+  'the actual collector waits through partial expiry and opens exactly once after the last old record expires');
 n = await nativeCase({ stopInWait: true }); n.b.configure({ maxViews: 1, windowMinutes: 30 }); n.b.reserve();
 await n.c.visualCollect({ seq: 'stop-budget-wait', maxJobs: 1, autoScroll: false });
 check(n.clicks() === 0 && n.b.status().count === 1 && n.events.some(e => e.data.reason === 'stopped'),
@@ -311,7 +325,7 @@ const receiptLogs = [];
 deliveryContext.addLog = (_level, text) => receiptLogs.push(text);
 deliveryContext.electronApi.bossBrowse.call = async () => lastFullReceipt;
 check(await deliveryContext.awaitBossBrowseForDelivery(1) && receiptLogs[0] === lastFullReceipt.admissionMessage
-  && receiptLogs[0].includes('99 → 100/100') && receiptLogs[0].includes('到期释放 1'),
+  && receiptLogs[0].includes('99 → 100/100') && receiptLogs[0].includes('全部名额到期后再继续'),
   'actual delivery gate logs the authoritative explanation instead of rebuilding the old bare 100/100 message');
 for (const [policy, expectedMs] of [[{ maxViews: 2, windowMinutes: 30 }, 1000], [{ maxViews: 1, windowMinutes: 1 }, 60000], [{ maxViews: 1, windowMinutes: 45 }, 45 * 60000]]) {
   clockTick = 5000;
@@ -323,9 +337,15 @@ for (const [policy, expectedMs] of [[{ maxViews: 2, windowMinutes: 30 }, 1000], 
   deliveryContext.electronApi.bossBrowse.call = async action => b[action]();
   check(await deliveryContext.awaitBossBrowseForDelivery(1) && clockTick === 5000 + expectedMs,
     'actual Workbench delivery wait rechecks period/quota without early or stale-deadline admission');
-  check(logs.filter(s => s.includes('等待至')).length === (policy.maxViews === 2 ? 1 : 2),
+  check(logs.filter(s => s.includes('再打开岗位，可随时停止')).length === (policy.maxViews === 2 ? 1 : 2),
     'delivery updates its deadline notice only when the effective policy changes');
 }
+clockTick=5000;
+const drainingDelivery=createBossBrowseBudget(path.join(temp,'delivery-full-drain.json'),{clock:()=>clockTick});
+drainingDelivery.configure({maxViews:2,windowMinutes:1});drainingDelivery.reserve();clockTick+=20000;drainingDelivery.reserve();
+deliveryContext.sleep=async ms=>{clockTick+=ms;};deliveryContext.electronApi.bossBrowse.call=async action=>drainingDelivery[action]();
+check(await deliveryContext.awaitBossBrowseForDelivery(1) && clockTick===85000 && drainingDelivery.status().count===1,
+  'actual Workbench delivery waits for all old views instead of using the first expired slot');
 clockTick = 5000;
 const delayedDelivery = createBossBrowseBudget(path.join(temp, 'late-delivery.json'), { clock: () => clockTick });
 delayedDelivery.configure({ maxViews: 1, windowMinutes: 7 }); delayedDelivery.reserve();
