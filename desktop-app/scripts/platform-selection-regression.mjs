@@ -10,6 +10,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const bundle = await build({ stdin: { contents: `export * from './src/lib/bossclaw/platformSelection';
 export * from './src/lib/bossclaw/priority';export * from './src/lib/bossclaw/autoConfirmation';
 export * from './src/lib/bossclaw/platforms';export * from './src/lib/bossclaw/jobDetailLink';
+export * from './src/lib/bossclaw/safety';export * from './src/lib/bossclaw/deliveryThrottle';
 export {DEFAULT_CONFIG} from './src/lib/bossclaw/defaults';export {useAppStore} from './src/store/useAppStore';`, resolveDir: root },
   bundle: true, write: false, format: 'cjs', platform: 'node', logLevel: 'silent' });
 const memory = new Map(), context = { module: { exports: {} }, URL, console, setTimeout, clearTimeout, process: { env: { NODE_ENV: 'production' } },
@@ -17,6 +18,7 @@ const memory = new Map(), context = { module: { exports: {} }, URL, console, set
 vm.createContext(context); vm.runInContext(bundle.outputFiles[0].text, context);
 const T = context.module.exports, cfg = structuredClone(T.DEFAULT_CONFIG);
 for (const p of T.PLATFORM_IDS) cfg.platforms[p].enabled = true;
+cfg.activeHours.enabled = false;
 let checks = 0; const check = (v, label) => { assert.ok(v, label); checks++; };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 check(same(T.selectedDeliveryPlatforms(cfg, null), T.sortedEnabledPlatforms(cfg)), 'legacy unset scope retains enabled platforms');
@@ -46,17 +48,18 @@ check(promoted.count === 1 && promoted.next.find(p => p.id === 'boss').status ==
 const ast = ts.createSourceFile('Workbench.tsx', readFileSync(join(root, 'src/pages/Workbench.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const variables = new Map(); const visit = n => { if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) variables.set(n.name.text, n.initializer.getText(ast)); ts.forEachChild(n, visit); }; visit(ast);
 async function runner(scope, executionMode = 'review') {
-  const state = { autoAssist: true, deliveryPlatforms: scope }, config = { ...cfg, executionMode }, sent = [], collected = [];
+  const state = { autoAssist: true, deliveryPlatforms: scope }, config = { ...structuredClone(cfg), executionMode }, sent = [], collected = [], logs = [], pauses = [];
   const data = { pending: [make('boss'), make('liepin'), make('zhaopin')], setPending(v) { this.pending = v; }, recomputeStats() {} };
   const c = { ...T, Date, useAppStore: { getState: () => state }, useDataStore: { getState: () => data }, useSettingsStore: { getState: () => ({ config }) },
     visualActiveRef: { current: false }, cfxActiveRef: { current: false }, collectBatchRef: { current: null }, searchPlatforms: ['boss'], searchTriggered: { current: false },
-    isDeliveryClaimed: () => false, setRunning: () => {}, setAutoAssist: v => { state.autoAssist = v; }, addLog: () => {}, setActiveId: () => {},
-    setApplyStage: () => {}, deliverySubmittedRef: { current: false }, lastApplyStageRef: { current: '' }, precheckDelivery: () => true,
+    isDeliveryClaimed: () => false, setRunning: () => {}, setAutoAssist: v => { state.autoAssist = v; }, addLog: (_level,msg) => logs.push(msg), setActiveId: () => {},
+    setApplyStage: () => {}, deliverySubmittedRef: { current: false }, deliveryCapNoticesRef: { current: new Set() }, lastApplyStageRef: { current: '' },
     checkCollectionGoal: () => false, startCollect: (mode, platforms, automatic) => collected.push({ mode, platforms, automatic }),
     deliverNonBoss: async p => sent.push(p.job.platform), deliverBossDom: async p => sent.push(p.job.platform),
-    deliverCamoufox: async p => sent.push(p.job.platform), pauseAssist: msg => { throw Error(msg); } };
-  vm.createContext(c); vm.runInContext((await transform(`globalThis.runNext=${variables.get('runNext')};`, { loader: 'tsx' })).code, c);
-  return { c, state, data, sent, collected };
+    deliverCamoufox: async p => sent.push(p.job.platform), pauseAssist: msg => { pauses.push(msg); state.autoAssist = false; } };
+  vm.createContext(c);
+  for (const name of ['precheckDelivery','runNext']) vm.runInContext((await transform(`globalThis.${name}=${variables.get(name)};`, { loader: 'tsx' })).code, c);
+  return { c, state, config, data, sent, collected, logs, pauses };
 }
 {
   const h = await runner(['zhaopin']), untouched = JSON.stringify(h.data.pending.slice(0, 2)); await h.c.runNext();
@@ -81,5 +84,49 @@ async function runner(scope, executionMode = 'review') {
 }
 {
   const h = await runner([]); await h.c.runNext(); check(!h.sent.length && !h.collected.length && !h.state.autoAssist, 'empty scope cannot collect or dispatch');
+}
+const history = (platform, count) => Array.from({length:count},(_,i)=>({...make(platform,'sent'),id:`sent-${platform}-${i}`,sentAt:Date.now()}));
+{
+  const h=await runner(['zhaopin']);h.config.platforms.boss.dailyTarget=50;h.data.pending.push(...history('boss',50));
+  await h.c.runNext();
+  check(same(h.sent,['zhaopin'])&&!h.pauses.length,'BOSS 50/50 cannot block a Zhaopin-only delivery selection');
+}
+for (const capped of T.PLATFORM_IDS) {
+  const fallback=capped==='zhaopin'?'liepin':'zhaopin',h=await runner([capped,fallback]);
+  h.config.platforms[capped].dailyTarget=1;
+  h.data.pending=[make(capped),make(fallback),...history(capped,1)];
+  const original=JSON.stringify(h.data.pending.find(p=>p.id===capped));
+  await h.c.runNext();
+  check(same(h.sent,[fallback])&&h.state.autoAssist&&!h.pauses.length,`${capped}: its cap skips only that selected platform and dispatches the other queue`);
+  check(JSON.stringify(h.data.pending.find(p=>p.id===capped))===original,`${capped}: cap does not fail, skip or remove its queued job`);
+  await h.c.runNext();
+  check(h.logs.filter(log=>log.includes('已跳过该平台并保留队列')).length===1,`${capped}: repeated dispatch cycles do not spam the cap warning`);
+}
+{
+  const h=await runner(['boss']);h.config.platforms.boss.dailyTarget=1;h.data.pending.push(...history('boss',1));
+  const before=JSON.stringify(h.data.pending);await h.c.runNext();
+  check(!h.sent.length&&!h.state.autoAssist&&!h.collected.length&&JSON.stringify(h.data.pending)===before,
+    'a capped-only selection stops with its queue intact and cannot broaden to unselected platforms');
+  check(h.logs.some(log=>log.includes('均已达到今日上限')),'all-capped completion explains how to select another platform');
+}
+{
+  const h=await runner(['boss','zhaopin']);h.config.platforms.boss.dailyTarget=1;h.config.platforms.zhaopin.dailyTarget=1;
+  h.data.pending.push(...history('boss',1),...history('zhaopin',1));await h.c.runNext();
+  check(!h.sent.length&&!h.state.autoAssist&&!h.collected.length,'both selected platforms at cap stop without starting unselected queues or collection');
+}
+{
+  const h=await runner(['zhaopin']);h.config.pausedUntil=Date.now()+60000;await h.c.runNext();
+  check(!h.sent.length&&!h.state.autoAssist&&h.pauses.some(msg=>msg.includes('冷却')),'global cooldown still blocks every selected platform');
+}
+{
+  const h=await runner(['zhaopin']),hour=new Date().getHours();
+  h.config.activeHours={enabled:true,startHour:(hour+2)%24,endHour:(hour+3)%24,jitterMinutes:0};await h.c.runNext();
+  check(!h.sent.length&&h.pauses.some(msg=>msg.includes('活跃时段')),'active-hours guard remains effective after removing the BOSS-only precheck');
+}
+{
+  const h=await runner(['zhaopin']);
+  for(const platform of T.PLATFORM_IDS)h.config.platforms[platform].enabled=['boss','zhaopin'].includes(platform);
+  h.config.platforms.boss.dailyTarget=1;h.config.platforms.zhaopin.dailyTarget=1;h.data.pending.push(...history('boss',2));await h.c.runNext();
+  check(!h.sent.length&&h.pauses.some(msg=>msg.includes('安全上限')),'aggregate safety ceiling still stops dispatch when prior sends exceed reduced limits');
 }
 console.log(`PASS platform selection: ${checks} production preference, store, mixed queue and automatic collection checks; zero platform requests.`);

@@ -31,7 +31,7 @@ assert.equal(filterWorkbenchJobs(pending, { salaryMin: 999999 }).length, 0);
 assert.equal(visibleWorkbenchJobs(filterWorkbenchJobs(pending, DEFAULT_WORKBENCH_FILTERS), 'approved').length, 13);
 const uiPath = join(temporary, 'ui.js');
 await build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import Workbench from './src/pages/Workbench';import{useDataStore}from'./src/store/useDataStore';import{useAppStore}from'./src/store/useAppStore';import{useSettingsStore}from'./src/store/useSettingsStore';import './src/index.css';
-const test:any=window;test.data=useDataStore;test.app=useAppStore;test.fetchAttempts=[];test.fetch=async(...args:any[])=>{test.fetchAttempts.push(String(args[0]));throw Error('Offline fixture');};
+const test:any=window;test.data=useDataStore;test.app=useAppStore;test.settings=useSettingsStore;test.fetchAttempts=[];test.fetch=async(...args:any[])=>{test.fetchAttempts.push(String(args[0]));throw Error('Offline fixture');};
 useAppStore.setState({autoAssist:false,workbenchFilters:${JSON.stringify(DEFAULT_WORKBENCH_FILTERS)}});useDataStore.setState({pending:${JSON.stringify(pending)},taskRuns:[],profile:null});useSettingsStore.getState().setConfig({executionMode:'review',camoufox:{enabled:false,prefer:false,os:'windows',pages:1},platforms:Object.fromEntries(Object.entries(useSettingsStore.getState().config.platforms).map(([id,p]:any)=>[id,{...p,enabled:true}])) as any});
 test.original=JSON.stringify(useDataStore.getState().pending);createRoot(document.getElementById('root')!).render(<Workbench/>);`, loader: 'tsx', resolveDir: root }, tsconfig: join(root, 'tsconfig.json'), bundle: true, platform: 'browser', format: 'iife', outfile: uiPath, logLevel: 'silent', plugins: [{ name: 'offline-browser', setup(b) {
   b.onLoad({ filter: /[\\/]BrowserView\.tsx$/ }, () => ({ contents: "import React from 'react';export default function BrowserView(){return <div data-testid='offline-browser' style={{flex:1,minWidth:300}}>离线测试浏览器</div>}", loader: 'tsx', resolveDir: root }));
@@ -83,20 +83,45 @@ const runUi = async function () {
   stat('待投递').click(); await wait(() => context().includes('待投递 · 13'), 'final waiting view');
   window.app.getState().setBrowserNewTabPlatform('wuba');
   window.app.getState().setDeliveryPlatforms(['boss']);
-  await wait(() => control('投递平台').textContent.includes('BOSS直聘'), 'delivery scope rendered');
-  await choose('投递平台', '智联招聘');
-  await wait(() => control('投递平台').querySelector('[title="BOSS直聘"] .ant-select-selection-item-remove'), 'selected delivery tags');
-  control('投递平台').querySelector('[title="BOSS直聘"] .ant-select-selection-item-remove').click();
+  const deliveryGroup=()=>document.querySelector('[role="group"][aria-label="投递平台"]');
+  const deliveryCheckbox=label=>deliveryGroup().querySelector(`input[aria-label="投递${label}"]`);
+  await wait(() => deliveryCheckbox('BOSS直聘')?.checked, 'delivery checkboxes rendered');
+  check(deliveryGroup().querySelectorAll('input[type="checkbox"]').length===5,'every enabled platform can be selected directly without opening a menu');
+  deliveryCheckbox('智联招聘').click();
+  await wait(()=>deliveryCheckbox('智联招聘').checked,'Zhaopin checked');
+  check(deliveryCheckbox('BOSS直聘').checked&&window.app.getState().deliveryPlatforms.length===2,'checking another platform retains the existing selection');
+  deliveryCheckbox('BOSS直聘').click();
   await wait(() => JSON.stringify(window.app.getState().deliveryPlatforms) === '["zhaopin"]', 'single delivery platform saved from real UI');
   check(!button('一键投递').disabled, 'selected platform queued jobs enable one-click delivery');
+  button('全选').click();
+  await wait(()=>[...deliveryGroup().querySelectorAll('input[type="checkbox"]')].every(el=>el.checked),'all enabled delivery platforms selected');
+  check(window.app.getState().deliveryPlatforms.length===5,'one-click select-all persists all five enabled platforms');
+  button('清空').click();
+  await wait(()=>button('一键投递').disabled&&!window.app.getState().deliveryPlatforms.length,'clear does not broaden delivery scope');
+  check([...deliveryGroup().querySelectorAll('input[type="checkbox"]')].every(el=>!el.checked),'clear visibly unchecks every delivery platform');
+  deliveryCheckbox('智联招聘').click();
+  await wait(()=>!button('一键投递').disabled,'explicit Zhaopin selection restored');
+  const cfg=window.settings.getState().config;
+  window.settings.getState().setConfig({platforms:{...cfg.platforms,boss:{...cfg.platforms.boss,dailyTarget:50}}});
+  window.data.setState({pending:window.data.getState().pending.map(p=>p.status==='sent'&&Number(p.id.slice(4))<50?{...p,sentAt:Date.now()}:p)});
+  deliveryCheckbox('BOSS直聘').click();
+  await wait(()=>deliveryCheckbox('BOSS直聘').closest('label').textContent.includes('今日 50/50'),'BOSS daily usage shown');
+  check(deliveryCheckbox('BOSS直聘').closest('label').textContent.includes('已达上限')&&!button('一键投递').disabled,
+    'capped BOSS is visible while selected Zhaopin still enables one-click delivery');
+  deliveryCheckbox('智联招聘').click();
+  await wait(()=>button('一键投递').disabled,'only capped BOSS cannot dispatch');
+  check(!deliveryCheckbox('智联招聘').disabled,'another platform remains selectable after the first one reaches its limit');
+  deliveryCheckbox('智联招聘').click();
+  await wait(()=>!button('一键投递').disabled,'switching to a platform with quota enables delivery');
+  deliveryCheckbox('BOSS直聘').click();
   await choose('采集平台', '猎聘');
   control('采集平台').querySelector('[title="BOSS直聘"] .ant-select-selection-item-remove').click();
   await wait(() => JSON.stringify(window.app.getState().collectionPlatforms) === '["liepin"]', 'collection selection saved from real UI');
   check(window.app.getState().browserNewTabPlatform === 'wuba', 'collection and delivery controls cannot overwrite new-tab preference');
-  window.app.getState().setDeliveryPlatforms([]);
+  button('清空').click();
   await wait(() => button('一键投递').disabled, 'no selected platform has no deliverable count');
   check(button('一键投递').disabled, 'empty scope cannot start one-click delivery');
-  window.app.getState().setDeliveryPlatforms(['zhaopin']);
+  deliveryCheckbox('智联招聘').click();
   await wait(() => JSON.parse(localStorage.getItem('bossclaw-app') || '{}').state?.collectionPlatforms?.[0] === 'liepin'
     && JSON.parse(localStorage.getItem('bossclaw-app') || '{}').state?.deliveryPlatforms?.[0] === 'zhaopin', 'platform preferences flushed');
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -108,8 +133,10 @@ const verifyRestart = async function () {
   while (!document.querySelector('[aria-label="投递平台"]')) { if (Date.now() > end) throw Error('reopened workbench'); await new Promise(r => setTimeout(r, 25)); }
   const s = window.app.getState();
   if (JSON.stringify(s.collectionPlatforms) !== '["liepin"]' || JSON.stringify(s.deliveryPlatforms) !== '["zhaopin"]' || s.browserNewTabPlatform !== 'wuba') throw Error('platform preferences lost after reopen');
-  const text = label => document.querySelector(`[aria-label="${label}"]`).closest('.ant-select').textContent;
-  if (!text('投递平台').includes('智联招聘') || !text('采集平台').includes('猎聘')) throw Error('restored controls disagree with saved choices');
+  const group=document.querySelector('[role="group"][aria-label="投递平台"]');
+  const chosen=[...group.querySelectorAll('input[type="checkbox"]')].filter(el=>el.checked);
+  if(chosen.length!==1||chosen[0].getAttribute('aria-label')!=='投递智联招聘'
+    ||!document.querySelector('[aria-label="采集平台"]').closest('.ant-select').textContent.includes('猎聘')) throw Error('restored controls disagree with saved choices');
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   await new Promise(resolve => setTimeout(resolve, 150));
   return ['reopened Workbench restores independent delivery, collection and new-tab preferences'];

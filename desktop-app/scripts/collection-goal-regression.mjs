@@ -15,7 +15,7 @@ const bundled = await build({stdin:{contents:[
   "export { useDataStore } from './src/store/useDataStore';",
   "export { useAppStore } from './src/store/useAppStore';",
   "export { applyMigrations } from './src/store/migrations/settingsMigrations';",
-  "export { effectiveDailyCapFor } from './src/lib/bossclaw/safety';",
+  "export { effectiveDailyCapFor, dailySentCountFor } from './src/lib/bossclaw/safety';",
   "export { rerankPending } from './src/lib/bossclaw/priority';",
   "export { resolveJobDetailUrl } from './src/lib/bossclaw/jobDetailLink';",
   "export { platformEnabled, sortedEnabledPlatforms } from './src/lib/bossclaw/platforms';",
@@ -100,7 +100,7 @@ async function host(){
     collectingPlatformRef:{current:'boss'},goalLoggedRef:{current:new Set()},visualItemBufRef:{current:{}},visualsRafRef:{current:1},collectListReadyLoggedRef:{current:false},visualLoginBlockedRef:{current:''},
     analysisQueueRef:{current:null},setVisualCollecting:()=>{},setVisualPaused:()=>{},setCfxCollecting:()=>{},setVisualItem:()=>{},
     searchTriggered:{current:false},platformLabel:p=>p,searchPlatforms:['boss'],setRunning:()=>{},setAutoAssist:v=>{app.autoAssist=v;},
-    addLog:(...args)=>logs.push(args),ingestJob:async()=>true,checkpointJobAcknowledgment:()=>()=>{},isDeliveryClaimed:()=>false,setActiveId:()=>{},setApplyStage:()=>{},deliverySubmittedRef:{current:false},lastApplyStageRef:{current:''},
+    addLog:(...args)=>logs.push(args),ingestJob:async()=>true,checkpointJobAcknowledgment:()=>()=>{},isDeliveryClaimed:()=>false,setActiveId:()=>{},setApplyStage:()=>{},deliverySubmittedRef:{current:false},deliveryCapNoticesRef:{current:new Set()},lastApplyStageRef:{current:''},
     startCollect:()=>searchCount++,deliverBossDom:async()=>{deliveryCount++;},deliverResumeOnly:async()=>{deliveryCount++;},
     precheckDelivery:()=>true,
     setTimeout:(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)};

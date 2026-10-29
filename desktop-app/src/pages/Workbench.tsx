@@ -48,14 +48,14 @@ import { buildSearchQueue } from '@/lib/bossclaw/searchUrl';
 import { buildPlatformSearchQueue, describePlatformCriteria, type PlatformSearchQueueItem } from '@/lib/bossclaw/platformUrls';
 import { collectFaultScope, platformLabel, sortedEnabledPlatforms, PLATFORM_IDS, type JobPlatform } from '@/lib/bossclaw/platforms';
 import {
-  effectiveDailyCapFor, dailySentCountFor, isLockedOut,
+  effectiveDailyCapFor, dailySentCountFor, isLockedOut, checkDeliveryGuards,
   cooldownRemaining, classifyRiskCode, humanDelayMs, SAFETY_LIMITS, resolveCooldownMs, nextCooldownUntil,
 } from '@/lib/bossclaw/safety';
 import { sharedPacer, markDelivered, resetDeliveredSinceRest } from '@/lib/bossclaw/deliveryThrottle';
 import { normalizeRandomWaits } from '@/lib/bossclaw/randomWait';
 // 活跃时段 / 批次休息（**唯一权威**，详见模块头注释）：
 // 操作时间戳是**服务端可见的账号级长期统计**，指纹补丁掩盖不了「24 小时无睡眠」「连续上百次不中断」
-import { isWithinActiveWindow, nextActiveStartMs, formatActiveWindow, batchRestDelayMs } from '@/lib/bossclaw/activityWindow';
+import { batchRestDelayMs } from '@/lib/bossclaw/activityWindow';
 import { resolveCityCode, loadBossCityCodes } from '@/lib/bossclaw/searchUrl';
 import { camoufoxSearch, camoufoxSend, camoufoxStatus, isCamoufoxStopCode, isCamoufoxEnvCode, type CamoufoxJob } from '@/lib/bossclaw/camoufox';
 import { claimDelivery, isDeliveryClaimed, releaseDelivery } from '@/lib/bossclaw/deliveryLock';
@@ -327,6 +327,7 @@ export default function Workbench() {
   const runNextLock = useRef(false);
   const runNextQueued = useRef(false);
   const deliveryEpochRef = useRef(0);
+  const deliveryCapNoticesRef = useRef(new Set<string>());
   const deliveryPacingTokenRef = useRef('');
   // 已下发的当前请求继续核对结果；尚在等待的任务停止后不得下发或补发。
   const deliverySubmittedRef = useRef(false);
@@ -987,30 +988,11 @@ export default function Workbench() {
   // 每个后续岗位先完整等待抽到的间隔，再打开页面；加载与回执核对不抵扣间隔。
 
   /** 预检：冷却期 / 每日上限 / 限速器预算校准。纯检查，不做长等待。返回 false 表示已暂停（内部已 pauseAssist）。 */
-  const precheckDelivery = (): boolean => {
+  const precheckDelivery = (platform: JobPlatform): boolean => {
     const cfg = useSettingsStore.getState().config;
-    if (isLockedOut(cfg)) {
-      pauseAssist(`账号处于冷却期（剩余约 ${Math.ceil(cooldownRemaining(cfg) / 60000)} 分钟），已暂停投递，请勿重复启动以免升级封禁`);
-      return false;
-    }
-    // 活跃时段检查（模拟真人作息）。放在统一预检里 → 三条投递通道（BOSS DOM / 非 BOSS DOM / Camoufox）
-    // 全部受它约束，无需各写一遍。
-    // 为什么不「等」：非活跃时段可能要等数小时，阻塞界面不可接受 —— 只能中止本轮并明确告知何时恢复。
-    if (!isWithinActiveWindow(cfg.activeHours)) {
-      const nextAt = nextActiveStartMs(cfg.activeHours);
-      pauseAssist(
-        `当前不在活跃时段（今日投递窗口 ${formatActiveWindow(cfg.activeHours)}）。` +
-        `按真人作息在非活跃时段停止投递，可显著降低「账号活动时间异常」的风控风险；` +
-        `预计 ${new Date(nextAt).toLocaleString('zh-CN')} 自动恢复（可在设置中调整或关闭该限制）`,
-      );
-      return false;
-    }
-    // 工作台「一键投递」只处理 BOSS 岗位 → 上限按 BOSS 平台独立适配
-    // （effectiveDailyCapFor：min(该平台每日目标, 平台侧上限, MAX_SAFE_DAILY=150)）
-    const cap = effectiveDailyCapFor(cfg, 'boss');
-    const sentToday = dailySentCountFor(useDataStore.getState().pending, 'boss');
-    if (sentToday >= cap) {
-      pauseAssist(`今日 BOSS 已投递 ${sentToday} 条，达到该平台上限 ${cap} 条，投递已暂停（避免账号受限）`);
+    const guard = checkDeliveryGuards(cfg, platform, useDataStore.getState().pending);
+    if (!guard.ok) {
+      pauseAssist(guard.msg);
       return false;
     }
     // 预算同步到共享 pacer（其内部夹到 SAFETY_LIMITS.MAX_ACTIONS_PER_MINUTE 硬上限；见审查 #22/#73）
@@ -2843,9 +2825,24 @@ export default function Workbench() {
     const confirmed = autoConfirmPending(data.pending, cfg);
     if (confirmed !== data.pending) { data.setPending(confirmed); data.recomputeStats(); }
     const ranked = rerankPending(confirmed, cfg);
-    let candidate = ranked.find((p) => p.status === 'approved_queue' && platforms.includes(p.job?.platform || 'boss') && !isDeliveryClaimed(p.id, p.job?.platform));
+    const queue = ranked.filter((p) => p.status === 'approved_queue' && platforms.includes(p.job?.platform || 'boss') && !isDeliveryClaimed(p.id, p.job?.platform));
+    const capped = new Set<JobPlatform>();
+    for (const platform of platforms) {
+      if (!queue.some(p => (p.job?.platform || 'boss') === platform)) continue;
+      const sent = dailySentCountFor(confirmed, platform), cap = effectiveDailyCapFor(cfg, platform);
+      if (sent < cap) continue;
+      capped.add(platform);
+      const notice = `${new Date().toDateString()}:${platform}:${sent}:${cap}`;
+      if (!deliveryCapNoticesRef.current.has(notice)) {
+        deliveryCapNoticesRef.current.add(notice);
+        addLog('info', `${platformLabel(platform)}今日已投递 ${sent}/${cap} 条，已跳过该平台并保留队列；继续检查其他已勾选平台`);
+      }
+    }
+    let candidate = queue.find(p => !capped.has(p.job?.platform || 'boss'));
     if (!candidate) {
-      addLog('info', '所选平台的投递队列已空，投递已停止；如需更多岗位，请手动点击「搜索采集」');
+      addLog('info', capped.size
+        ? '所选平台的待投递队列均已达到今日上限，投递已停止；岗位仍保留，可勾选其他平台投递'
+        : '所选平台的投递队列已空，投递已停止；如需更多岗位，请手动点击「搜索采集」');
       setRunning(false);
       setAutoAssist(false);
       return;
@@ -2869,9 +2866,8 @@ export default function Workbench() {
       updatePending(candidate.id, { job: candidate.job, linkIncomplete: false });
     }
 
-    // 预检（冷却/每日上限）：不通过就别白开页面。
-    // 岗位间隔节流不在这里等 —— 已挪到打开标签页之后，与页面加载并行（见各通道函数内）。
-    if (!precheckDelivery()) return;
+    // 全局冷却/活跃时段和当前岗位的平台额度均在导航之前检查。
+    if (!precheckDelivery(candidate.job?.platform || 'boss')) return;
 
     // 通道分派：非 BOSS → DOM 投递；BOSS 且优先隐身 → Camoufox；其余 → BOSS DOM。
     // 各通道内部自行 claim/release 投递锁（try/finally 保证配对），runNext 不再持有锁语义。
@@ -3134,7 +3130,13 @@ export default function Workbench() {
   const deliveryApprovedCount = pending.filter((p) => p.status === 'approved').length;
   // 「一键投递」可点条件 = 队列里还有可投递的岗位（「待投递」或已入队的「投递中」）。
   // 与右侧「开始投递」口径统一，避免批准即入队后本按钮长期置灰（详见 onOneClickDeliver 注释）。
-  const deliverableCount = pending.filter((p) => (p.status === 'approved' || p.status === 'approved_queue') && deliveryPlatforms.includes(p.job?.platform || 'boss')).length;
+  const deliveryPlatformUsage = enabledPlatforms.map(platform => {
+    const queued = pending.filter(p => (p.status === 'approved' || p.status === 'approved_queue') && (p.job?.platform || 'boss') === platform).length;
+    const sent = dailySentCountFor(pending, platform), cap = effectiveDailyCapFor(config, platform);
+    return { platform, queued, sent, cap, capped: sent >= cap };
+  });
+  const deliverableCount = deliveryPlatformUsage.reduce((count, p) =>
+    count + (deliveryPlatforms.includes(p.platform) && !p.capped ? p.queued : 0), 0);
   const collecting = collectBatchActive || visualCollecting || cfxCollecting;
 
   // 采集任务概览（与「任务进度」页共用 taskRuns，用于卡片内联动展示）
@@ -3376,12 +3378,26 @@ export default function Workbench() {
             <Space style={{ display: 'flex', marginBottom: 4 }}>
               <Text>投递平台</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>{autoAssist || running ? '暂停投递后可修改' : '可多选，自动保存'}</Text>
+              <Button size="small" type="link" disabled={autoAssist || running || !enabledPlatforms.length}
+                onClick={() => setDeliveryPlatforms(enabledPlatforms)}>全选</Button>
+              <Button size="small" type="link" disabled={autoAssist || running || !deliveryPlatforms.length}
+                onClick={() => setDeliveryPlatforms([])}>清空</Button>
             </Space>
-            <Select aria-label="投递平台" mode="multiple" size="small" style={{ width: '100%' }}
-              value={deliveryPlatforms} onChange={setDeliveryPlatforms} disabled={autoAssist || running}
-              options={enabledPlatforms.map(p => ({ value: p, label: platformLabel(p) }))}
-              placeholder="选择要投递的平台" />
-            <Text type="secondary" style={{ fontSize: 12 }}>仅投所选平台的队列，投完即停；需要更多岗位请手动搜索采集</Text>
+            <div role="group" aria-label="投递平台" className="wb-delivery-platforms">
+              {deliveryPlatformUsage.map(({ platform, queued, sent, cap, capped }) => (
+                <Checkbox key={platform} aria-label={`投递${platformLabel(platform)}`}
+                  className={'wb-delivery-platform' + (deliveryPlatforms.includes(platform) ? ' is-selected' : '')}
+                  checked={deliveryPlatforms.includes(platform)} disabled={autoAssist || running}
+                  onChange={event => setDeliveryPlatforms(event.target.checked
+                    ? [...deliveryPlatforms, platform] : deliveryPlatforms.filter(p => p !== platform))}>
+                  <span className="wb-delivery-platform-name">{platformLabel(platform)} · 待投 {queued}</span>
+                  <span className={'wb-delivery-platform-usage' + (capped ? ' is-capped' : '')}>
+                    今日 {sent}/{cap}{capped ? ' · 已达上限' : ''}
+                  </span>
+                </Checkbox>
+              ))}
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>仅投已勾选平台的现有队列；单个平台达上限会跳过，投完即停</Text>
           </div>
           <Text type="secondary" style={{ fontSize: 12 }}>全部平台统计 · 点击数字查看对应岗位（清除列表筛选）</Text>
           <div className="wb-progress-stats">

@@ -667,6 +667,26 @@ html[data-theme='dark'],
   margin: 10px 0;
 }
 
+.wb-delivery-platforms {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+.wb-delivery-platforms .wb-delivery-platform {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.wb-delivery-platform.is-selected { border-color: var(--brand); }
+.wb-delivery-platform-name { display: block; font-size: 12px; }
+.wb-delivery-platform-usage { display: block; color: var(--fg-muted); font-size: 11px; }
+.wb-delivery-platform-usage.is-capped { color: var(--status-warning); }
+
 .wb-stat {
   display: flex;
   flex-direction: column;

@@ -305,7 +305,7 @@ export function checkDeliveryGuards(
     return {
       ok: false,
       kind: 'window',
-      msg: `${gate.reason}。预计 ${resumeAt} 自动恢复（可在「设置 → 自动沟通 → 防封号节奏限制」中调整或关闭）。`,
+      msg: `${gate.reason}。预计 ${resumeAt} 自动恢复（可在「设置 → 求职偏好 → 访问与投递节奏」中调整或关闭）。`,
     };
   }
   // ⚠️ **顺序即语义，不可对调**（审查 #23 后续 · 批次 12）：
