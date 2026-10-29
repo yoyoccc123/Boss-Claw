@@ -1662,7 +1662,7 @@ export default function Workbench() {
       }
     };
     const pageUsable = (st: any): boolean =>
-      Boolean(st && st.collectionScopeMatches !== false && !st.collectionBlocked && !st.collectionLoading && (
+      Boolean(st && st.collectionScopeMatches !== false && !st.collectionBlocked && !st.collectionLoading && !st.loginWallPending && (
         Number(st.cards) > 0 ||
         String(st.readyState) === 'complete' ||
         String(st.readyState) === 'interactive' ||
@@ -1684,9 +1684,8 @@ export default function Workbench() {
       probes: number;
       okProbes: number;
     };
-    // 登录墙判定：命中登录特征 **且** 一张岗位卡都没有。
-    // 双条件是必须的守卫——正常搜索页的顶部登录按钮 / 弹窗残留也会让 loginWall 为 true，
-    // 但那种页面一定有岗位卡片，不能据此把平台判成未登录而中断采集。
+    // 登录结论由平台 preload 提供；猎聘先确认真实登录地址或稳定的可见表单。
+    // 保留「有岗位卡不判登录墙」守卫，loginWallPending 则继续等待认证组件加载。
     const loginWallHit = (st: any): boolean =>
       Boolean(st && st.loginWall && !(Number(st.cards) > 0));
     const describeProbe = (r: PageReadyResult): string => {
@@ -1719,7 +1718,7 @@ export default function Workbench() {
         }
         // 登录墙即时收口：页面自身已明确是登录页 → 不再等满两轮超时（省掉 60s 白等，并给出真实原因）
         if (probed && loginWallHit(probed)) {
-          addLog('warn', `「${keyword}」页面命中登录墙（${describePage(probed)}）→ 判定为未登录，本平台立即收口`);
+          addLog('warn', `「${keyword}」已确认登录页面（${describePage(probed)}${probed.loginWallSource ? `，依据 ${probed.loginWallSource}` : ''}），已保留断点并停止该平台采集`);
           return { ready: false, reason: 'login', st: probed, probes, okProbes };
         }
         // 探测有响应 ⇒ preload 已就绪（比宿主的标记更可靠）
@@ -1819,12 +1818,12 @@ export default function Workbench() {
       // 未登录 / 登录态失效属「平台级」故障：**不重试**（重试只会再白等一整轮），
       // 记录原因后由主循环收口本平台剩余搜索组合（与 collectFaultScope 的平台级口径一致）。
       if (!waitRes.ready && waitRes.reason === 'login') {
-        visualLoginBlockedRef.current = `${kwLabel} 未登录或登录态已失效（页面命中登录墙）`;
+        visualLoginBlockedRef.current = `${kwLabel} 页面已确认显示登录入口，请在内置浏览器核对登录状态`;
         markCollectRun(runId, baseRun, {
           status: 'failed',
           stage: 'failed',
-          stageLabel: '未登录，无法采集',
-          error: '未登录或登录态已失效：请先在内置浏览器登录该平台后再采集',
+          stageLabel: '登录页面待核对',
+          error: '页面已确认显示登录入口：请在内置浏览器核对后继续采集',
           progress: Math.round(((qi + 1) / queue.length) * 100),
         });
         continue;
@@ -1943,9 +1942,9 @@ export default function Workbench() {
     recomputeStats();
     const goalAtFinish = collectionGoal(useSettingsStore.getState().config, useDataStore.getState().pending, useDataStore.getState().collectionCounts, platform);
     addLog(
-      wasStopped ? 'warn' : 'success',
+      wasStopped || loginBlocked ? 'warn' : 'success',
       loginBlocked
-        ? `可视化采集（${platformLabel(platform)}）未执行：${loginBlocked}`
+        ? `可视化采集（${platformLabel(platform)}）${processed > 0 ? '中断' : '未执行'}：${loginBlocked}；已处理 ${processed} 个岗位，进度已保留`
         : `可视化采集${wasStopped ? '已停止' : '完成'}：共处理 ${processed} 个岗位；今日合格入队 ${goalAtFinish.count}/${goalAtFinish.target}`
     );
     if (useAppStore.getState().autoAssist) requestRunNext();

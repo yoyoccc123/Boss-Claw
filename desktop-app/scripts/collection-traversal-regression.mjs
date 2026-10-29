@@ -62,7 +62,7 @@ async function harness(platform, engine, options = {}) {
   const cfg = options.config || structuredClone(config), directionPlan = options.plan || structuredClone(plan);
   const data = { collectionCheckpoints: { ...(options.saved ? { [platform]: structuredClone(options.saved) } : {}) }, pending: [], collectionCounts: {}, profile: {},
     setCollectionCheckpoint: (p, cp) => { data.collectionCheckpoints[p] = cp; } };
-  const urls = [], searches = [], logs = [], warnings = [], runs = [], commands = [], collectOptions = [], activations = []; let analyses = 0;
+  const urls = [], searches = [], logs = [], warnings = [], runs = [], commands = [], collectOptions = [], activations = []; let analyses = 0, probes = 0;
   const repeatedJob = { platform, jobId: 'same-filtered-job', title: '合成重复岗位', url: 'https://example.test/same-filtered-job' };
   const h = { ...T, Promise, Date, Math, Set, Map, config: cfg, directionPlan, profile: {},
     electronApi: { bossBrowse: { call: async () => ({ ok: true }) } },
@@ -92,7 +92,8 @@ async function harness(platform, engine, options = {}) {
   h.webviewApi = { current: { getFirstTabId: () => 'tab', getActiveTabId: () => 'tab', findTabByPlatform: () => 'tab',
     activateTab: id => activations.push(id),
     hasTab: () => true, loadURLInTab: (_tab, url) => urls.push(url), isPreloadReady: () => true, isLoading: () => false,
-    pageStatus: async () => ({ readyState: 'complete', cards: 0, bodyLen: 2000 }), sendInTab: (...args) => commands.push(args) } };
+    pageStatus: async () => { const status=options.pageStatuses?.[Math.min(probes,options.pageStatuses.length-1)];probes++;
+      return status||{ readyState: 'complete', cards: 0, bodyLen: 2000 }; }, sendInTab: (...args) => commands.push(args) } };
   h.visualCollectInTab = async (_tab, opts) => {
     collectOptions.push(opts);
     h.collectTerminalRef.current = options.failFirst && collectOptions.length === 1 ? 'failed' : options.terminal ?? 'completed';
@@ -120,7 +121,7 @@ async function harness(platform, engine, options = {}) {
     };
   }
   const outcome = await h[engine === 'visual' ? 'runVisualCollect' : 'runCamoufoxCollect'](platform, undefined, options.mode || 'restart');
-  return { h, data, urls, searches, logs, warnings, runs, outcome, analyses, commands, collectOptions, activations };
+  return { h, data, urls, searches, logs, warnings, runs, outcome, analyses, commands, collectOptions, activations, probes };
 }
 for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) for (const engine of ['visual', 'camoufox']) {
   const expectedQueue = makeQueue(platform), result = await harness(platform, engine);
@@ -181,4 +182,25 @@ check(recoveredList.data.collectionCheckpoints.zhaopin.complete && recoveredList
 check(recoveredList.collectOptions.every(o => o.expectedSearchUrl?.includes('zhaopin.com'))
   && recoveredList.logs.filter(x => x.msg.includes('重新加载重试一次')).length === 1,
   'Zhaopin host forwards expected search scope and explains a bounded retry');
+const pendingLogin=await harness('liepin','visual',{stopAfter:1,pageStatuses:[
+  {readyState:'interactive',cards:0,bodyLen:456,loginWall:false,loginWallPending:true,loginWallSource:'login-form'},
+  {readyState:'complete',cards:0,bodyLen:456,loginWall:false,loginWallPending:true,loginWallSource:'login-form'},
+  {readyState:'complete',cards:5,bodyLen:1255,loginWall:false,loginWallPending:false},
+]});
+check(pendingLogin.probes>=3&&pendingLogin.collectOptions.length===1&&!pendingLogin.h.visualLoginBlockedRef.current,
+  'Liepin host waits out transient login hydration and admits the later authenticated five-card page');
+const actualLogin=await harness('liepin','visual',{pageStatuses:[
+  {readyState:'interactive',cards:0,bodyLen:456,loginWall:true,loginWallPending:false,loginWallSource:'auth-url',collectionScopeMatches:false},
+]});
+check(actualLogin.urls.length===1&&!actualLogin.collectOptions.length&&actualLogin.data.collectionCheckpoints.liepin.index===0,
+  'a true Liepin auth redirect still stops the platform before collection or checkpoint advancement');
+check(actualLogin.logs.some(x=>x.level==='warn'&&x.msg.includes('未执行'))
+  &&!actualLogin.logs.some(x=>x.level==='success'&&x.msg.includes('未执行')),
+  'unexecuted login-blocked collection is warning, never reported as success');
+const actualChallenge=await harness('liepin','visual',{pageStatuses:[
+  {readyState:'complete',cards:0,bodyLen:456,loginWall:false,collectionBlocked:'猎聘页面需要人工完成安全验证'},
+]});
+check(!actualChallenge.collectOptions.length&&actualChallenge.data.collectionCheckpoints.liepin.index===0
+  &&actualChallenge.logs.some(x=>x.level==='warn'&&x.msg.includes('安全验证')),
+  'Liepin verification remains a hard stop with its checkpoint retained');
 console.log(`PASS collection traversal: ${checks} city-first queue, order-only migration and real visual/Camoufox runner checks across five platforms; zero platform requests.`);

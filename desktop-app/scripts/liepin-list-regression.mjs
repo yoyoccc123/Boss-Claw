@@ -48,12 +48,14 @@ const test = async function (helper, functions, expected) {
   check(!L.explicitlyEmpty(document, location.href), 'verification text takes precedence over an old empty-state marker'); document.getElementById('challenge').remove();
   return new Function('LIEPIN_LIST', 'expected', 'checks', 'check', `return (async()=>{
     const PLATFORM='liepin',PLATFORM_LABEL='猎聘',location=window.location,collectCtl={},WUBA={};
-    let tick=0,events=[],stopAtStart=false;const Date={now:()=>tick};
+    const LINK_SELECTOR='a[href*="/job/"],a[href*="/a/"]';
+    let tick=0,events=[],stopAtStart=false,onSleep=()=>{};const Date={now:()=>tick};
+    const liepinLoginConfirmation=LIEPIN_LIST.createLoginConfirmation(()=>tick);
     const collectNotify=(channel,data)=>{events.push({channel,data});if(stopAtStart&&data.phase==='start')collectCtl.stopped=true;};
-    const resetJdFillState=()=>{},reportJdFillSummary=()=>{},sleep=async ms=>{tick+=ms;},waitWhilePaused=async()=>{},
-      smoothScrollIntoView=async()=>{},highlightElement=()=>{},enrichJobDetail=async()=>{},loginWallDetected=()=>false,
+    const resetJdFillState=()=>{},reportJdFillSummary=()=>{},sleep=async ms=>{tick+=ms;onSleep();},waitWhilePaused=async()=>{},
+      smoothScrollIntoView=async()=>{},highlightElement=()=>{},enrichJobDetail=async()=>{},
       readZhaopinPageBlock=()=>null,collectCards=()=>Array.from(document.querySelectorAll('.jobCardPcContainer')),
-      collectCardKey=c=>c.id,cardIdentity=c=>({title:'合成岗位',company:'合成公司'}),extractJobFromCardOnly=c=>({jobId:c.id,title:'合成岗位'}),textOf=e=>e.innerText,all=()=>[];
+      collectCardKey=c=>c.id,cardIdentity=c=>({title:'合成岗位',company:'合成公司'}),extractJobFromCardOnly=c=>({jobId:c.id,title:'合成岗位'}),textOf=e=>e.innerText,all=s=>Array.from(document.querySelectorAll(s));
     ${functions.join('\n')}
     const collect=async()=>{events=[];tick=0;await visualCollectListOnly({seq:'offline',maxJobs:5,autoScroll:false,listTimeoutMs:30000,expectedSearchUrl:expected});return events.find(e=>e.channel==='collect-done')?.data;};
     let result=await collect();check(result?.reason==='completed'&&result.empty&&tick===0,'explicit empty results complete immediately rather than failing after 30 seconds');
@@ -64,12 +66,91 @@ const test = async function (helper, functions, expected) {
     stopAtStart=true;result=await collect();check(result?.reason==='stopped','Stop cannot be converted into an empty successful search');stopAtStart=false;
     document.querySelector('.content-left-section').innerHTML='<div class="jobCardPcContainer" id="synthetic">合成 Python 开发实习岗位</div>';
     result=await collect();check(result?.reason==='completed'&&events.filter(e=>e.data.phase==='done').length===1,'populated lists still publish jobs and complete normally');
+    const root=document.querySelector('.content-left-section');
+    const card='<div class="jobCardPcContainer" id="delayed"><a href="/job/0000000000.shtml">合成岗位</a></div>';
+    root.innerHTML='<nav>登录/注册 扫码登录 验证码</nav><div>搜索页面加载中</div>';
+    onSleep=()=>{root.innerHTML=card;};
+    result=await collect();onSleep=()=>{};
+    check(result?.reason==='completed'&&events.some(e=>e.data.phase==='done')&&!events.some(e=>e.data.loginRequired),
+      'logged-in shell with login copy waits for delayed cards instead of aborting');
+    const form='<form><input type="tel" placeholder="手机号"><button>登录</button></form>';
+    root.innerHTML=form;onSleep=()=>{root.innerHTML=card;};
+    result=await collect();onSleep=()=>{};
+    check(result?.reason==='completed'&&!events.some(e=>e.data.loginRequired),'transient auth form replaced by authenticated results does not report logout');
+    root.innerHTML=form+'<div class="loading" style="position:fixed;inset:0;width:100vw;height:100vh">加载中</div>';
+    onSleep=()=>{if(tick>=2000)root.innerHTML=card;};result=await collect();onSleep=()=>{};
+    check(result?.reason==='completed'&&!events.some(e=>e.data.loginRequired),'loading overlay prevents form confirmation even after 1.5 seconds of hydration');
+    root.innerHTML=form;result=await collect();
+    check(result?.loginRequired&&result.reason==='blocked'&&tick>=1500,'persistent real credential form is confirmed before stopping collection');
+    root.innerHTML='<div role="dialog" class="captcha">安全验证，请拖动滑块</div>';result=await collect();
+    check(result?.reason==='blocked'&&!result.loginRequired&&tick===0,'actual CAPTCHA stops immediately without being labelled logged out');
     return checks;
   })()`)(L, expected, checks, check);
 };
+const pageStatusTest = function(helper, functions, expected) {
+  const checks=[],check=(ok,label)=>{if(!ok)throw Error(label);checks.push(label);};
+  const module={exports:{}};new Function('module',helper)(module);
+  return new Function('LIEPIN_LIST','expected','checks','check',`return (()=>{
+    const PLATFORM='liepin',PLATFORM_LIST_SELECTORS={liepin:['.jobCardPcContainer']},LINK_SELECTOR='a[href*="/job/"],a[href*="/a/"]',LIST_ROOT_SELECTORS=['.content-left-section'];
+    const location={href:expected,pathname:'/zhaopin/',search:new URL(expected).search},ADAPTERS={},readBossPageBlock=()=>null,reportBossRestriction=()=>{};
+    const all=s=>Array.from(document.querySelectorAll(s)),$=s=>document.querySelector(s),textOf=e=>e.innerText;
+    const collectCards=()=>all('.jobCardPcContainer');let now=0,state='complete';
+    let liepinLoginConfirmation=LIEPIN_LIST.createLoginConfirmation(()=>now);
+    const original=Object.getOwnPropertyDescriptor(document,'readyState');
+    Object.defineProperty(document,'readyState',{configurable:true,get:()=>state});
+    const show=html=>{document.body.innerHTML=html;liepinLoginConfirmation=LIEPIN_LIST.createLoginConfirmation(()=>now);};
+    ${functions.join('\n')}
+    try {
+      show('<header>登录/注册 扫码登录 请输入验证码</header><main class="content-left-section">加载中</main>');state='interactive';
+      let st=pageStatusData(expected);
+      check(!st.loginWall&&!st.loginWallPending&&!st.collectionBlocked,'interactive zero-card shell with login/captcha words is not login evidence');
+      location.href=expected+'&returnUrl='+encodeURIComponent('https://passport.liepin.com/login?verify=1');
+      check(!pageStatusData(expected).loginWall,'login and verify words inside a query/return URL do not create a login wall');location.href=expected;
+      const form='<form><input type="tel" placeholder="手机号"><button>登录</button></form>';
+      show(form);now=100;state='interactive';st=pageStatusData(expected);
+      check(!st.loginWall&&st.loginWallPending,'interactive credential form remains pending while authentication hydrates');
+      now=2000;check(!pageStatusData(expected).loginWall,'time spent interactive does not count toward stable login confirmation');
+      state='complete';st=pageStatusData(expected);now=3499;
+      check(!st.loginWall&&!pageStatusData(expected).loginWall,'complete credential form requires the full confirmation interval');
+      now=3500;st=pageStatusData(expected);
+      check(st.loginWall&&st.loginWallSource==='login-form'&&!st.collectionBlocked,'stable visible credential form confirms a real login wall');
+      show(form);now=4000;pageStatusData(expected);now=4300;
+      document.body.innerHTML='<header>扫码登录 验证码</header><main class="content-left-section">'+Array.from({length:5},(_,i)=>'<div class="jobCardPcContainer"><a href="/job/000000000'+i+'.shtml">合成开发岗位</a></div>').join('')+'</main>';
+      st=pageStatusData(expected);check(st.cards===5&&!st.loginWall&&!st.loginWallPending,'authenticated five-card results cancel transient login evidence');
+      document.body.insertAdjacentHTML('beforeend',form);
+      check(!pageStatusData(expected).loginWallPending,'optional login form cannot block an already populated results list');
+      show('<div style="display:none">'+form+'</div><header>登录/注册 验证码</header>');state='complete';
+      check(!pageStatusData(expected).loginWallPending&&!pageStatusData(expected).loginWall,'hidden login forms and navigation text are ignored');
+      show('<div class="captcha" role="dialog" style="opacity:0">安全验证，请拖动滑块</div>');
+      check(!pageStatusData(expected).collectionBlocked,'invisible stale CAPTCHA widgets do not falsely block an authenticated shell');
+      show(form);location.href='https://passport.liepin.com/login';state='interactive';
+      st=pageStatusData(expected);check(st.loginWall&&st.loginWallSource==='auth-url','actual auth destination remains an immediate login stop');
+      location.href=expected;state='complete';show('<div class="captcha" role="dialog">安全验证，请拖动滑块</div>');
+      st=pageStatusData(expected);check(st.collectionBlocked&&!st.loginWall,'visible CAPTCHA is classified as a verification block, not a login wall');
+      show('<h1>安全验证</h1>');check(pageStatusData(expected).collectionBlocked,'full-page verification heading still blocks collection');
+      show('<div>loading</div>');location.href='https://www.liepin.com/verify/';
+      st=pageStatusData(expected);check(st.collectionBlocked&&!st.loginWall,'verification URL stops safely without reporting login loss');
+      return checks;
+    } finally {if(original)Object.defineProperty(document,'readyState',original);else delete document.readyState;}
+  })()`)(module.exports,expected,checks,check);
+};
 // The fixture uses the exact result structure, but contains no account or employer data.
 const entry = path.join(fixture, 'main.cjs'), report = path.join(fixture, 'report.json');
-fs.writeFileSync(entry, `const{app,BrowserWindow,session}=require('electron'),fs=require('fs');app.setPath('userData',${JSON.stringify(path.join(fixture, 'profile'))});app.whenReady().then(async()=>{const s=session.fromPartition('liepin-list-offline');let other=0;s.protocol.handle('https',r=>{if(r.url!==${JSON.stringify(expected)})other++;return new Response(${JSON.stringify(markup)},{headers:{'content-type':'text/html;charset=utf-8'}});});const w=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{session:s,sandbox:true,contextIsolation:true}});try{await w.loadURL(${JSON.stringify(expected)});const checks=await w.webContents.executeJavaScript('('+${JSON.stringify(test.toString())}+')('+${JSON.stringify(JSON.stringify(helper))}+','+${JSON.stringify(JSON.stringify(['collectionListExplicitlyEmpty','visualCollectListOnly'].map(n=>functions.get(n))))}+','+${JSON.stringify(JSON.stringify(expected))}+')');if(other)throw Error('Unexpected platform request');fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({checks}));}catch(e){fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({error:e.stack}));}finally{w.destroy();app.quit();}});`);
+fs.writeFileSync(entry, `const{app,BrowserWindow,session}=require('electron'),fs=require('fs');
+app.setPath('userData',${JSON.stringify(path.join(fixture, 'profile'))});
+app.whenReady().then(async()=>{
+  const s=session.fromPartition('liepin-list-offline');let other=0;
+  s.protocol.handle('https',r=>{if(r.url!==${JSON.stringify(expected)})other++;return new Response(${JSON.stringify(markup)},{headers:{'content-type':'text/html;charset=utf-8'}});});
+  const w=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{session:s,sandbox:true,contextIsolation:true}});
+  try {
+    await w.loadURL(${JSON.stringify(expected)});
+    const checks=await w.webContents.executeJavaScript('('+${JSON.stringify(test.toString())}+')('+${JSON.stringify(JSON.stringify(helper))}+','+${JSON.stringify(JSON.stringify(['loginWallDetected','collectionListExplicitlyEmpty','visualCollectListOnly'].map(n=>functions.get(n))))}+','+${JSON.stringify(JSON.stringify(expected))}+')');
+    checks.push(...await w.webContents.executeJavaScript('('+${JSON.stringify(pageStatusTest.toString())}+')('+${JSON.stringify(JSON.stringify(helper))}+','+${JSON.stringify(JSON.stringify(['loginWallDetected','pageStatusData'].map(n=>functions.get(n))))}+','+${JSON.stringify(JSON.stringify(expected))}+')'));
+    if(other)throw Error('Unexpected platform request');
+    fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({checks}));
+  } catch(e) { fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({error:e.stack})); }
+  finally {w.destroy();app.quit();}
+});`);
 const electronEnv = { ...process.env }; delete electronEnv.ELECTRON_RUN_AS_NODE;
 const run = spawnSync(process.env.BOSSCLAW_ELECTRON || require('electron'), [entry], { env: electronEnv, windowsHide: true, timeout: 45000, encoding: 'utf8' });
 assert.equal(run.status, 0, run.error?.message || run.stderr);

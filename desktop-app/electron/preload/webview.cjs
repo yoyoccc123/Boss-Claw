@@ -30,6 +30,7 @@ const ADAPTERS = require('./platform-adapters.cjs');
 const WUBA = require('./wuba.cjs');
 const ZHAOPIN_LIST = require('./zhaopin-list.cjs');
 const LIEPIN_LIST = require('./liepin-list.cjs');
+const liepinLoginConfirmation = LIEPIN_LIST.createLoginConfirmation();
 const { readLiepinImState, findNewLiepinConversation, normalizeLiepinText, readLiepinDeliveryState } = require('./liepin-im.cjs');
 const { readZhaopinChat, readZhaopinChatReady, readZhaopinDeliveryState, readZhaopinHistory, sessionIdFromUrl, readZhaopinAttachmentSelection } = require('./zhaopin-im.cjs');
 const OFFICE = require('./office-address.cjs');
@@ -2487,7 +2488,9 @@ async function visualCollect(opts = {}) {
     if (Date.now() - listWaitStartedAt > earlyBreakAfterMs
       && String(document.readyState) === 'complete'
       && loginWallDetected()) {
-      notify('collect-progress', { phase: 'login-required', index: 0, total: 0, processed: 0, maxJobs, status: `${PLATFORM} 未登录或登录态已失效：请先在该平台标签页扫码登录后再采集` });
+      notify('collect-progress', { phase: 'login-required', index: 0, total: 0, processed: 0, maxJobs,
+        status: PLATFORM === 'liepin' ? '猎聘页面持续显示登录入口，已保留进度，请在当前页面核对登录状态'
+          : `${PLATFORM} 未登录或登录态已失效：请先在该平台标签页扫码登录后再采集` });
       break;
     }
     // 页面自身已加载完（readyState=complete）且 DOM 已有内容，却仍然一张卡都命中不到 →
@@ -2776,10 +2779,14 @@ function pageStatusData(expectedSearchUrl) {
   if (bossBlock) void reportBossRestriction(location.href, bodyText);
   const zhaopinEntry = PLATFORM === 'zhaopin' ? readZhaopinApplyEntry() : null;
   const zhaopinBlock = PLATFORM === 'zhaopin' ? readZhaopinPageBlock(document, location.href, (ADAPTERS.PLATFORM_APPLY_SPEC || {}).zhaopin || {}) : null;
-  const collectionBlocked = bossBlock?.message || (zhaopinBlock?.kind === 'risk' ? zhaopinBlock.message : '') || (/\/verify\.|\/captcha(?:\/|\?|$)/i.test(location.href)
-    || visibleDialogs.some(e => /确认您是|安全验证|完成验证|请先验证|滑动验证|拖动滑块/.test(textOf(e)))
+  const liepinBlock = PLATFORM === 'liepin' ? LIEPIN_LIST.readPageBlock(document, location.href) : null;
+  const collectionBlocked = bossBlock?.message || (zhaopinBlock?.kind === 'risk' ? zhaopinBlock.message : '')
+    || (liepinBlock?.kind === 'risk' ? liepinBlock.message : '') || (PLATFORM !== 'liepin' && (/\/verify\.|\/captcha(?:\/|\?|$)/i.test(location.href)
+    || visibleDialogs.some(e => /确认您是|安全验证|完成验证|请先验证|滑动验证|拖动滑块/.test(textOf(e))))
     ? '招聘页面需要人工完成安全验证' : '');
   const collectionLoading = all('[class*="skeleton"], [class*="loading"], [class*="mask"], [class*="overlay"]').some(largeVisible);
+  const liepinLoginWall = PLATFORM === 'liepin' && liepinLoginConfirmation({ block: liepinBlock, url: location.href,
+    readyState: document.readyState, cards, loading: collectionLoading });
   return {
     url: location.href,
     title: document.title,
@@ -2796,8 +2803,12 @@ function pageStatusData(expectedSearchUrl) {
     counts,
     listRootCls: listRoot ? String(listRoot.className || '').slice(0, 120) : '',
     skeleton: all('[class*="skeleton"], [class*="loading"], [class*="spinner"], [class*="placeholder"]').length,
-    // 登录墙 = 原文案命中（含安全验证/验证码等风控文案）或「平台登录墙特征 且 无任何岗位链接」
-    loginWall: zhaopinBlock?.kind === 'login' || /请登录|扫码登录|安全验证|验证码/.test(bodyText.slice(0, 500)) || loginWallDetected(),
+    // A Liepin shell may briefly display login copy before authentication hydrates.
+    // Only an auth destination or a stable visible credential form proves login loss.
+    loginWall: PLATFORM === 'liepin' ? liepinLoginWall
+      : zhaopinBlock?.kind === 'login' || /请登录|扫码登录|安全验证|验证码/.test(bodyText.slice(0, 500)) || loginWallDetected(),
+    loginWallPending: PLATFORM === 'liepin' && cards <= 0 && liepinBlock?.kind === 'login' && !liepinLoginWall,
+    loginWallSource: liepinBlock?.source || '',
   };
 }
 
@@ -2881,10 +2892,12 @@ async function prefillGreetingText(rawText) {
 // 复用件：collectCtl（暂停/继续/停止/调速）/ smoothScrollIntoView / highlightElement /
 //         scrollJobListLoadMore / collectCards / cardIdentity / cardFields / collectCardKey。
 
-// 登录墙判定：URL 命中登录页特征，或「正文命中登录文案 且 页面内没有任何本平台岗位链接」。
-// 后者是必须的守卫——页脚/导航常出现「登录」字样，只有「一条岗位链接都没有」时才能判定为登录墙。
+// 猎聘使用登录地址 / 稳定可见表单证据，导航文字、验证码提示和加载中的组件不算登录墙。
+// 其余平台沿用既有「URL 特征，或登录文案且无岗位链接」判定。
 function loginWallDetected() {
   try {
+    if (PLATFORM === 'liepin') return liepinLoginConfirmation({ block: LIEPIN_LIST.readPageBlock(document, location.href),
+      url: location.href, readyState: document.readyState, cards: all(LINK_SELECTOR).length });
     const loc = String(location.pathname || '') + String(location.search || '');
     if (ADAPTERS.LOGIN_WALL_URL_RE.test(loc)) return true;
     if (all(LINK_SELECTOR).length > 0) return false;
@@ -3182,6 +3195,15 @@ async function visualCollectListOnly(opts = {}) {
       reason: 'blocked', loginRequired: block.kind === 'login', error: block.message });
     return true;
   };
+  const liepinBlocked = () => {
+    if (PLATFORM !== 'liepin') return false;
+    const block = LIEPIN_LIST.readPageBlock(document, location.href);
+    if (block?.kind !== 'risk') return false;
+    notify('collect-progress', { phase: 'collect-error', status: block.message });
+    notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs,
+      reason: 'blocked', error: block.message });
+    return true;
+  };
   resetJdFillState(); // 每轮采集重置 JD 补齐计数 / 熔断状态
   notify('collect-progress', { phase: 'start', index: 0, total: 0, maxJobs, platform: PLATFORM, status: `准备中（${PLATFORM} · 列表级采集）` });
 
@@ -3197,7 +3219,7 @@ async function visualCollectListOnly(opts = {}) {
   const listReadyDeadline = listWaitStartedAt + listTimeoutMs;
   let initialWaitCount = 0;
   while (Date.now() < listReadyDeadline && !stopped()) {
-    if (zhaopinBlocked()) return;
+    if (zhaopinBlocked() || liepinBlocked()) return;
     if (wubaBlocked()) return;
     if (wubaSearchEnded(true)) return;
     if (scopeReady() && collectionListExplicitlyEmpty() && !collectCards(true).length) {
@@ -3237,7 +3259,7 @@ async function visualCollectListOnly(opts = {}) {
     return;
   }
   while (!stopped()) {
-    if (zhaopinBlocked()) return;
+    if (zhaopinBlocked() || liepinBlocked()) return;
     if (wubaBlocked()) return;
     if (!scopeReady()) {
       notify('collect-done', { listUrl: location.href, processed: processedCount, total: processedCount, maxJobs, reason: 'failed', error: `${PLATFORM_LABEL}搜索条件在采集中发生变化，进度已保留` });
@@ -3294,8 +3316,9 @@ async function visualCollectListOnly(opts = {}) {
     if (stopped()) break;
     await waitWhilePaused();
     if (stopped()) break;
-    if (zhaopinBlocked() || wubaBlocked()) return;
+    if (zhaopinBlocked() || wubaBlocked() || liepinBlocked()) return;
     if (pace && !await pace('collectionStep', '读取岗位详情前', { index: processedCount + 1, total: cards.length, title: identity.title })) break;
+    if (liepinBlocked()) return;
     const job = extractJobFromCardOnly(card);
     if (!job) continue; // A native recommendation boundary can arrive after a card was selected.
     // 补齐详情 JD / 技能 / 福利 / HR（智联经 JSON 详情接口、猎聘经同源详情页 HTML；
