@@ -84,7 +84,7 @@ export interface AppConfig {
   sendResumeImage: boolean;
   sendOnlineResume: boolean;
   betweenJobsSeconds: number;
-  /** Independent random waits for collection and the built-in browser delivery steps. */
+  /** Per-platform random waits, with legacy global ranges as the upgrade fallback. */
   randomWaits?: import('./randomWait').RandomWaitSettings;
   /**
    * 活跃时段（模拟真人作息）：时段外**自动暂停投递**。

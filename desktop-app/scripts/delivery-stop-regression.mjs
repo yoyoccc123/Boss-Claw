@@ -81,6 +81,16 @@ for(const name of ['deliverNonBoss','deliverCamoufox','deliverBossDom']) {
   check(env.delivered.join(',')==='one','platform receipt after stop remains associated with the job');
 }
 // Real BrowserView platformApply: stopping during preload/probe never sends the platform IPC.
+{
+  const env = await environment('boss'), payloads = [];
+  env.c.useSettingsStore.getState = () => ({ config: { commStuckTimeoutSec: 30,
+    randomWaits: { platforms: { boss: { deliveryStep: { minSeconds: 5, maxSeconds: 6 } }, liepin: { deliveryEnabled: false } } } } });
+  env.c.webviewApi.current.sendInTab = (_tab, channel, payload) => { if (channel === 'start-apply') payloads.push(payload); };
+  const run = env.c.deliverBossDom(env.item, env.item.job.url);env.gap.resolve(true);while (!payloads.length) await flush();
+  check(payloads[0].randomWaits.deliveryStep.minSeconds === 5 && payloads[0].randomWaits.deliveryStep.maxSeconds === 6,
+    'actual BOSS sender selects BOSS custom steps despite another platform switch');
+  env.c.handleApplyStage('verify_result', {}, 'detail');await run;
+}
 const browserApply=browser.vars.get('platformApply');assert.ok(browserApply);
 async function browserEnvironment({ready=false}={}) {
   let allowed=true;const pause=deferred(),probe=deferred(),sends=[],closed=[];
@@ -91,6 +101,19 @@ async function browserEnvironment({ready=false}={}) {
   vm.createContext(c);vm.runInContext((await transform(`globalThis.apply=${browserApply};`,{loader:'tsx'})).code,c);
   const control={canStart:()=>allowed,onStart:()=>{c.started=true;}};
   return {c,control,pause,probe,sends,closed,stop:()=>{allowed=false;}};
+}
+for (const platform of ['liepin', 'zhaopin', 'job51', 'wuba']) for (const enabled of [true, false]) {
+  const env = await browserEnvironment({ ready: true });
+  env.c.useSettingsStore.getState = () => ({ config: { randomWaits: { platforms: {
+    boss: { deliveryStep: { minSeconds: 9, maxSeconds: 10 } },
+    [platform]: { deliveryEnabled: enabled, deliveryStep: { minSeconds: 5, maxSeconds: 6 } },
+  } } } });
+  const run = env.c.apply('https://example.invalid', platform, { platform }, '', env.control);
+  env.pause.resolve();while (!env.sends.length) await flush();
+  check(env.sends[0].randomWaits.deliveryStep.minSeconds === (enabled ? 5 : 0)
+    && env.sends[0].randomWaits.deliveryStep.maxSeconds === (enabled ? 6 : 0),
+    platform + ': actual delivery payload respects independent custom range and switch ' + enabled);
+  env.c.apiResolvers.current.get(env.sends[0].seq)({ ok: true, stage: 'success' });await run;
 }
 {
   const env=await browserEnvironment();const run=env.c.apply('https://example.invalid','zhaopin',{},'',env.control);env.stop();env.pause.resolve();const result=await run;

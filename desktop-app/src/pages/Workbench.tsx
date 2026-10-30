@@ -1485,7 +1485,7 @@ export default function Workbench() {
   useEffect(() => {
     if (!visualActiveRef.current || !visualTabRef.current) return;
     webviewApi.current?.sendInTab(visualTabRef.current, 'collect-control', {
-      action: 'pacing', randomWaits: normalizeRandomWaits(config.randomWaits),
+      action: 'pacing', randomWaits: normalizeRandomWaits(config.randomWaits, collectingPlatformRef.current),
     });
   }, [config.randomWaits, visualCollecting]);
 
@@ -1878,7 +1878,7 @@ export default function Workbench() {
       await visualCollectInTab(tabId, {
         expectedSearchUrl: platform === 'wuba' || platform === 'zhaopin' || platform === 'liepin' ? item.url : undefined,
         settleMs: collectSpeedMs,
-        randomWaits: normalizeRandomWaits(useSettingsStore.getState().config.randomWaits),
+        randomWaits: normalizeRandomWaits(useSettingsStore.getState().config.randomWaits, platform),
         listTimeoutMs: pageTimeoutMs,
         autoScroll: config.listAutoScroll !== false,
         scrollRounds: Number(config.listScrollRounds) > 0 ? Number(config.listScrollRounds) : 0,
@@ -2678,7 +2678,7 @@ export default function Workbench() {
         // 岗位间隔已完成；页面就绪后下发带步骤等待范围和取消令牌的命令。
         const pacingToken = `${candidate.id}:${epoch}:${Date.now()}`;
         deliveryPacingTokenRef.current = pacingToken;
-        const randomWaits = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits);
+        const randomWaits = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits, 'boss');
         const payload = { job: candidate.job, greeting: finalGreeting, randomWaits, pacingToken };
         const sendOnce = () => {
           if (settled || !canContinueDelivery(epoch)) return;
@@ -2935,7 +2935,7 @@ export default function Workbench() {
     const title = item?.job?.title || '岗位';
     const timing = useSettingsStore.getState().config;
     const sec = Math.max(10, Number(timing.commStuckTimeoutSec) || 60)
-      + normalizeRandomWaits(timing.randomWaits).deliveryStep.maxSeconds * 3;
+      + normalizeRandomWaits(timing.randomWaits, item?.job?.platform ?? 'boss').deliveryStep.maxSeconds * 3;
     addLog('info', `已进入沟通阶段「${taskStageMetaFor(item?.job?.platform, applyStage).label}」，看门狗启动：若 ${sec} 秒内无进展将跳过该岗位转投下一个`);
     commStuckTimerRef.current = setTimeout(() => {
       const cur = useDataStore.getState().pending.find((p) => p.id === stuckId);

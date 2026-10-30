@@ -1,24 +1,27 @@
-import { Alert, Card, InputNumber, Switch, Tooltip, Typography } from 'antd';
+import { useState } from 'react';
+import { Alert, Card, InputNumber, Select, Switch, Tooltip, Typography } from 'antd';
 import { LockOutlined, FieldTimeOutlined, ThunderboltOutlined, HourglassOutlined,
   ClockCircleOutlined, CoffeeOutlined, InfoCircleOutlined, DesktopOutlined, MessageOutlined } from '@ant-design/icons';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { isLockedOut, cooldownRemaining, SAFETY_LIMITS } from '@/lib/bossclaw/safety';
 import { DEFAULT_ACTIVE_HOURS, DEFAULT_BATCH_REST } from '@/lib/bossclaw/activityWindow';
 import BossBrowseLimitSettings from './BossBrowseLimitSettings';
-import { normalizeRandomWaits, type WaitRange } from '@/lib/bossclaw/randomWait';
+import { normalizeRandomWaits, platformRandomWaits, type PlatformRandomWaitSettings, type WaitRange } from '@/lib/bossclaw/randomWait';
+import { PLATFORM_IDS, platformLabel } from '@/lib/bossclaw/platforms';
+import type { JobPlatform } from '@/lib/bossclaw/types';
 
-function RandomWaitRange({ label, value, max, onChange }: {
-  label: string; value: WaitRange; max: number; onChange: (range: WaitRange) => void;
+function RandomWaitRange({ label, value, max, disabled, onChange }: {
+  label: string; value: WaitRange; max: number; disabled?: boolean; onChange: (range: WaitRange) => void;
 }) {
   return <div className="stat-input-card">
     <span className="sic-label">{label}</span>
     <div className="sic-input-wrap">
       <InputNumber aria-label={`${label}最少秒数`} min={0} max={max} step={0.1} precision={1}
-        value={value.minSeconds} style={{ width: 90 }}
+        value={value.minSeconds} disabled={disabled} style={{ width: 90 }}
         onChange={n => { const minSeconds = n ?? value.minSeconds; onChange({ minSeconds, maxSeconds: Math.max(minSeconds, value.maxSeconds) }); }} />
       <span className="sic-unit">至</span>
       <InputNumber aria-label={`${label}最多秒数`} min={0} max={max} step={0.1} precision={1}
-        value={value.maxSeconds} style={{ width: 90 }}
+        value={value.maxSeconds} disabled={disabled} style={{ width: 90 }}
         onChange={n => { const maxSeconds = n ?? value.maxSeconds; onChange({ minSeconds: Math.min(value.minSeconds, maxSeconds), maxSeconds }); }} />
       <span className="sic-unit">秒</span>
     </div>
@@ -30,21 +33,43 @@ export default function SafetyPacingSettings() {
   const config = useSettingsStore(s => s.config);
   const setConfig = useSettingsStore(s => s.setConfig);
   const activeHoursCfg = config.activeHours ?? DEFAULT_ACTIVE_HOURS;
-  const randomWaits = normalizeRandomWaits(config.randomWaits);
-  const changeWait = (key: keyof typeof randomWaits, range: WaitRange) =>
-    setConfig({ randomWaits: { ...normalizeRandomWaits(useSettingsStore.getState().config.randomWaits), [key]: range } });
+  const [waitPlatform, setWaitPlatform] = useState<JobPlatform>('boss');
+  const randomWaits = platformRandomWaits(config.randomWaits, waitPlatform);
+  const changeWait = (patch: Partial<PlatformRandomWaitSettings>) => {
+    const saved = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits);
+    setConfig({ randomWaits: { ...saved, platforms: { ...saved.platforms,
+      [waitPlatform]: { ...platformRandomWaits(saved, waitPlatform), ...patch },
+    } } });
+  };
   const activeHoursPerDay = ((activeHoursCfg.endHour - activeHoursCfg.startHour + 24) % 24) || 24;
   return <Card size="small" className="setting-card safety-pacing-settings" data-testid="safety-pacing-settings"
     title={<><LockOutlined style={{ color: 'var(--brand)', marginRight: 6 }} />访问与投递节奏</>}>
     <BossBrowseLimitSettings policy={config.bossBrowseLimit ?? { windowMinutes: 30, maxViews: 30 }}
       onApply={value => setConfig({ bossBrowseLimit: value })} />
-    <section className="safety-pacing-delivery" aria-label="采集随机等待">
-      <Typography.Title level={5} style={{ margin: '0 0 12px', fontSize: 15 }}>采集随机等待</Typography.Title>
-      <Typography.Paragraph type="secondary">内置浏览器每个岗位、各操作步骤分别抽取等待时间；暂停或停止可打断等待。范围设为 0 至 0 可关闭。</Typography.Paragraph>
-      <div className="sic-rows">
-        <RandomWaitRange label="采集岗位间等待" value={randomWaits.collectionJob} max={300} onChange={range => changeWait('collectionJob', range)} />
-        <RandomWaitRange label="采集步骤间等待" value={randomWaits.collectionStep} max={15} onChange={range => changeWait('collectionStep', range)} />
+    <section className="safety-pacing-delivery" aria-label="按平台随机等待">
+      <Typography.Title level={5} style={{ margin: '0 0 12px', fontSize: 15 }}>按平台随机等待</Typography.Title>
+      <Select aria-label="随机等待设置平台" value={waitPlatform} onChange={setWaitPlatform}
+        style={{ width: '100%', maxWidth: 260, marginBottom: 12 }}
+        options={PLATFORM_IDS.map(id => ({ value: id, label: platformLabel(id) }))} />
+      <Typography.Paragraph type="secondary">当前设置仅用于{platformLabel(waitPlatform)}的工作台内置浏览器，自动保存。各平台、采集与投递分别设置；关闭后保留原范围。</Typography.Paragraph>
+      <div className="sic-row-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+        <b>采集随机等待</b>
+        <Switch aria-label="当前平台采集随机等待" checked={randomWaits.collectionEnabled}
+          onChange={enabled => changeWait({ collectionEnabled: enabled })} />
       </div>
+      <div className="sic-rows">
+        <RandomWaitRange label="采集岗位间等待" value={randomWaits.collectionJob} max={300} disabled={!randomWaits.collectionEnabled} onChange={range => changeWait({ collectionJob: range })} />
+        <RandomWaitRange label="采集步骤间等待" value={randomWaits.collectionStep} max={15} disabled={!randomWaits.collectionEnabled} onChange={range => changeWait({ collectionStep: range })} />
+      </div>
+      <div className="sic-row-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '12px 0' }}>
+        <b>投递步骤随机等待</b>
+        <Switch aria-label="当前平台投递步骤随机等待" checked={randomWaits.deliveryEnabled}
+          onChange={enabled => changeWait({ deliveryEnabled: enabled })} />
+      </div>
+      <div className="sic-rows">
+        <RandomWaitRange label="投递步骤间等待" value={randomWaits.deliveryStep} max={15} disabled={!randomWaits.deliveryEnabled} onChange={range => changeWait({ deliveryStep: range })} />
+      </div>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 10 }}>每次在范围内随机取值，0 至 0 可单独关闭某一项。采集修改从下一次等待生效，暂停或停止可打断。投递步骤等待用于打开沟通、填写和发送之前。</Typography.Paragraph>
     </section>
     <section className="safety-pacing-delivery" aria-label="投递与沟通节奏">
       <Typography.Title level={5} style={{ margin: '0 0 12px', fontSize: 15 }}>投递与沟通节奏</Typography.Title>
@@ -125,10 +150,7 @@ export default function SafetyPacingSettings() {
         </div>
       </div>
 
-      <div className="sic-rows">
-        <RandomWaitRange label="投递步骤间等待" value={randomWaits.deliveryStep} max={15} onChange={range => changeWait('deliveryStep', range)} />
-      </div>
-      <Typography.Paragraph type="secondary" style={{ marginTop: 10 }}>步骤等待用于工作台内置浏览器打开沟通、填写文案和发送之前。岗位间隔以设定值为基准随机浮动，已有浏览限额和批次休息仍分别生效。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 10 }}>岗位间隔以设定值为基准随机浮动。上方随机等待开关不影响岗位间隔、浏览限额和批次休息。</Typography.Paragraph>
 
       <div className="sic-rows">
         <div className="stat-input-card">

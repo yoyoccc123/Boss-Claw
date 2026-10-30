@@ -49,6 +49,9 @@ check(pairs(resumedAgain.queue) === pairs(restored.queue) && !resumedAgain.reord
 const nextCheckpoint = T.advanceCollection(restored.checkpoint, restored.queue);
 check(nextCheckpoint.location === '广州' && nextCheckpoint.keyword === 'Python', 'after the partial group, resume fills the remaining directions in the first city');
 check(T.beginCollection(canonical, newSignature, saved, 'restart').checkpoint.index === 0, 'explicit restart uses the canonical city-first queue');
+check(!T.beginCollection(canonical, T.collectionSignature(canonical, { ...migrationConfig,
+  randomWaits: { ...migrationConfig.randomWaits, platforms: { liepin: { collectionEnabled: false } } },
+}), saved).changed, 'per-platform pacing changes never invalidate saved collection progress');
 const altered = { ...migrationConfig, excludedCompanies: ['改变筛选条件'] };
 check(T.beginCollection(canonical, T.collectionSignature(canonical, altered), saved).changed, 'real criteria changes still require restarting');
 check(T.beginCollection(canonical.slice(1), T.collectionSignature(canonical.slice(1), migrationConfig), saved).changed, 'removed combinations cannot masquerade as an order-only update');
@@ -139,6 +142,17 @@ for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) for (cons
   check(!stopped.data.collectionCheckpoints[platform].complete && stopped.data.collectionCheckpoints[platform].index === 1, `${platform}/${engine}: stopping inside a combination keeps that exact combination`);
   const resumed = await harness(platform, engine, { saved: stopped.data.collectionCheckpoints[platform], mode: 'continue' });
   check(resumed.data.collectionCheckpoints[platform].complete && (engine === 'visual' ? resumed.urls.length : resumed.searches.length) === expectedQueue.length - 1, `${platform}/${engine}: continue reaches the later directions/city without repeating completed combinations`);
+}
+for (const platform of ['boss', 'liepin', 'zhaopin', 'job51', 'wuba']) {
+  const cfg = structuredClone(config);
+  cfg.randomWaits.platforms = { [platform]: { collectionJob: { minSeconds: 8, maxSeconds: 10 }, collectionEnabled: true } };
+  const custom = await harness(platform, 'visual', { config: cfg });
+  check(custom.collectOptions.length > 0 && custom.collectOptions.every(o => o.randomWaits.collectionJob.minSeconds === 8
+    && o.randomWaits.collectionJob.maxSeconds === 10), platform + ': actual startup payload uses its own custom range');
+  cfg.randomWaits.platforms[platform].collectionEnabled = false;
+  const off = await harness(platform, 'visual', { config: cfg });
+  check(off.collectOptions.length > 0 && off.collectOptions.every(o => o.randomWaits.collectionJob.maxSeconds === 0
+    && o.randomWaits.collectionStep.maxSeconds === 0), platform + ': actual startup disables collection waits without disabling collection');
 }
 for (const engine of ['visual', 'camoufox']) {
   const splitConfig = { ...structuredClone(config), degrees: ['大专', '本科'] };

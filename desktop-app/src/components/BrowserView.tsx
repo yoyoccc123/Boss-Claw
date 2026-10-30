@@ -984,7 +984,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
           if (cancelledBeforeStart()) return;
           const seq = String((seqRef.current += 1));
           const pacingToken = `platform:${tabId}:${seq}`;
-          const randomWaits = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits);
+          const randomWaits = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits, platform);
           const cancelWatch = control ? setInterval(() => {
             if (control.canStart() && aliveRef.current && hasTab(tabId)) return;
             sendInTab(tabId, 'apply-control', { action: 'stop', pacingToken });
@@ -1124,7 +1124,7 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
       return failed(chat ? '智联未能确认目标聊天页，工作台招呼语未发送' : '智联沟通详情页未就绪，未发送');
     };
     const pauseStep = async (label: string) => {
-      const range = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits).deliveryStep;
+      const range = normalizeRandomWaits(useSettingsStore.getState().config.randomWaits, 'zhaopin').deliveryStep;
       const ms = sampleWaitMs(range);
       if (ms) callbacksRef.current.onApplyStage?.('random_wait', { message: `${label}：随机等待 ${(ms / 1000).toFixed(1)} 秒`, waitMs: ms }, tabId);
       return waitInterruptibly(ms, { stopped: cancelled });
